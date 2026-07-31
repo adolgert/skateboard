@@ -53,4 +53,112 @@ compiling-but-wrong ports with no false accepts. Generation ~10–18 s/attempt.
 This is the sharpest demonstration that build success ≠ correctness and that the
 oracle is the real gate.
 
-See `../docs/early_trials.tex` for the full write-up with plots.
+## qwen-30-temp08-hint-2026-07-31.csv
+
+qwen2.5:14b (local Ollama), 30 attempts, same region and rung, with **two changes
+from the 20-attempt run**: sampling temperature raised from 0.2 to 0.8
+(`AGENT_TEMPERATURE`), and one line added to the agent system prompt —
+*"Check for off-by-one errors in indexing."* Baselines: best-CPU **10.11 s**,
+naive-`stdpar` **6.95 s**.
+
+**Result: 2 of 30 attempts compiled; 0 accepted.** Both compiling attempts (2 and
+16) passed the device-execution proof and all three sanitizers, and both failed
+the correctness oracle. The other 28 never got past the build gate.
+
+| | 20 attempts @ T=0.2 | 30 attempts @ T=0.8 + hint |
+|---|---|---|
+| Build pass | 17/20 (85%) | **2/30 (7%)** |
+| Device proof pass | 17 | 2 |
+| Correctness pass | 0 | 0 |
+| Accepted | 0 | 0 |
+
+Three findings:
+
+1. **The hint did not work.** Attempts 2 and 16 both still contain an off-by-one
+   in the stencil. Both write `mod(i+1,n)+1` for the forward neighbour, which
+   evaluates to `i+2`, and `mod(i-1,n)+1` for the backward neighbour, which
+   evaluates to `i` — the correct form is `mod(i,n)+1`. Instructing the model to
+   check for off-by-one errors did not prevent it from writing one.
+
+2. **Higher temperature broke the repair loop.** At T=0.2 the model failed to
+   build on attempts 1–3, absorbed the compiler error, and never repeated it:
+   every attempt from 4 on compiled. At T=0.8 it re-emitted the *same* illegal
+   construct — subscripting a function result, `diff_centered(u)(i)` — on 28 of
+   30 attempts, receiving the identical nvfortran error each round. Attempts 11
+   and 12 differ only in whether a sign is written `+ -g *` or `- g *`. The
+   feedback loop stopped converging.
+
+3. **The numerics degraded.** Attempt 16 replaced the centered first difference
+   with `0.5*(u(i+1) + u(i-1)) - u(i)` — a *sum*, algebraically a second
+   derivative — and its continuity update contains no difference operator at all.
+   Its `h` loop is also a plain `do i = 1, n`, so it runs on the host, yet
+   `device_proof` still passed because the other loops launched kernels.
+
+**Caveat:** the two changes were made together, so temperature and prompt effects
+are confounded. Isolating them requires T=0.8 with the original prompt.
+
+Extracted source: `../docs/examples/qwen30t-attempt{02,11,16}-mod_kernel.f90`
+(the two compiling attempts and one representative build failure).
+
+## codestral-30-2026-07-31.csv
+
+`codestral:22b-v0.1-q4_0` (local Ollama, 12.6 GB Q4_0), 30 attempts, same region
+and rung, temperature 0.8, **stock prompt** (the off-by-one hint was removed
+again). Baselines: best-CPU **10.37 s**, naive-`stdpar` **7.26 s**.
+
+**Result: 15 of 30 compiled, 13 reached the oracle, 0 accepted.** No attempt ever
+passed the visible comparison. No sanitizer ever fired.
+
+| | qwen 20 @ T=0.2 | qwen 30 @ T=0.8 | codestral 30 @ T=0.8 |
+|---|---|---|---|
+| Build pass | 17/20 (85%) | 2/30 (7%) | **15/30 (50%)** |
+| Device proof pass | 17 | 2 | 13 |
+| Device proof **fail** | 0 | 0 | **2** (attempts 2, 20) |
+| Correctness pass | 0 | 0 | 0 |
+| Accepted | 0 | 0 | 0 |
+
+Codestral is the first local model to make the **oracle** the binding constraint
+rather than the compiler. It cleared the build gate on attempt 1 — something
+qwen2.5 never did in 50 attempts across two campaigns.
+
+Three findings:
+
+1. **It reaches for directive-based GPU models, and only one of them works
+   here.** Nearly every attempt uses `!$acc` (OpenACC) or `!$omp target`
+   (OpenMP). Measured on this compiler with the harness flags
+   (`-O2 -stdpar=gpu -gpu=cc89,mem:managed`): `do concurrent` offloads, `!$acc`
+   offloads, and **`!$omp target` does not** — OpenMP offload needs `-mp=gpu`,
+   which is the harness's other rung. Whole-array syntax does not offload either.
+   By attempts 6–7 the model had begun stacking an `!$omp` directive on top of a
+   `do concurrent`; the `do concurrent` is what offloads and the directive is
+   inert decoration. It arrived at working offload by accretion, not by
+   understanding which mechanism did the work.
+
+2. **The device-execution gate caught the case the compiler could not.**
+   Attempts 2 and 20 used `!$omp target` around plain `do` loops. nvfortran
+   accepted both files without a warning — an unrecognised `!$omp` line is a legal
+   comment — and produced a binary in which every loop ran on the host.
+   `kernels_launched` hit 0 and the gate fired: the first two device-proof
+   failures in the project. Attempt 1 made the adjacent guess, `!$acc`, which this
+   profile *does* honour; its loops genuinely ran on the device (10 kernels) and it
+   advanced to the oracle, failing there on physics. Same class of error, opposite
+   outcome, decided by which directive dialect the model happened to pick.
+   Worked example with the compiler's `-Minfo=accel` reports:
+   `../docs/run_examples.md`, Example 3.
+
+3. **A stable physics error survives the repair loop.** From attempt 1 onward it
+   writes `h(i) - (du_dx(i)*(hmean + h(i)))/dx*dt` — differentiating `u` alone and
+   multiplying by `(hmean+h)`, where the reference differentiates the flux
+   `u*(hmean+h)`. The product rule is dropped. From attempt 5 it additionally
+   dropped the `/ dx`. Attempt 1 also never assigns the updated velocity back to
+   `u` at all, so the momentum result is discarded.
+
+The contrast with qwen is the useful one: qwen repeated one *illegal construct*
+and mostly never compiled; codestral compiles readily and produces a stream of
+distinct, plausible, wrong numerics. That is the harder case, and the one only a
+correctness oracle catches.
+
+Extracted source: `../docs/examples/codestral-attempt{01,02,21}-mod_kernel.f90`.
+
+See `../docs/early_trials.tex` for the full write-up with plots, and
+`../docs/run_examples.md` for annotated code from the earlier campaigns.

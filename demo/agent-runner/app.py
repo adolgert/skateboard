@@ -32,6 +32,10 @@ MODELS = {
                      "model": os.environ.get("QWEN_MODEL", "qwen2.5:14b"),
                      "base_url": os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
                      "api_key_env": None},
+    "codestral":    {"backend": "openai",
+                     "model": os.environ.get("CODESTRAL_MODEL", "codestral:22b-v0.1-q4_0"),
+                     "base_url": os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
+                     "api_key_env": None},
 }
 DEFAULT_MODEL_KEY = os.environ.get("AGENT_MODEL_KEY", "sonnet")
 BEGIN = f"===BEGIN FILE {EDITABLE}==="
