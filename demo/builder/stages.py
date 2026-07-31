@@ -92,20 +92,22 @@ def build(attempt_id, files, profile):
 
 def _notify_env(base, notify, mandatory):
     env = dict(base)
-    if notify == "acc":
+    # NVCOMPILER_ACC_NOTIFY drives NVIDIA's own offload runtime and prints one
+    # "launch CUDA kernel ..." line per launch. It covers BOTH -stdpar/OpenACC
+    # and -mp=gpu OpenMP target regions, because nvfortran runs them on the same
+    # runtime. LIBOMPTARGET_INFO is an LLVM/Clang offload variable: nvfortran
+    # ignores it entirely and emits nothing, which made every omp_target attempt
+    # report kernels_launched=0 and fail the device proof regardless of merit.
+    if notify in ("acc", "omp"):
         env["NVCOMPILER_ACC_NOTIFY"] = "1"      # print each kernel launch to stderr
-    elif notify == "omp":
-        env["LIBOMPTARGET_INFO"] = "1"
     if mandatory:
         env["OMP_TARGET_OFFLOAD"] = "MANDATORY"  # host fallback becomes a runtime error
     return env
 
 
 def _count_kernels(stderr, notify):
-    if notify == "acc":
+    if notify in ("acc", "omp"):
         return len(re.findall(r"launch ", stderr))
-    if notify == "omp":
-        return len(re.findall(r"Launching kernel|Executing a target region", stderr))
     return 0
 
 

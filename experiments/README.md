@@ -160,5 +160,71 @@ correctness oracle catches.
 
 Extracted source: `../docs/examples/codestral-attempt{01,02,21}-mod_kernel.f90`.
 
+## codestral-omp-2026-07-31.csv
+
+`codestral:22b-v0.1-q4_0`, temperature 0.8, same region — but on the
+**`omp_target` rung** (`-O2 -mp=gpu -gpu=cc89`, OpenMP target offload, no managed
+memory, run under `OMP_TARGET_OFFLOAD=MANDATORY`) instead of `stdpar_managed`.
+Up to 30 attempts allowed. Baselines: best-CPU **10.33 s**, naive-`stdpar` 7.36 s.
+
+**Result: ACCEPTED on attempt 5.** The first acceptance by a local model in this
+project, and the first use of the `omp_target` rung.
+
+| attempt | build | device | kernels | memcheck | racecheck | initcheck | visible | holdout | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | fail | — | — | — | — | — | — | — | fail |
+| 2 | pass | pass | 10 | pass | pass | **fail** | fail | — | fail |
+| 3 | pass | pass | 20 | pass | pass | pass | fail | — | fail |
+| 4 | fail | — | — | — | — | — | — | — | fail |
+| 5 | pass | pass | 25 | pass | pass | pass | **pass** | **pass** | **ACCEPTED** |
+
+Recorded speedup **0.818×** (12.63 s vs 10.33 s best-CPU) — correct but slower
+than the CPU. See the flag caveat below: that number is an artifact of the rung's
+compile flags, not of the model's code.
+
+### A harness bug this campaign had to fix first
+
+The `omp_target` rung had never been run. Its device-execution proof was
+**structurally incapable of passing**: `_notify_env` set `LIBOMPTARGET_INFO=1`,
+an LLVM/Clang offload variable that nvfortran ignores completely (zero bytes of
+stderr, even at `-1`). NVIDIA's runtime uses `NVCOMPILER_ACC_NOTIFY`, which
+covers OpenMP target regions as well as OpenACC/stdpar. A hand-written, verified
+correct OpenMP port scored `kernels_launched = 0` before the fix. Every attempt
+on this rung would have failed the device proof regardless of quality. Fixed in
+`demo/builder/stages.py`; both notify modes now use the NVIDIA notifier and the
+same `launch ` regex.
+
+### Findings
+
+1. **The model is markedly better at OpenMP than at `do concurrent`.** Same
+   model, same temperature, same region, same day: 0 of 30 accepted on
+   `stdpar_managed`, accepted on attempt 5 of `omp_target`. On the stdpar rung it
+   repeatedly wrote `!$omp target` directives that the profile ignored; given a
+   rung where those directives are the intended mechanism, it succeeded quickly.
+
+2. **The accepted port is correct for the right reasons.** It materialises the
+   flux `flux(i) = u(i)*(hmean + h(i))` in its own loop before differencing it —
+   the same structure that made Sonnet's port correct and whose absence caused
+   qwen's off-by-one. It folds `0.5` and `/dx` into `/(2.0*dx)`, orders the u-then-h
+   updates correctly, and wraps everything in one
+   `!$omp target data map(tofrom: h, u) map(alloc: ...)` region.
+
+3. **The rung's flags, not the model, cost the speedup.** `omp_target` compiles
+   without `mem:managed`, so the `target data` region inside `step` copies both
+   2M-element arrays host⇄device on every timestep. Recompiling the *identical*
+   accepted kernel with `mem:managed` added:
+
+   | flags | wall clock |
+   |---|---|
+   | `-mp=gpu -gpu=cc89` (as run) | 13.2 s |
+   | `-mp=gpu -gpu=cc89,mem:managed` | **0.87 s** |
+
+   A 15× difference from one flag. The accepted port would be **~11.9× faster than
+   best-CPU** on a managed-memory OMP rung — faster than Sonnet's 8.9× on stdpar.
+   The recorded 0.818× measures the rung, not the port. Adding `mem:managed` to
+   the `omp_target` profile would make the two rungs comparable.
+
+Accepted source: `../docs/examples/codestral-omp-attempt05-ACCEPTED-mod_kernel.f90`.
+
 See `../docs/early_trials.tex` for the full write-up with plots, and
 `../docs/run_examples.md` for annotated code from the earlier campaigns.
