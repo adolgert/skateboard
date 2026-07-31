@@ -38,8 +38,19 @@ Three findings, each a load-bearing point of the design:
    managed-memory arrays migrate host⇄device every step. Sonnet/Opus updated in
    place and kept the data resident on the device.
 
-**Known gap this campaign exposed:** the harness *measures* speedup but does not
-yet *gate* acceptance on it, so Haiku was marked ACCEPTED despite 0.13×.
-`skateboard.tex` requires acceptance to beat the best CPU configuration; the
-performance stage should reject a port slower than the baseline (or the naive
-floor). Fixing that gate is the first follow-up.
+The speedup spectrum (including Haiku's 0.13×) is kept deliberately: the harness
+records every port, effective or not, rather than gating acceptance on speed.
+
+## qwen-20-2026-07-30.csv
+
+qwen2.5:14b (local Ollama), 20 attempts on the same region, with the repair loop
+strengthened so each attempt sees its own previous failing code plus the
+compiler/comparator diagnostic. Progression: attempts 1–3 fail to build;
+attempts 4–20 all compile **and** launch GPU kernels (build + device proof pass)
+but fail the correctness oracle. Zero accepted — the model crossed the build
+barrier but never the correctness barrier, and the oracle rejected all 17
+compiling-but-wrong ports with no false accepts. Generation ~10–18 s/attempt.
+This is the sharpest demonstration that build success ≠ correctness and that the
+oracle is the real gate.
+
+See `../docs/early_trials.tex` for the full write-up with plots.

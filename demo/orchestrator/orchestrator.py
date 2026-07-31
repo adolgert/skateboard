@@ -160,12 +160,18 @@ def attempt(rung, n, pristine, visible, policy_sha, baselines, prev_failure, mod
     sh("add", "-A"); sh("commit", "-q", "-m", f"{aid}: agent port")
     snap = snapshot()
     row["src_sha"] = src_sha(snap); row["branch"] = branch
+    agent_code = next((f["content"] for f in a["files"] if f["path"] == EDITABLE), "")
+
+    def fail(stage, detail):
+        # carry the agent's own failing code forward so the next attempt repairs
+        # its own work rather than re-porting the pristine source from scratch.
+        return {"stage_failed": stage, "detail": detail, "previous_code": agent_code}, row
 
     # 2) build gate
     b = post(f"{BUILDER}/v1/build", {"attempt_id": aid, "source": {"files": snap}, "profile": rung})
     if not b.get("ok"):
         row["build"] = "fail"; ledger_write(row)
-        return {"stage_failed": "build", "detail": {"compiler_errors": b.get("log_tail", "")}}, row
+        return fail("build", {"compiler_errors": b.get("log_tail", "")})
     row["build"] = "pass"
 
     # 3) run + device-execution proof
@@ -173,12 +179,11 @@ def attempt(rung, n, pristine, visible, policy_sha, baselines, prev_failure, mod
                                       "mandatory": rung == "omp_target"})
     if not runr.get("ok"):
         row["device_proof"] = "fail"; ledger_write(row)
-        return {"stage_failed": "run", "detail": {"log": runr.get("log_tail", "")}}, row
+        return fail("run", {"log": runr.get("log_tail", "")})
     kern = runr.get("kernels_launched", 0); row["kernels_launched"] = kern
     if kern <= 0:
         row["device_proof"] = "fail"; ledger_write(row)
-        return {"stage_failed": "device_proof",
-                "detail": {"kernels_launched": 0, "hint": "code compiled but no GPU kernel launched; ensure the loops are do concurrent / omp target so nvfortran offloads them"}}, row
+        return fail("device_proof", {"kernels_launched": 0, "hint": "code compiled but no GPU kernel launched; ensure the loops are do concurrent / omp target so nvfortran offloads them"})
     row["device_proof"] = "pass"
 
     # 4) sanitizer
@@ -189,14 +194,14 @@ def attempt(rung, n, pristine, visible, policy_sha, baselines, prev_failure, mod
     row["memcheck"] = _tool(pt, "memcheck"); row["racecheck"] = _tool(pt, "racecheck"); row["initcheck"] = _tool(pt, "initcheck")
     if pt.get("memcheck", {}).get("ok") is False or pt.get("racecheck", {}).get("ok") is False:
         ledger_write(row)
-        return {"stage_failed": "sanitize", "detail": {k: v.get("log_tail", "")[:400] for k, v in pt.items() if v.get("ok") is False}}, row
+        return fail("sanitize", {k: v.get("log_tail", "")[:400] for k, v in pt.items() if v.get("ok") is False})
 
     # 5) correctness on the visible set
     cmp = post(f"{ORACLE}/v1/compare", {"attempt_id": aid, "dataset": "visible", "outputs": runr["outputs"]})
     row["compare_visible"] = cmp["verdict"]
     if cmp["verdict"] != "pass":
         ledger_write(row)
-        return {"stage_failed": "compare", "detail": {"dataset": "visible", "per_case": _worst(cmp.get("per_case", {}))}}, row
+        return fail("compare", {"dataset": "visible", "per_case": _worst(cmp.get("per_case", {}))})
 
     # 6) performance
     t = post(f"{BUILDER}/v1/time", {"attempt_id": aid, "repeats": 5})
@@ -217,7 +222,7 @@ def attempt(rung, n, pristine, visible, policy_sha, baselines, prev_failure, mod
     ledger_write(row)
     if hcmp["verdict"] == "pass":
         return None, row  # accepted
-    return {"stage_failed": "compare", "detail": {"dataset": "holdout", "note": "passed visible but failed held-out"}}, row
+    return fail("compare", {"dataset": "holdout", "note": "passed visible but failed held-out"})
 
 
 def _tool(pt, name):

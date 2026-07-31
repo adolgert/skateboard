@@ -101,11 +101,17 @@ def _build_user(req: AttemptReq) -> str:
             parts.append(f"\n=== CONTEXT (read-only): {ctx} ===")
             parts.append(by_path[ctx])
     if req.failure_report:
-        parts.append("\n=== PREVIOUS ATTEMPT FAILED ===")
-        parts.append("Stage failed: " + str(req.failure_report.get("stage_failed")))
-        detail = req.failure_report.get("detail", {})
-        parts.append("Details:\n" + _fmt(detail))
-        parts.append("Fix the specific problem above. Do not regress what already passed.")
+        fr = req.failure_report
+        parts.append("\n=== YOUR PREVIOUS ATTEMPT FAILED ===")
+        parts.append("Stage failed: " + str(fr.get("stage_failed")))
+        parts.append("Details:\n" + _fmt(fr.get("detail", {})))
+        if fr.get("previous_code"):
+            parts.append(f"\n=== YOUR PREVIOUS (FAILING) VERSION of {EDITABLE} ===")
+            parts.append(fr["previous_code"])
+            parts.append("Repair THIS version to fix the error above. Keep the parts that "
+                         "worked; change only what caused the failure.")
+        else:
+            parts.append("Fix the specific problem above. Do not regress what already passed.")
     parts.append(f"\nNow output the complete new {EDITABLE} between the markers.")
     return "\n".join(parts)
 
