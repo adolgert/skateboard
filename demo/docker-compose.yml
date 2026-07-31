@@ -14,11 +14,9 @@ services:
     networks: [agent_net]
     environment:
       - SKATEBOARD_TOKEN=${SKATEBOARD_TOKEN}
-      - AGENT_BACKEND=${AGENT_BACKEND:-anthropic}
-      - AGENT_MODEL=${AGENT_MODEL:-claude-opus-4-8}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-http://host.docker.internal:11434/v1}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-not-needed}
+      - AGENT_MODEL_KEY=${AGENT_MODEL_KEY:-sonnet}   # default backend when none is passed
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}     # Claude models
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}           # Gemini (OpenAI-compatible endpoint)
       - HOME=/tmp
     tmpfs: [/tmp]
     extra_hosts:
@@ -56,6 +54,8 @@ services:
       - SKATEBOARD_TOKEN=${SKATEBOARD_TOKEN}
       - RUN_STAMP=${RUN_STAMP:-run}
       - MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
+      - MODEL_KEYS=${MODEL_KEYS:-haiku,sonnet,gemini-flash,qwen}
+      - RUNGS=${RUNGS:-stdpar_managed}
       - AGENT_URL=http://agent-runner:8080
       - BUILDER_URL=http://builder:9090
       - ORACLE_URL=http://oracle:7070

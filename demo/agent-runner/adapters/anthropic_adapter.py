@@ -1,26 +1,31 @@
-"""Anthropic (Claude) backend adapter. Pure function: (system, user) -> text.
+"""Anthropic (Claude) backend adapter. Pure function: (system, user, model) -> dict.
 
-Uses the Messages API with adaptive thinking and high effort, which is the
-recommended configuration for code work on Opus 4.8. The API key is read from
-ANTHROPIC_API_KEY in the environment (the only secret this container holds).
+Model-aware: Opus 4.x / Sonnet 5 / Sonnet 4.6 / Fable accept adaptive thinking
+and the effort parameter; Haiku 4.5 and older reject them (400), so for those we
+send a plain request. The API key is read from ANTHROPIC_API_KEY in the env.
 """
-import os
-
 import anthropic
 
-MODEL = os.environ.get("AGENT_MODEL", "claude-opus-4-8")
+# model-id substrings whose families accept adaptive thinking + output_config.effort
+ADAPTIVE_FAMILIES = ("opus-4", "sonnet-5", "sonnet-4-6", "fable")
 
 
-def complete(system: str, user: str) -> dict:
+def _adaptive(model: str) -> bool:
+    return any(f in model for f in ADAPTIVE_FAMILIES)
+
+
+def complete(system: str, user: str, model: str) -> dict:
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
-    resp = client.messages.create(
-        model=MODEL,
+    kw = dict(
+        model=model,
         max_tokens=16000,
         system=system,
-        thinking={"type": "adaptive"},
-        output_config={"effort": "high"},
         messages=[{"role": "user", "content": user}],
     )
+    if _adaptive(model):
+        kw["thinking"] = {"type": "adaptive"}
+        kw["output_config"] = {"effort": "high"}
+    resp = client.messages.create(**kw)
     text = "".join(b.text for b in resp.content if b.type == "text")
     return {
         "text": text,

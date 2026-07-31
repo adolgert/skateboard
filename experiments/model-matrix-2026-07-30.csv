@@ -1,0 +1,16 @@
+ts,region,model_key,rung,attempt,backend,model,branch,src_sha,oracle_policy_sha,build,device_proof,kernels_launched,memcheck,racecheck,initcheck,compare_visible,compare_holdout,cpu_best_s,naive_stdpar_s,port_s,speedup,verdict,human_intervention,notes
+run1-0001,ch04:step,haiku,stdpar_managed,1,anthropic,claude-haiku-4-5-20251001,attempt/haiku-stdpar_managed-1,4ca5b045726e,414a8ca97a15,pass,pass,25,pass,pass,pass,pass,pass,10.89647324500038,7.950354577000326,86.96940534199985,0.125,ACCEPTED,0,NOTES: Replaced implicit whole-array operations with explicit `do concurrent` loops to enable GPU offload with `-stdpar=
+run1-0002,ch04:step,sonnet,stdpar_managed,1,anthropic,claude-sonnet-5,attempt/sonnet-stdpar_managed-1,53fe712e2fee,414a8ca97a15,fail,NA,NA,NA,NA,NA,NA,NA,10.89647324500038,7.950354577000326,NA,NA,fail,0,"NOTES: Replaced whole-array operations with `do concurrent` loops suitable for `-stdpar=gpu` offload, inlining the perio"
+run1-0003,ch04:step,sonnet,stdpar_managed,2,anthropic,claude-sonnet-5,attempt/sonnet-stdpar_managed-2,eb274ac87ea1,414a8ca97a15,pass,pass,30,pass,pass,pass,pass,pass,10.89647324500038,7.950354577000326,1.2245112289992903,8.899,ACCEPTED,0,NOTES: Replaced BLOCK-construct-containing do-concurrent loops (which nvfortran's stdpar-gpu offload cannot compile) wit
+run1-0004,ch04:step,gemini-flash,stdpar_managed,1,openai,gemini-2.5-flash,attempt/gemini-flash-stdpar_managed-1,35c030017fe7,414a8ca97a15,fail,NA,NA,NA,NA,NA,NA,NA,10.89647324500038,7.950354577000326,NA,NA,fail,0,"NOTES:
+- Replaced whole-array assignments with explicit `do concurrent` loops.
+- Inlined the `diff_centered` logic direc"
+run1-0005,ch04:step,gemini-flash,stdpar_managed,2,openai,gemini-2.5-flash,attempt/gemini-flash-stdpar_managed-2,427982b31ffa,414a8ca97a15,fail,NA,NA,NA,NA,NA,NA,NA,10.89647324500038,7.950354577000326,NA,NA,fail,0,"NOTES:
+1.  Replaced whole-array assignments with `do concurrent (i = 1:n)` loops for GPU offload with `-stdpar=gpu`.
+2. "
+run1-0006,ch04:step,gemini-flash,stdpar_managed,3,openai,gemini-2.5-flash,attempt/gemini-flash-stdpar_managed-3,5b55d9bdb3ce,414a8ca97a15,fail,NA,NA,NA,NA,NA,NA,NA,10.89647324500038,7.950354577000326,NA,NA,fail,0,"NOTES:
+1. Replaced whole-array assignments with explicit `do concurrent (i = 1:n)` loops for GPU offload.
+2. Inlined the"
+run1-0007,ch04:step,qwen,stdpar_managed,1,openai,qwen2.5:14b,attempt/qwen-stdpar_managed-1,8356126ae6c6,414a8ca97a15,fail,NA,NA,NA,NA,NA,NA,NA,10.89647324500038,7.950354577000326,NA,NA,fail,0,NOTES: Replaced whole-array assignments with explicit loops and inlined the centered difference calculation using tempor
+run1-0008,ch04:step,qwen,stdpar_managed,2,openai,qwen2.5:14b,attempt/qwen-stdpar_managed-2,1f1ed1af8977,414a8ca97a15,fail,NA,NA,NA,NA,NA,NA,NA,10.89647324500038,7.950354577000326,NA,NA,fail,0,NOTES: Replaced whole-array assignments with explicit loops and inlined the finite difference calculations. Added necess
+run1-0009,ch04:step,qwen,stdpar_managed,3,openai,qwen2.5:14b,attempt/qwen-stdpar_managed-3,cacd3726b9bb,414a8ca97a15,fail,NA,NA,NA,NA,NA,NA,NA,10.89647324500038,7.950354577000326,NA,NA,fail,0,NOTES: Replaced whole-array assignments with explicit loops and inlined the finite difference calculations. Added tempor

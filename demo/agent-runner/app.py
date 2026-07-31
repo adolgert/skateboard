@@ -16,8 +16,24 @@ from pydantic import BaseModel
 from adapters import anthropic_adapter, openai_adapter
 
 TOKEN = os.environ.get("SKATEBOARD_TOKEN", "")
-BACKEND = os.environ.get("AGENT_BACKEND", "anthropic")
 EDITABLE = "src/mod_kernel.f90"
+
+# Pluggable model registry. The orchestrator selects one per attempt by key.
+# Secrets stay in this container's env; only the key travels on the wire.
+MODELS = {
+    "opus":         {"backend": "anthropic", "model": "claude-opus-4-8"},
+    "sonnet":       {"backend": "anthropic", "model": "claude-sonnet-5"},
+    "haiku":        {"backend": "anthropic", "model": "claude-haiku-4-5"},
+    "gemini-flash": {"backend": "openai",
+                     "model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+                     "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+                     "api_key_env": "GEMINI_API_KEY"},
+    "qwen":         {"backend": "openai",
+                     "model": os.environ.get("QWEN_MODEL", "qwen2.5:14b"),
+                     "base_url": os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
+                     "api_key_env": None},
+}
+DEFAULT_MODEL_KEY = os.environ.get("AGENT_MODEL_KEY", "sonnet")
 BEGIN = f"===BEGIN FILE {EDITABLE}==="
 END = "===END FILE==="
 
@@ -43,6 +59,7 @@ Hard rules:
 class AttemptReq(BaseModel):
     attempt_id: str = "unknown"
     strategy: str = "stdpar_managed"
+    model_key: str | None = None     # which registry model to use (default from env)
     files: list = []                 # [{path, content}] snapshot (read-only context)
     failure_report: dict | None = None
 
@@ -84,11 +101,17 @@ def _build_user(req: AttemptReq) -> str:
             parts.append(f"\n=== CONTEXT (read-only): {ctx} ===")
             parts.append(by_path[ctx])
     if req.failure_report:
-        parts.append("\n=== PREVIOUS ATTEMPT FAILED ===")
-        parts.append("Stage failed: " + str(req.failure_report.get("stage_failed")))
-        detail = req.failure_report.get("detail", {})
-        parts.append("Details:\n" + _fmt(detail))
-        parts.append("Fix the specific problem above. Do not regress what already passed.")
+        fr = req.failure_report
+        parts.append("\n=== YOUR PREVIOUS ATTEMPT FAILED ===")
+        parts.append("Stage failed: " + str(fr.get("stage_failed")))
+        parts.append("Details:\n" + _fmt(fr.get("detail", {})))
+        if fr.get("previous_code"):
+            parts.append(f"\n=== YOUR PREVIOUS (FAILING) VERSION of {EDITABLE} ===")
+            parts.append(fr["previous_code"])
+            parts.append("Repair THIS version to fix the error above. Keep the parts that "
+                         "worked; change only what caused the failure.")
+        else:
+            parts.append("Fix the specific problem above. Do not regress what already passed.")
     parts.append(f"\nNow output the complete new {EDITABLE} between the markers.")
     return "\n".join(parts)
 
@@ -126,16 +149,26 @@ def _parse_file(text: str) -> str:
 @app.post("/v1/attempt")
 def attempt(req: AttemptReq, authorization: str | None = Header(default=None)):
     _auth(authorization)
+    key = req.model_key or DEFAULT_MODEL_KEY
+    spec = MODELS.get(key)
+    if spec is None:
+        raise HTTPException(status_code=400, detail=f"unknown model_key {key}")
     user = _build_user(req)
-    adapter = anthropic_adapter if BACKEND == "anthropic" else openai_adapter
-    result = adapter.complete(SYSTEM, user)
+
+    if spec["backend"] == "anthropic":
+        result = anthropic_adapter.complete(SYSTEM, user, spec["model"])
+    else:
+        api_key = os.environ.get(spec["api_key_env"], "not-needed") if spec.get("api_key_env") else "not-needed"
+        result = openai_adapter.complete(SYSTEM, user, spec["model"], spec["base_url"], api_key)
+
     content = _parse_file(result["text"])
     notes = ""
     if END in result["text"]:
         notes = result["text"].split(END, 1)[1].strip()[:500]
     return {
         "attempt_id": req.attempt_id,
-        "backend": BACKEND,
+        "model_key": key,
+        "backend": spec["backend"],
         "model_id": result.get("model_id"),
         "files": [{"path": EDITABLE, "content": content}],
         "notes": notes,
@@ -145,4 +178,4 @@ def attempt(req: AttemptReq, authorization: str | None = Header(default=None)):
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "backend": BACKEND}
+    return {"ok": True, "models": list(MODELS)}
