@@ -55,6 +55,7 @@ services:
       - SKATEBOARD_TOKEN=${SKATEBOARD_TOKEN}
       - RUN_STAMP=${RUN_STAMP:-run}
       - MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
+      - STOP_ON_ACCEPT=${STOP_ON_ACCEPT:-1}    # 0 = run the full budget, collect every acceptance
       - MODEL_KEYS=${MODEL_KEYS:-haiku,sonnet,gemini-flash,qwen}
       - RUNGS=${RUNGS:-stdpar_managed}
       - AGENT_URL=http://agent-runner:8080

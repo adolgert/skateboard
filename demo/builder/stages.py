@@ -18,7 +18,7 @@ HARNESS = "/opt/harness"  # baked, trusted: mod_capture.f90, replay.f90
 # never supplies flags. cc89 = RTX 4000 Ada.
 PROFILES = {
     "stdpar_managed":   {"fc": "nvfortran", "flags": ["-O2", "-stdpar=gpu", "-gpu=cc89,mem:managed", "-Minfo=accel"], "gpu": True,  "notify": "acc"},
-    "omp_target":       {"fc": "nvfortran", "flags": ["-O2", "-mp=gpu", "-gpu=cc89", "-Minfo=accel"],                 "gpu": True,  "notify": "omp"},
+    "omp_target":       {"fc": "nvfortran", "flags": ["-O2", "-mp=gpu", "-gpu=cc89,mem:managed", "-Minfo=accel"],     "gpu": True,  "notify": "omp"},
     "cpu_best":         {"fc": "nvfortran", "flags": ["-O2", "-stdpar=multicore"],                                    "gpu": False, "notify": None},
     "cpu_naive_stdpar": {"fc": "nvfortran", "flags": ["-O2", "-stdpar=gpu", "-gpu=cc89,mem:managed", "-Minfo=accel"], "gpu": True,  "notify": "acc"},
 }

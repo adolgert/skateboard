@@ -226,5 +226,31 @@ same `launch ` regex.
 
 Accepted source: `../docs/examples/codestral-omp-attempt05-ACCEPTED-mod_kernel.f90`.
 
+## codestral-omp-T08-partial-2026-07-31.csv
+
+Partial run, stopped by hand after 27 of a planned 100 attempts. Same model and
+rung as above, but with **`mem:managed` added to the `omp_target` profile**
+(`-O2 -mp=gpu -gpu=cc89,mem:managed`), temperature still 0.8, and
+`STOP_ON_ACCEPT=0` so the budget would run to completion rather than halting at
+the first success. Baselines: best-CPU 10.25 s, naive-`stdpar` 7.69 s.
+
+**Result: 20 of 27 compiled and passed the device proof; 0 accepted.**
+
+This is the sharpest available statement of where the difficulty actually lies.
+The managed-memory flag plus the expanded strategy card lifted the build rate well
+above the stdpar rung's 15/30 — the model has no trouble with the OpenMP
+scaffolding. All twenty of those ports launched kernels and passed memcheck,
+racecheck, and initcheck. Every one of them then failed the correctness oracle.
+High temperature was not costing attempts at the compiler here; it was costing
+them in the arithmetic.
+
+It also puts the earlier attempt-5 acceptance in perspective: across both
+`omp_target` campaigns at T=0.8 that is 1 acceptance in 32 attempts, not a
+reliable one-in-five.
+
+The run was restarted at temperature 0.4 (stamp `codestral100t4`) to trade
+diversity for accuracy. Speedups remain comparable across all campaigns — same
+baselines, same rung, same flags — but hit rates between T=0.8 and T=0.4 are not.
+
 See `../docs/early_trials.tex` for the full write-up with plots, and
 `../docs/run_examples.md` for annotated code from the earlier campaigns.
