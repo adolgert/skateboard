@@ -34,6 +34,10 @@ REGION = "ch04:step"
 RUNGS = os.environ.get("RUNGS", "stdpar_managed").split(",")
 MODEL_KEYS = os.environ.get("MODEL_KEYS", "haiku,sonnet,gemini-flash,qwen").split(",")
 MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
+# Default: stop a model's ladder at its first acceptance (the demo behaviour).
+# Set STOP_ON_ACCEPT=0 for a sampling study -- run the full attempt budget and
+# collect every acceptance and its speedup, rather than the first one only.
+STOP_ON_ACCEPT = os.environ.get("STOP_ON_ACCEPT", "1") != "0"
 EDITABLE = "src/mod_kernel.f90"
 
 LEDGER_COLS = [
@@ -288,6 +292,7 @@ def main():
     for model_key in MODEL_KEYS:
         log(f"########## MODEL {model_key} ##########")
         accepted = False
+        wins = []            # every acceptance, not just the first
         last = {}
         for rung in RUNGS:
             prev_failure = None
@@ -305,20 +310,37 @@ def main():
                     f"compare={row.get('compare_visible')} speedup={row.get('speedup')}")
                 if failure is None:
                     accepted = True
-                    break
+                    wins.append(row)
+                    log(f"  *** ACCEPTED on attempt {n}: speedup={row.get('speedup')} "
+                        f"port_s={row.get('port_s')} branch={row.get('branch')} ***")
+                    if STOP_ON_ACCEPT:
+                        break
+                    # keep sampling: start the next attempt from the pristine
+                    # source rather than "repairing" a port that already works.
+                    prev_failure = None
+                    continue
                 prev_failure = failure
-            if accepted:
+            if accepted and STOP_ON_ACCEPT:
                 break
-        campaign.append((model_key, accepted, last))
-        log(f"########## {model_key}: {'ACCEPTED' if accepted else 'NOT ACCEPTED'} ##########")
+        campaign.append((model_key, accepted, last, wins))
+        log(f"########## {model_key}: {'ACCEPTED' if accepted else 'NOT ACCEPTED'} "
+            f"({len(wins)}/{MAX_ATTEMPTS} accepted) ##########")
 
     log("===== CAMPAIGN SUMMARY =====")
     log(f"baselines: cpu_best={baselines.get('cpu_best')}  naive_stdpar={baselines.get('naive_stdpar')}")
-    for model_key, accepted, row in campaign:
+    for model_key, accepted, row, wins in campaign:
         log(f"  {model_key:14s} {'ACCEPTED' if accepted else 'failed  '}  "
-            f"attempt={row.get('attempt','-')} rung={row.get('rung','-')} "
-            f"speedup={row.get('speedup','-')} "
+            f"{len(wins)}/{MAX_ATTEMPTS} accepted  last_attempt={row.get('attempt','-')} "
+            f"rung={row.get('rung','-')} "
             f"stages=build:{row.get('build','-')}/dev:{row.get('device_proof','-')}/cmp:{row.get('compare_visible','-')}")
+        for w in wins:
+            log(f"      accepted attempt {w.get('attempt')}: speedup={w.get('speedup')} "
+                f"port_s={w.get('port_s')} kernels={w.get('kernels_launched')} branch={w.get('branch')}")
+        if wins:
+            sp = [w["speedup"] for w in wins if isinstance(w.get("speedup"), (int, float))]
+            if sp:
+                log(f"      speedup over {len(sp)} accepted: min={min(sp)} max={max(sp)} "
+                    f"mean={round(sum(sp)/len(sp), 3)}")
     log("ledger: " + LEDGER)
     sys.exit(0)
 

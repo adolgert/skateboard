@@ -1,0 +1,29 @@
+=== A. codestral attempt 2  (device_proof FAIL, kernels_launched = 0) ===
+(no accelerator regions reported -- the compiler generated no GPU code for step)
+
+=== B. codestral attempt 1  (device_proof pass, kernels_launched = 10) ===
+step:
+     34, Generating present(u(:),du_dx(:),dh_dx(:))
+         Generating implicit firstprivate(n)
+         Generating NVIDIA GPU code
+         35, !$acc loop gang, vector(128) ! blockidx%x threadidx%x
+     34, Generating implicit copyout(dudx_upd(:n)) [if not already present]
+     44, Generating present(du_dx(:),u(:),h(:))
+         Generating implicit firstprivate(n)
+         Generating NVIDIA GPU code
+         45, !$acc loop gang, vector(128) ! blockidx%x threadidx%x
+     50, Generating update self(u(:),h(:))
+
+=== C. Sonnet accepted port (device_proof pass, kernels_launched = 30) ===
+step:
+     43, Generating NVIDIA GPU code
+         43, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x
+     43, Generating implicit copyout(u_old(1:n)) [if not already present]
+         Generating implicit copyin(u(:n)) [if not already present]
+     49, Generating implicit private(ip,im)
+         Generating NVIDIA GPU code
+         49, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x
+     49, Generating implicit copyout(dh(1:n)) [if not already present]
+         Generating implicit copyin(u_old(:),h(:)) [if not already present]
+         Generating implicit copyout(du(1:n)) [if not already present]
+     56, Generating NVIDIA GPU code

@@ -15,6 +15,7 @@ services:
     environment:
       - SKATEBOARD_TOKEN=${SKATEBOARD_TOKEN}
       - AGENT_MODEL_KEY=${AGENT_MODEL_KEY:-sonnet}   # default backend when none is passed
+      - AGENT_TEMPERATURE=${AGENT_TEMPERATURE:-0.2}  # sampling temperature (openai-compat backends)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}     # Claude models
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}           # Gemini (OpenAI-compatible endpoint)
       - HOME=/tmp
@@ -54,6 +55,7 @@ services:
       - SKATEBOARD_TOKEN=${SKATEBOARD_TOKEN}
       - RUN_STAMP=${RUN_STAMP:-run}
       - MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
+      - STOP_ON_ACCEPT=${STOP_ON_ACCEPT:-1}    # 0 = run the full budget, collect every acceptance
       - MODEL_KEYS=${MODEL_KEYS:-haiku,sonnet,gemini-flash,qwen}
       - RUNGS=${RUNGS:-stdpar_managed}
       - AGENT_URL=http://agent-runner:8080

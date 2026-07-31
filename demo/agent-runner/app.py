@@ -32,6 +32,10 @@ MODELS = {
                      "model": os.environ.get("QWEN_MODEL", "qwen2.5:14b"),
                      "base_url": os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
                      "api_key_env": None},
+    "codestral":    {"backend": "openai",
+                     "model": os.environ.get("CODESTRAL_MODEL", "codestral:22b-v0.1-q4_0"),
+                     "base_url": os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
+                     "api_key_env": None},
 }
 DEFAULT_MODEL_KEY = os.environ.get("AGENT_MODEL_KEY", "sonnet")
 BEGIN = f"===BEGIN FILE {EDITABLE}==="
@@ -78,10 +82,25 @@ STRATEGY_CARDS = {
     ),
     "omp_target": (
         "STRATEGY: OpenMP target offload.\n"
-        "Rewrite `step` using OpenMP `!$omp target teams distribute parallel do` so "
-        "nvfortran compiled with `-mp=gpu -gpu=cc89` offloads it to the GPU. Same "
-        "numerical structure, temporaries, and u-then-h ordering as above. Map the "
-        "arrays to the device as needed."
+        "Rewrite `step` so nvfortran compiled with `-mp=gpu -gpu=cc89` offloads it to "
+        "the GPU using OpenMP target directives. Put each loop in its own "
+        "`!$omp target teams distribute parallel do` region. Replace the whole-array "
+        "assignments with explicit indexed `do i = 1, n` loops. Inline the 2nd-order "
+        "centered difference (periodic boundaries) from mod_diff::diff_centered "
+        "directly into the loops. Because the stencil reads neighbours, use temporary "
+        "arrays for the differences so the update is not corrupted in place.\n"
+        "DATA MAPPING (required): there is NO managed memory on this rung, so the "
+        "arrays must be mapped explicitly. Wrap the whole body in one "
+        "`!$omp target data map(tofrom: h, u) map(alloc: <your temporaries>)` region "
+        "and put the target regions inside it. An array read on the device that was "
+        "never mapped will silently compute garbage.\n"
+        "This is compiled WITHOUT -stdpar, so `do concurrent` will NOT offload here "
+        "and OpenACC `!$acc` directives are not what this rung is testing: use OpenMP "
+        "`!$omp target` and nothing else. The binary is run with "
+        "OMP_TARGET_OFFLOAD=MANDATORY, so if a region falls back to the host it is a "
+        "hard runtime error, not a silent slowdown.\n"
+        "ORDERING (must preserve): compute the new u first from the OLD u and OLD h; "
+        "then compute the new h using the FRESHLY-UPDATED u and the OLD h."
     ),
 }
 
