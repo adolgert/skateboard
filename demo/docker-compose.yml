@@ -1,0 +1,75 @@
+# The skateboard: firewalled, service-based, portable.
+#
+#   agent_net   : orchestrator <-> agent-runner  (agent-runner also has egress to the LLM)
+#   build_net   : orchestrator <-> builder       (internal: no internet, no route to agent/oracle)
+#   oracle_net  : orchestrator <-> oracle         (internal: no internet, no route to agent/builder)
+#
+# The agent-runner shares NO network with builder or oracle: those are missing
+# routes, not blocked ones. Every service also checks a bearer token.
+
+services:
+  agent-runner:                 # UNTRUSTED
+    build:
+      context: ./agent-runner
+    networks: [agent_net]
+    environment:
+      - SKATEBOARD_TOKEN=${SKATEBOARD_TOKEN}
+      - AGENT_BACKEND=${AGENT_BACKEND:-anthropic}
+      - AGENT_MODEL=${AGENT_MODEL:-claude-opus-4-8}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-http://host.docker.internal:11434/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-not-needed}
+      - HOME=/tmp
+    tmpfs: [/tmp]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"    # reach a host-served local model (Ollama)
+
+  builder:                      # semi-trusted executor; the only container with the GPU
+    build:
+      context: .
+      dockerfile: builder/Dockerfile
+    image: skateboard/builder
+    networks: [build_net]
+    gpus: all
+    environment:
+      - SKATEBOARD_TOKEN=${SKATEBOARD_TOKEN}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    # /work is a normal writable dir in the (ephemeral) container. NOT a tmpfs:
+    # Docker mounts tmpfs noexec, which blocks executing the compiled binary.
+
+  oracle:                       # trusted, sealed; read-only rootfs
+    build:
+      context: ./oracle
+    networks: [oracle_net]
+    environment:
+      - SKATEBOARD_TOKEN=${SKATEBOARD_TOKEN}
+    read_only: true
+    tmpfs: [/tmp]
+
+  orchestrator:                 # trusted core; the only component on every network
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    networks: [agent_net, build_net, oracle_net]
+    depends_on: [agent-runner, builder, oracle]
+    environment:
+      - SKATEBOARD_TOKEN=${SKATEBOARD_TOKEN}
+      - RUN_STAMP=${RUN_STAMP:-run}
+      - MAX_ATTEMPTS=${MAX_ATTEMPTS:-3}
+      - AGENT_URL=http://agent-runner:8080
+      - BUILDER_URL=http://builder:9090
+      - ORACLE_URL=http://oracle:7070
+    volumes:
+      - repo:/repo
+      - ledger:/ledger
+
+networks:
+  agent_net: {}
+  build_net:
+    internal: true
+  oracle_net:
+    internal: true
+
+volumes:
+  repo: {}
+  ledger: {}

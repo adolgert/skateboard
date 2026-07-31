@@ -1,0 +1,7 @@
+**/__pycache__
+**/*.pyc
+capture/.build
+**/*.log
+.git
+work/tsunami
+work/*.mod

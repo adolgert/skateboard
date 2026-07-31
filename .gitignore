@@ -1,0 +1,31 @@
+# Python
+**/__pycache__/
+*.pyc
+
+# Fortran build artifacts
+*.mod
+*.o
+demo/work/tsunami
+demo/capture/.build/
+
+# Local environment (contains a local dev token; use demo/.env.example)
+demo/.env
+
+# LaTeX build artifacts
+docs/*.aux
+docs/*.log
+docs/*.fdb_latexmk
+docs/*.fls
+docs/*.out
+docs/*.synctex.gz
+
+# Third-party tsunami clone (its own git history) and the external TRACTOR report
+codes/
+docs/First_TRACTOR_Evaluation_Report/
+docs/First_TRACTOR_Evaluation_Report.pdf
+docs/marker_output/
+
+# Session build logs
+.nvhpc_pull.log
+.nvhpc_pull.sh
+.compose_build.log
