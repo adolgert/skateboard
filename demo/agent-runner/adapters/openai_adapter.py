@@ -1,29 +1,19 @@
-"""OpenAI-compatible backend adapter. Pure function: (system, user) -> text.
+"""OpenAI-compatible backend adapter. Pure function:
+    (system, user, model, base_url, api_key) -> dict.
 
-Covers Google Gemini (OpenAI-compatible endpoint) and any locally served model
-(Ollama, vLLM, llama.cpp) that speaks /v1/chat/completions. Swapping backend is
-a matter of setting OPENAI_BASE_URL + AGENT_MODEL -- no other component changes.
-
-  Ollama example:  OPENAI_BASE_URL=http://host.docker.internal:11434/v1
-                   AGENT_MODEL=qwen2.5:14b
-  Gemini example:  OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
-                   AGENT_MODEL=gemini-2.0-flash
+Covers Google Gemini (its OpenAI-compatible endpoint) and any locally served
+model (Ollama, vLLM). The endpoint and key are passed in explicitly so one
+adapter serves every OpenAI-compatible backend.
 """
-import os
-
 import requests
 
-BASE_URL = os.environ.get("OPENAI_BASE_URL", "http://host.docker.internal:11434/v1")
-MODEL = os.environ.get("AGENT_MODEL", "qwen2.5:14b")
-API_KEY = os.environ.get("OPENAI_API_KEY", "not-needed")
 
-
-def complete(system: str, user: str) -> dict:
+def complete(system: str, user: str, model: str, base_url: str, api_key: str) -> dict:
     r = requests.post(
-        f"{BASE_URL.rstrip('/')}/chat/completions",
-        headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"},
+        f"{base_url.rstrip('/')}/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={
-            "model": MODEL,
+            "model": model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -39,7 +29,7 @@ def complete(system: str, user: str) -> dict:
     usage = data.get("usage", {})
     return {
         "text": text,
-        "model_id": data.get("model", MODEL),
+        "model_id": data.get("model", model),
         "usage": {
             "input_tokens": usage.get("prompt_tokens", 0),
             "output_tokens": usage.get("completion_tokens", 0),

@@ -31,12 +31,13 @@ SEED = "/seed"                       # pristine work-tree baked into the image
 VISIBLE = "/datasets/visible"       # visible inputs baked in
 LEDGER = "/ledger/ledger.csv"
 REGION = "ch04:step"
-RUNGS = ["stdpar_managed", "omp_target"]
+RUNGS = os.environ.get("RUNGS", "stdpar_managed").split(",")
+MODEL_KEYS = os.environ.get("MODEL_KEYS", "haiku,sonnet,gemini-flash,qwen").split(",")
 MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
 EDITABLE = "src/mod_kernel.f90"
 
 LEDGER_COLS = [
-    "ts", "region", "rung", "attempt", "backend", "model", "branch", "src_sha",
+    "ts", "region", "model_key", "rung", "attempt", "backend", "model", "branch", "src_sha",
     "oracle_policy_sha", "build", "device_proof", "kernels_launched",
     "memcheck", "racecheck", "initcheck", "compare_visible", "compare_holdout",
     "cpu_best_s", "naive_stdpar_s", "port_s", "speedup", "verdict",
@@ -132,10 +133,10 @@ def run_baselines(pristine, visible):
     return results
 
 
-def attempt(rung, n, pristine, visible, policy_sha, baselines, prev_failure):
-    aid = f"{REGION.replace(':','-')}-{rung}-{n}"
+def attempt(rung, n, pristine, visible, policy_sha, baselines, prev_failure, model_key):
+    aid = f"{model_key}-{rung}-{n}"
     branch = f"attempt/{aid}"
-    row = {"ts": _now(), "region": REGION, "rung": rung, "attempt": n,
+    row = {"ts": _now(), "region": REGION, "model_key": model_key, "rung": rung, "attempt": n,
            "oracle_policy_sha": policy_sha,
            "cpu_best_s": baselines.get("cpu_best"), "naive_stdpar_s": baselines.get("naive_stdpar"),
            "human_intervention": 0, "verdict": "fail"}
@@ -147,7 +148,8 @@ def attempt(rung, n, pristine, visible, policy_sha, baselines, prev_failure):
     open(f"{REPO}/{EDITABLE}", "w").write(next(f["content"] for f in pristine if f["path"] == EDITABLE))
 
     # 1) agent produces the new kernel
-    a = post(f"{AGENT}/v1/attempt", {"attempt_id": aid, "strategy": rung, "files": pristine, "failure_report": prev_failure})
+    a = post(f"{AGENT}/v1/attempt", {"attempt_id": aid, "strategy": rung, "model_key": model_key,
+                                     "files": pristine, "failure_report": prev_failure})
     row["backend"] = a.get("backend"); row["model"] = a.get("model_id"); row["notes"] = (a.get("notes") or "")[:120]
     for f in a["files"]:
         if f["path"] != EDITABLE:
@@ -276,29 +278,43 @@ def main():
     log("measuring baselines (before agent runs)")
     baselines = run_baselines(pristine, visible)
 
-    accepted = False
-    for rung in RUNGS:
-        prev_failure = None
-        for n in range(1, MAX_ATTEMPTS + 1):
-            log(f"=== rung {rung} attempt {n}/{MAX_ATTEMPTS} ===")
-            try:
-                failure, row = attempt(rung, n, pristine, visible, policy_sha, baselines, prev_failure)
-            except Exception as e:
-                log(f"attempt error: {e}")
-                prev_failure = {"stage_failed": "harness", "detail": {"error": str(e)}}
-                continue
-            log(f"attempt result: {row.get('verdict')} (build={row.get('build')} device={row.get('device_proof')} "
-                f"compare={row.get('compare_visible')} speedup={row.get('speedup')})")
-            if failure is None:
-                log(f"ACCEPTED on rung {rung} attempt {n}")
-                accepted = True
+    log(f"campaign models: {MODEL_KEYS}   rungs: {RUNGS}   max_attempts: {MAX_ATTEMPTS}")
+    campaign = []
+    for model_key in MODEL_KEYS:
+        log(f"########## MODEL {model_key} ##########")
+        accepted = False
+        last = {}
+        for rung in RUNGS:
+            prev_failure = None
+            for n in range(1, MAX_ATTEMPTS + 1):
+                log(f"=== [{model_key}] rung {rung} attempt {n}/{MAX_ATTEMPTS} ===")
+                try:
+                    failure, row = attempt(rung, n, pristine, visible, policy_sha, baselines, prev_failure, model_key)
+                except Exception as e:
+                    log(f"attempt error: {e}")
+                    prev_failure = {"stage_failed": "harness", "detail": {"error": str(e)}}
+                    last = {"verdict": "error"}
+                    continue
+                last = row
+                log(f"  -> {row.get('verdict')} build={row.get('build')} device={row.get('device_proof')} "
+                    f"compare={row.get('compare_visible')} speedup={row.get('speedup')}")
+                if failure is None:
+                    accepted = True
+                    break
+                prev_failure = failure
+            if accepted:
                 break
-            prev_failure = failure
-        if accepted:
-            break
+        campaign.append((model_key, accepted, last))
+        log(f"########## {model_key}: {'ACCEPTED' if accepted else 'NOT ACCEPTED'} ##########")
 
-    log("done. ledger written to " + LEDGER)
-    log("FINAL: " + ("ACCEPTED" if accepted else "not accepted (ladder exhausted)"))
+    log("===== CAMPAIGN SUMMARY =====")
+    log(f"baselines: cpu_best={baselines.get('cpu_best')}  naive_stdpar={baselines.get('naive_stdpar')}")
+    for model_key, accepted, row in campaign:
+        log(f"  {model_key:14s} {'ACCEPTED' if accepted else 'failed  '}  "
+            f"attempt={row.get('attempt','-')} rung={row.get('rung','-')} "
+            f"speedup={row.get('speedup','-')} "
+            f"stages=build:{row.get('build','-')}/dev:{row.get('device_proof','-')}/cmp:{row.get('compare_visible','-')}")
+    log("ledger: " + LEDGER)
     sys.exit(0)
 
 
