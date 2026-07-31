@@ -127,6 +127,61 @@ compiler-only GPU attempt (the unmodified whole-array code compiled with
 $7.95$\,s respectively. Timings are whole-process wall clock and therefore
 include CUDA start-up, which is the honest end-to-end number.
 
+\paragraph{The prompt the agent is given.}
+The instruction has two fixed parts and one variable part. A single system
+prompt states the job and the hard rules, and never changes:
+
+{\small
+\begin{verbatim}
+You are an expert Fortran/GPU engineer working inside an automated porting
+harness.
+
+Your task: port a numerical kernel so it runs on an NVIDIA GPU, WITHOUT
+changing what it computes (within a calibrated floating-point tolerance).
+
+Hard rules:
+- You may modify ONLY the file src/mod_kernel.f90. Do not touch any other file.
+- Preserve the module name (mod_kernel), the public subroutine name and
+  signature (`subroutine step(h, u)` with
+  `real(real32), intent(inout) :: h(:), u(:)`), and the SEMANTIC CONTRACT
+  documented in the file.
+- Return the COMPLETE new contents of src/mod_kernel.f90, and nothing else,
+  wrapped exactly between a line containing `===BEGIN FILE src/mod_kernel.f90===`
+  and a line containing `===END FILE===`. Do not put a Markdown code fence
+  inside the markers. Output the raw Fortran only.
+- After the END marker you may add a short NOTES: line explaining what you
+  changed.
+\end{verbatim}
+}
+
+\noindent A strategy card names the porting method for the current rung; this is
+the card for the \code{do concurrent} rung (the OpenMP-\code{target} rung swaps
+in a different card):
+
+{\small
+\begin{verbatim}
+STRATEGY: standard-parallelism offload.
+Rewrite `step` so nvfortran compiled with `-stdpar=gpu -gpu=cc89,mem:managed`
+offloads it to the GPU. Replace the whole-array assignments with explicit
+`do concurrent (i = 1:n)` loops. Inline the 2nd-order centered difference
+(periodic boundaries) from mod_diff::diff_centered directly into the loops.
+Because the stencil reads neighbours, use temporary arrays for the differences
+so the update is not corrupted in place.
+ORDERING (must preserve): compute the new u first from the OLD u and OLD h;
+then compute the new h using the FRESHLY-UPDATED u and the OLD h.
+\end{verbatim}
+}
+
+\noindent The variable part is the current contents of \code{mod\_kernel.f90}
+(the file to port), the two read-only context files \code{mod\_diff.f90} and
+\code{mod\_params.f90} so the model can see \code{diff\_centered} and the physical
+constants, and---on a retry---the model's own previous failing version together
+with the structured diagnostic from the gate that rejected it (the compiler
+errors, or the comparator's per-variable pass/fail and error magnitudes). Notably
+absent: any test input, any reference output, and anything about the held-out
+set. The model is told what to produce and why its last try failed, never the
+answers it is being checked against.
+
 \section{Results}
 \label{sec:results}
 
@@ -255,6 +310,27 @@ passed the device-execution proof. But it never passed the correctness oracle:
 seventeen consecutive attempts produced plausible, compiling, GPU-executing ports
 that computed the wrong answer, and the oracle rejected every one. None was
 accepted.
+
+\paragraph{What the error was.} It was not a matter of accuracy---not a rounding
+or floating-point-reordering difference of a few units in the last place. In
+every compiling attempt the momentum equation was \emph{correct}: the velocity
+\code{u} matched the reference to a relative error of about $5\times10^{-7}$,
+comfortably inside tolerance. The continuity equation was grossly \emph{wrong}:
+the height \code{h} was off by up to $1.8\times10^{-2}$ in absolute terms, and by
+a relative error of about $68$---thousands of percent---where the true height
+passes near zero. The cause is a single indexing bug in the mass-flux stencil.
+The reference takes the centered difference of the flux $u\,(hmean+h)$, so the
+forward term uses the \emph{forward} velocity,
+\code{u(i+1)*(hmean+h(i+1)) - u(i-1)*(hmean+h(i-1))}; the model instead paired the
+\emph{centre} velocity with the forward height,
+\code{u(i)*(hmean+h(i+1)) - u(i-1)*(hmean+h(i-1))}---an off-by-one on the velocity
+index of the forward term, repeated in the periodic boundary cases. The port thus
+solves the wrong equation. Tellingly, the error was byte-for-byte identical on
+attempt~4 and attempt~20: over seventeen tries the model never localised the bug,
+even though the comparator's per-variable verdict (\code{u} passes, \code{h}
+fails) was in the feedback every time. This is precisely the failure the
+correctness oracle exists to catch: code that compiles, runs on the device, and
+produces a smooth, plausible height field while quietly solving the wrong physics.
 
 This is the clearest single demonstration of the design's premise. Build success
 is not correctness. A model too weak to get the numerics right can still get past
