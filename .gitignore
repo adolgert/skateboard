@@ -29,3 +29,5 @@ docs/marker_output/
 .nvhpc_pull.log
 .nvhpc_pull.sh
 .compose_build.log
+
+notes/
