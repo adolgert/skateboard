@@ -252,5 +252,69 @@ The run was restarted at temperature 0.4 (stamp `codestral100t4`) to trade
 diversity for accuracy. Speedups remain comparable across all campaigns — same
 baselines, same rung, same flags — but hit rates between T=0.8 and T=0.4 are not.
 
+## codestral-omp-100-T04-2026-07-31.csv
+
+Full 100-attempt run. Same model, rung, and flags as the partial above, but
+**temperature 0.4** instead of 0.8, `STOP_ON_ACCEPT=0`. Baselines: best-CPU
+10.02 s, naive-`stdpar` 7.27 s.
+
+**Result: 98 of 100 compiled, 98 passed the device proof and every sanitizer,
+0 accepted.** No attempt passed even the visible comparison, so **no timing was
+recorded for any attempt** — `port_s` and `speedup` are `NA` across all 100 rows.
+
+| stage where the attempt died | count |
+|---|---|
+| build | 2 |
+| device proof | 0 |
+| sanitizer | 0 |
+| **correctness (visible)** | **98** |
+
+Lowering the temperature did not produce successes. It made success *impossible*,
+and the mechanism is visible in the source.
+
+### Mode collapse onto a wrong idiom
+
+93 of 100 attempts launched exactly 25 kernels — the same count as the accepted
+T=0.8 port. The scaffolding is essentially fixed. Scanning all 100 kernels:
+
+| pattern | count |
+|---|---|
+| forward index written `modulo(i+1,n)+1`, which evaluates to **i+2** | 86 |
+| continuity uses `u(i)` on **both** difference terms | 60 |
+| materialised a `flux` array before differencing it | **0** |
+| used explicit `if (i == 1)` / `if (i == n)` boundary branches | **0** |
+
+The accepted port (attempt 5 at T=0.8) did both of the things this run never did:
+it materialised `flux(i) = u(i)*(hmean + h(i))` in its own loop before
+differencing it, and it handled the periodic boundaries with explicit branches
+whose indices it got right. At T=0.4 the model produced **neither, in 100
+attempts**. The winning structure lies outside the low-temperature mode.
+
+A representative failure (`../docs/examples/codestral-omp-T04-attempt50-mod_kernel.f90`):
+
+```fortran
+duh_dx(i) = (u(i)*(hmean + h(modulo(i+1,n)+1)) - &
+             u(i)*(hmean + h(modulo(i-2,n)+1))) * 0.5 / dx
+```
+
+Two independent errors. `u(i)` appears on both sides, so the velocity is never
+differenced and factors out entirely — the `∂u/∂x` contribution to the mass flux
+is simply gone. And `modulo(i+1,n)+1` is `i+2`: the same off-by-one qwen2.5 made
+86 times across its own campaigns, in a different model reaching for the same
+idiom. The backward term `modulo(i-2,n)+1` is correctly `i-1`, so the stencil is
+asymmetric rather than uniformly shifted.
+
+### Temperature summary on the `omp_target` rung
+
+| temperature | attempts | build pass | reached oracle | accepted |
+|---|---|---|---|---|
+| 0.8 | 5 (stopped at first accept) | 3 | 3 | **1** |
+| 0.8 | 27 (stopped by hand) | 20 | 20 | 0 |
+| 0.4 | 100 | 98 | 98 | **0** |
+
+1 acceptance in 132 attempts on this rung. Lower temperature bought a higher
+build rate and a tighter output distribution centred on a kernel that is
+confidently, reproducibly wrong.
+
 See `../docs/early_trials.tex` for the full write-up with plots, and
 `../docs/run_examples.md` for annotated code from the earlier campaigns.
