@@ -12,6 +12,8 @@
 #   ftg_n4pes_test   plain
 #   ftg_n4pes_poison -ffpe-trap=invalid, so a signaling NaN reaching arithmetic dies at
 #              the offending instruction instead of propagating.
+# and, from the Serialbox-free source, the property-test driver:
+#   n4pes_driver  reads <case>/input.txt, writes <case>/output.txt
 set -euo pipefail
 
 REPO=${REPO:-/home/adolgert/dev/skateboard}
@@ -55,13 +57,19 @@ gfortran $FLAGS -I "$TARGET_MOD" -I "$OUT" -I "$CA_MOD" -I "$SB/include" -J "$OU
 gfortran $FLAGS -ffpe-trap=invalid -I "$TARGET_MOD" -I "$OUT" -I "$CA_MOD" -I "$SB/include" \
     -J "$OUT" -c "$GEN/ftg_n4pes_test.f90" -o "$OUT/driver_poison.o"
 
+# 2b. plain-file driver. It USEs no Serialbox module, but the target module in
+#     libcoarseair.a is instrumented, so the link still needs the capture module
+#     and the serialbox archives.
+gfortran $FLAGS -I "$TARGET_MOD" -I "$OUT" -I "$CA_MOD" -I "$SB/include" -J "$OUT" \
+    -c "$GEN/n4pes_driver.f90" -o "$OUT/driver_plain.o"
+
 if [ "${COMPILE_ONLY:-0}" = "1" ] || [ -z "$CA_LIB" ]; then
     echo "objects built in $OUT (no link: COMPILE_ONLY or libcoarseair.a missing)"
     exit 0
 fi
 
 # 3. link
-for pair in "driver.o:ftg_n4pes_test" "driver_poison.o:ftg_n4pes_poison"; do
+for pair in "driver.o:ftg_n4pes_test" "driver_poison.o:ftg_n4pes_poison" "driver_plain.o:n4pes_driver"; do
     obj=${pair%%:*}; exe=${pair##*:}
     gfortran $FLAGS -o "$OUT/$exe" "$OUT/$obj" "$OUT/n4pes_capture_mod.o" $TARGET_OBJ \
         "$CA_LIB" $LIBS_SB -lstdc++ -lpthread -llapack -lblas
@@ -71,3 +79,4 @@ done
 echo
 echo "run:  $OUT/ftg_n4pes_test   <FTG_DATA_DIR>/ftg_n4pes_test/rNNNN"
 echo "      $OUT/ftg_n4pes_poison <FTG_DATA_DIR>/ftg_n4pes_test/rNNNN poison"
+echo "      $OUT/n4pes_driver  <dir containing input.txt>"

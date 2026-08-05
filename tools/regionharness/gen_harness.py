@@ -7,6 +7,10 @@ Reads a region.yaml (notes/regions/*.yaml) and emits, deterministically:
                             live_out + clobbers at region exit (m_ser_ftg).
   ftg_<entry>_test.f90      standalone replay driver: read a captured case, call
                             the region, compare with m_ser_ftg_cmp at tolerance 0.
+  <entry>_driver.f90        plain-file driver: read <case>/input.txt, call the
+                            region, write <case>/output.txt (decimal + raw bits).
+                            No Serialbox; this is the surface the Hypothesis
+                            property suite drives.
   build.sh / apply.sh       build the replay binaries / instrument the real tree.
 
 It also patches the anchor file in place, inserting four marker-delimited blocks
@@ -205,6 +209,11 @@ class Region:
     @property
     def test_prog(self):
         return "ftg_%s_test" % self.entry
+
+    @property
+    def plain_prog(self):
+        """Serialbox-free driver over text files, for property-based testing."""
+        return "%s_driver" % self.entry
 
     @property
     def case_stem(self):
@@ -524,6 +533,175 @@ def gen_driver(region):
 
 
 # ---------------------------------------------------------------------------
+# generated Fortran: plain-file driver (no Serialbox)
+# ---------------------------------------------------------------------------
+
+# One index variable per rank level; the label is built with a WRITE so the
+# consumer sees `dVdR(3)` rather than a bare position.
+LABEL_FMT = {
+    1: ("'(A,A1,I0,A1)'", ["'('", "%s", "')'"]),
+    2: ("'(A,A1,I0,A1,I0,A1)'", ["'('", "%s", "','", "%s", "')'"]),
+}
+
+
+def _emit_field(f, indent):
+    """Fortran statements writing one live_out field, one line per element."""
+    pad = " " * indent
+    call = "emit_int" if f.is_int else "emit"
+    if not f.dims:
+        return ["%sCALL %s('%s', %s)" % (pad, call, f.name, f.name)]
+    if len(f.dims) > 2:
+        die("plain driver: rank %d field %s is not supported (max 2)"
+            % (len(f.dims), f.name))
+    idx = ["i%d" % (k + 1) for k in range(len(f.dims))]
+    fmt, parts = LABEL_FMT[len(f.dims)]
+    args = []
+    n = 0
+    for p in parts:
+        if p == "%s":
+            args.append(idx[n])
+            n += 1
+        else:
+            args.append(p)
+    out = []
+    # Column-major: last dimension is the outermost loop, so the emitted order
+    # is array element order.
+    for k in reversed(range(len(f.dims))):
+        lo, hi = f.dims[k]
+        out.append("%sDO %s = %d, %d" % (pad + "  " * (len(f.dims) - 1 - k), idx[k], lo, hi))
+    inner = pad + "  " * len(f.dims)
+    out += [
+        "%sWRITE (lbl, %s) '%s', %s" % (inner, fmt, f.name, ", ".join(args)),
+        "%sCALL %s(TRIM(lbl), %s(%s))" % (inner, call, f.name, ", ".join(idx)),
+    ]
+    for k in range(len(f.dims)):
+        out.append("%sEND DO" % (pad + "  " * (len(f.dims) - 1 - k)))
+    return out
+
+
+def gen_plain_driver(region):
+    e, L = region.entry, []
+    call_args = ", ".join(region.call_args)
+    L += banner(region, "Plain-file driver: one region call, text in, text out.")
+    L += [
+        "! argv(1) = case directory.",
+        "!",
+        "! Reads <case>/input.txt -- one list-directed line per live_in argument,",
+        "! in the order of the entry's dummy arguments:",
+    ]
+    for f in region.inputs:
+        L.append("!   %s%s" % (f.name, ("(%s)" % f.dimension_attr().split("(", 1)[1][:-1])
+                               if f.dims else "  (scalar)"))
+    L += [
+        "!",
+        "! Writes <case>/output.txt -- one line per live_out element:",
+        "!   <label>  <ES24.16E3 decimal>  <Z16.16 raw IEEE-754 bits>",
+        "! The hex column is TRANSFER(value, INTEGER(8)): it makes byte-exact",
+        "! comparison possible from a consumer that never parses the decimal.",
+        "! A field whose live_out.defined_when is false is not written at all.",
+        "!",
+        "! No Serialbox: this driver is the surface the property-based test suite",
+        "! drives, and it must be cheap to invoke thousands of times.",
+        "PROGRAM %s" % region.plain_prog,
+        "",
+        "  USE %s, ONLY: %s" % (region.module, e),
+        "  IMPLICIT NONE",
+        "",
+        "  INTEGER, PARAMETER :: wp = 8",
+        "",
+    ]
+    for f in region.inputs + region.outputs:
+        L.append("  %s" % f.declare())
+    max_rank = max([len(f.dims) for f in region.outputs] + [0])
+    L += [
+        "  CHARACTER(LEN=1024) :: casedir",
+        "  CHARACTER(LEN=64)   :: lbl",
+        "  INTEGER             :: ln, st, iu, ou, ios",
+    ]
+    if max_rank:
+        L.append("  INTEGER             :: %s"
+                 % ", ".join("i%d" % (k + 1) for k in range(max_rank)))
+    L += [
+        "",
+        "  CALL GET_COMMAND_ARGUMENT(1, casedir, ln, st)",
+        "  IF (st /= 0 .OR. ln == 0) THEN",
+        "    WRITE (*,'(A)') 'usage: %s <case-dir>'" % region.plain_prog,
+        "    CALL EXIT(2)",
+        "  END IF",
+        "",
+        "  ! ---- inputs -------------------------------------------------------",
+        "  OPEN (NEWUNIT=iu, FILE=TRIM(casedir)//'/input.txt', STATUS='old', &",
+        "        ACTION='read', IOSTAT=ios)",
+        "  IF (ios /= 0) THEN",
+        "    WRITE (*,'(A,A)') 'cannot read ', TRIM(casedir)//'/input.txt'",
+        "    CALL EXIT(2)",
+        "  END IF",
+    ]
+    for f in region.inputs:
+        L += [
+            "  READ (iu, *, IOSTAT=ios) %s" % f.name,
+            "  IF (ios /= 0) CALL bad_input('%s')" % f.name,
+        ]
+    L += [
+        "  CLOSE (iu)",
+        "",
+        "  ! ---- the region ---------------------------------------------------",
+    ]
+    for f in region.outputs:
+        L.append("  %s = %s" % (f.name, "0" if f.is_int else "0.0_wp"))
+    L += [
+        "  CALL %s(%s)" % (e, call_args),
+        "",
+        "  ! ---- outputs ------------------------------------------------------",
+        "  OPEN (NEWUNIT=ou, FILE=TRIM(casedir)//'/output.txt', STATUS='replace', &",
+        "        ACTION='write', IOSTAT=ios)",
+        "  IF (ios /= 0) THEN",
+        "    WRITE (*,'(A,A)') 'cannot write ', TRIM(casedir)//'/output.txt'",
+        "    CALL EXIT(2)",
+        "  END IF",
+    ]
+    for f in region.outputs:
+        body = _emit_field(f, 4 if f.defined_when else 2)
+        if f.defined_when:
+            L.append("  IF (%s) THEN   ! live_out.defined_when" % f.defined_when)
+            L += body
+            L.append("  END IF")
+        else:
+            L += body
+    L += [
+        "  CLOSE (ou)",
+        "",
+        "CONTAINS",
+        "",
+        "  SUBROUTINE bad_input(what)",
+        "    CHARACTER(LEN=*), INTENT(IN) :: what",
+        "    WRITE (*,'(A,A,A,A)') 'malformed ', TRIM(casedir), '/input.txt: ', what",
+        "    CALL EXIT(2)",
+        "  END SUBROUTINE bad_input",
+        "",
+        "  SUBROUTINE emit(label, x)",
+        "    CHARACTER(LEN=*), INTENT(IN) :: label",
+        "    REAL(KIND=wp), INTENT(IN)    :: x",
+        "    INTEGER(KIND=8)              :: bits",
+        "    bits = TRANSFER(x, bits)",
+        "    WRITE (ou,'(A12,1X,ES24.16E3,1X,Z16.16)') label, x, bits",
+        "  END SUBROUTINE emit",
+        "",
+    ]
+    if any(f.is_int for f in region.outputs):
+        L += [
+            "  SUBROUTINE emit_int(label, n)",
+            "    CHARACTER(LEN=*), INTENT(IN) :: label",
+            "    INTEGER, INTENT(IN)          :: n",
+            "    WRITE (ou,'(A12,1X,I24,1X,Z16.16)') label, n, INT(n, 8)",
+            "  END SUBROUTINE emit_int",
+            "",
+        ]
+    L.append("END PROGRAM %s" % region.plain_prog)
+    return "\n".join(L) + "\n"
+
+
+# ---------------------------------------------------------------------------
 # generated shell: build.sh, apply.sh
 # ---------------------------------------------------------------------------
 
@@ -549,6 +727,8 @@ def gen_build_sh(region, repo, gen_dir, replay_dir):
 #   %(test)s   plain
 #   %(poison)s -ffpe-trap=invalid, so a signaling NaN reaching arithmetic dies at
 #              the offending instruction instead of propagating.
+# and, from the Serialbox-free source, the property-test driver:
+#   %(plain)s  reads <case>/input.txt, writes <case>/output.txt
 set -euo pipefail
 
 REPO=${REPO:-%(repo)s}
@@ -592,13 +772,19 @@ gfortran $FLAGS -I "$TARGET_MOD" -I "$OUT" -I "$CA_MOD" -I "$SB/include" -J "$OU
 gfortran $FLAGS -ffpe-trap=invalid -I "$TARGET_MOD" -I "$OUT" -I "$CA_MOD" -I "$SB/include" \\
     -J "$OUT" -c "$GEN/%(test)s.f90" -o "$OUT/driver_poison.o"
 
+# 2b. plain-file driver. It USEs no Serialbox module, but the target module in
+#     libcoarseair.a is instrumented, so the link still needs the capture module
+#     and the serialbox archives.
+gfortran $FLAGS -I "$TARGET_MOD" -I "$OUT" -I "$CA_MOD" -I "$SB/include" -J "$OUT" \\
+    -c "$GEN/%(plain)s.f90" -o "$OUT/driver_plain.o"
+
 if [ "${COMPILE_ONLY:-0}" = "1" ] || [ -z "$CA_LIB" ]; then
     echo "objects built in $OUT (no link: COMPILE_ONLY or libcoarseair.a missing)"
     exit 0
 fi
 
 # 3. link
-for pair in "driver.o:%(test)s" "driver_poison.o:%(poison)s"; do
+for pair in "driver.o:%(test)s" "driver_poison.o:%(poison)s" "driver_plain.o:%(plain)s"; do
     obj=${pair%%%%:*}; exe=${pair##*:}
     gfortran $FLAGS -o "$OUT/$exe" "$OUT/$obj" "$OUT/%(capmod)s.o" $TARGET_OBJ \\
         "$CA_LIB" $LIBS_SB -lstdc++ -lpthread -llapack -lblas
@@ -608,9 +794,11 @@ done
 echo
 echo "run:  $OUT/%(test)s   <FTG_DATA_DIR>/%(case)s/rNNNN"
 echo "      $OUT/%(poison)s <FTG_DATA_DIR>/%(case)s/rNNNN poison"
+echo "      $OUT/%(plain)s  <dir containing input.txt>"
 """ % dict(region=region.name, repo=repo, sb=SB_DEFAULT, gen=gen_dir, replay=replay_dir,
            target=region.src, flags=CA_FLAGS, capmod=region.capture_mod,
-           test=region.test_prog, poison="ftg_%s_poison" % e, case=region.case_stem)
+           test=region.test_prog, poison="ftg_%s_poison" % e, case=region.case_stem,
+           plain=region.plain_prog)
 
 
 def gen_apply_sh(region, repo, gen_dir, replay_dir, spec_rel):
@@ -906,6 +1094,7 @@ def main():
     write_if_changed(gen_dir / ("%s.f90" % region.capture_mod),
                      gen_capture_mod(region, args.data_dir))
     write_if_changed(gen_dir / ("%s.f90" % region.test_prog), gen_driver(region))
+    write_if_changed(gen_dir / ("%s.f90" % region.plain_prog), gen_plain_driver(region))
     write_if_changed(replay_dir / "build.sh",
                      gen_build_sh(region, repo, gen_dir, replay_dir), executable=True)
     write_if_changed(replay_dir / "apply.sh",
