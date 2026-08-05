@@ -521,9 +521,14 @@ def coverage(t: Target, verbose: bool = False) -> dict[str, set[int]]:
 
 
 def report(t: Target, mutants: list[Mutant], out_json: Path | None) -> int:
-    scored = [m for m in mutants if m.status not in ("UNCOVERED", "NOCOMPILE")]
+    skipped = [m for m in mutants if m.status == "PENDING"]  # --limit
     uncovered = [m for m in mutants if m.status == "UNCOVERED"]
     nocompile = [m for m in mutants if m.status == "NOCOMPILE"]
+    scored = [
+        m
+        for m in mutants
+        if m.status not in ("UNCOVERED", "NOCOMPILE", "PENDING")
+    ]
     killed = [m for m in scored if m.tol_killed]
     gap = [m for m in scored if m.status == "GAP"]
     chk = [m for m in scored if m.status == "SURVIVED-release/KILLED-checked"]
@@ -535,6 +540,8 @@ def report(t: Target, mutants: list[Mutant], out_json: Path | None) -> int:
     print("=" * 72)
     print(f"  generated                       {len(mutants):5d}")
     print(f"  uncovered (not built)           {len(uncovered):5d}")
+    if skipped:
+        print(f"  skipped (--limit)               {len(skipped):5d}")
     print(f"  non-compiling                   {len(nocompile):5d}")
     print(f"  scored                          {len(scored):5d}")
     print()
