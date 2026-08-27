@@ -14,9 +14,13 @@ from .subjects import Subject
 def _current_subject(store: LedgerStore, kind: str):
     """The subject of this kind attached to the most recent claim, if any.
 
-    Nothing before Step 4 (submit) tracks "the current tree" directly, so
-    it is read off the claims themselves: the most recently timestamped
-    claim that names a subject of this kind.
+    This is a guess, used only when the caller has no better source: it
+    reports no current tree at all until some check has actually run,
+    which is wrong for a region that has been submitted but not yet
+    checked. The gateway (Step 5) knows the real current tree from its own
+    git repo and passes it in as `compute_status`'s `tree` argument
+    instead of relying on this. The ledger CLI, which has no repo to read,
+    still falls back to this.
     """
     best_ts = None
     best_subject = None
@@ -28,9 +32,17 @@ def _current_subject(store: LedgerStore, kind: str):
     return best_subject
 
 
-def compute_status(store: LedgerStore) -> dict:
-    tree = _current_subject(store, "tree")
-    frozen = _current_subject(store, "frozen")
+def compute_status(store: LedgerStore, tree: Subject | None = None, frozen: Subject | None = None) -> dict:
+    """Status for the region's current tree.
+
+    `tree` and `frozen` are the caller's answer to "what is current right
+    now"; pass them when you have a better source than the ledger itself
+    (see `_current_subject`). Leave them out to fall back to the guess.
+    """
+    if tree is None:
+        tree = _current_subject(store, "tree")
+    if frozen is None:
+        frozen = _current_subject(store, "frozen")
 
     rows = []
     for req in ACCEPTANCE_REQUIREMENTS:

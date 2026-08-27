@@ -163,7 +163,7 @@ def submit(repo_dir, region_id: str, working_copy_dir, allow_globs: list[str], s
     frozen_files = [{"path": p, "content": c} for p, c in baseline.items() if not _matches_any(p, allow_globs)]
     tree_files = [{"path": p, "content": c} for p, c in constructed.items()]
 
-    branch = f"region/{region_id.replace(':', '-')}"
+    branch = _region_branch(region_id)
     committed = _commit_tree_if_changed(repo_dir, branch, constructed, f"submit {region_id} session={session}")
 
     return SubmitReceipt(
@@ -171,4 +171,26 @@ def submit(repo_dir, region_id: str, working_copy_dir, allow_globs: list[str], s
         frozen=frozen_subject(frozen_files).sha256,
         rejected=tuple(rejected),
         committed=committed,
+    )
+
+
+def _region_branch(region_id: str) -> str:
+    return f"region/{region_id.replace(':', '-')}"
+
+
+def current_tree_and_frozen(repo_dir, region_id: str, store: LedgerStore, spec_path: str) -> tuple[str, str]:
+    """The region's current tree and frozen-set hashes, read straight from the gateway repo.
+
+    Before the region's first submit, the branch doesn't exist yet and the
+    current tree is just the baseline itself. This never runs `submit()`
+    and never writes anything; it only reads what is already there.
+    """
+    branch = _region_branch(region_id)
+    ref = branch if _rev_parse(repo_dir, branch) is not None else "main"
+    baseline = tracked_files(repo_dir, "main")
+    allow_globs = resolve_allow_globs(store, spec_path)
+    frozen_files = [f for f in baseline if not _matches_any(f["path"], allow_globs)]
+    return (
+        tree_subject(tracked_files(repo_dir, ref)).sha256,
+        frozen_subject(frozen_files).sha256,
     )
