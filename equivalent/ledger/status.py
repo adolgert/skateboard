@@ -32,6 +32,25 @@ def _current_subject(store: LedgerStore, kind: str):
     return best_subject
 
 
+def requirement_status(store: LedgerStore, predicate_type: str, subject: Subject | None, producing_action: str) -> dict:
+    """Is this one requirement met? Present (with its claim) or missing (with what would produce it).
+
+    This is the one place that decides what a missing or present claim
+    looks like. `compute_status`'s per-row loop below and the gateway's
+    /run refusal (Step 5b) both call this, so a claim renders the same way
+    in both places.
+    """
+    claim = store.latest(predicate_type, subject) if subject is not None else None
+    if claim is not None:
+        return {
+            "predicateType": predicate_type,
+            "status": "present",
+            "verdict": claim.predicate.verdict,
+            "claim_id": claim.id,
+        }
+    return {"predicateType": predicate_type, "status": "missing", "producing_action": producing_action}
+
+
 def compute_status(store: LedgerStore, tree: Subject | None = None, frozen: Subject | None = None) -> dict:
     """Status for the region's current tree.
 
@@ -47,20 +66,7 @@ def compute_status(store: LedgerStore, tree: Subject | None = None, frozen: Subj
     rows = []
     for req in ACCEPTANCE_REQUIREMENTS:
         subject = tree if req.subject_kind == "tree" else frozen
-        claim = store.latest(req.predicate_type, subject) if subject is not None else None
-        if claim is not None:
-            rows.append({
-                "predicateType": req.predicate_type,
-                "status": "present",
-                "verdict": claim.predicate.verdict,
-                "claim_id": claim.id,
-            })
-        else:
-            rows.append({
-                "predicateType": req.predicate_type,
-                "status": "missing",
-                "producing_action": req.producing_action,
-            })
+        rows.append(requirement_status(store, req.predicate_type, subject, req.producing_action))
 
     accepted = tree is not None and all(
         row["status"] == "present" and row["verdict"] == "pass" for row in rows
