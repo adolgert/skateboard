@@ -29,3 +29,14 @@ docs/marker_output/
 .nvhpc_pull.log
 .nvhpc_pull.sh
 .compose_build.log
+
+notes/
+
+# Region-harness artifacts
+ftgdata/
+.venv/
+tools/regionharness/cases/*/fcg/asm/
+tools/regionharness/cases/*/fcg/pre/
+tools/regionharness/cases/*/fcg/cache/
+tools/regionharness/cases/*/fcg/modtmp/
+tools/regionharness/cases/*/replay/build/
