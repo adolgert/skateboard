@@ -107,6 +107,15 @@ class LedgerStore:
 
     # --- queries ---
 
+    def all_claims(self) -> list[Claim]:
+        return self._read_claims()
+
+    def all_requests(self) -> list[RequestLogLine]:
+        return self._read_requests()
+
+    def get_claim(self, claim_id: str) -> Claim | None:
+        return next((c for c in self._read_claims() if c.id == claim_id), None)
+
     def claims_for(self, subject: Subject) -> list[Claim]:
         return [c for c in self._read_claims() if subject in c.subject]
 

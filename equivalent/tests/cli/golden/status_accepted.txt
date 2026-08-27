@@ -1,0 +1,10 @@
+region ch04:step   tree aaaaaaaaaaaa (frozen bbbbbbbbbbbb)
+  sese/verified        pass   c-0001
+  build/replay         pass   c-0002
+  gpu/executed         pass   c-0003
+  sanitize/memcheck    pass   c-0004
+  sanitize/racecheck   pass   c-0005
+  regression/visible   pass   c-0006
+  regression/holdout   pass   c-0007
+  timing/port          pass   c-0008
+ACCEPTED on aaaaaaaaaaaa
