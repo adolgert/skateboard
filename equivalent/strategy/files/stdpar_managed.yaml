@@ -1,0 +1,44 @@
+name: stdpar_managed
+version: 1
+
+# Files a region under this strategy may legally submit. A specific region's
+# own allow-list must stay within this list; it can only narrow it, never add
+# a path outside it.
+# fnmatch's "*" already matches across "/" (it has no directory-boundary
+# meaning here), so "src/*.f90" covers both src/mod_kernel.f90 and something
+# like src/PESs/N4_UMN_PES_Class.F90 -- no "**" needed or supported.
+allow_globs:
+  - "src/*.f90"
+  - "notes/regions/*.yaml"
+
+languages:
+  fortran:
+    compiler: nvfortran
+    # Exactly what demo/builder/stages.py PROFILES["stdpar_managed"] passes to
+    # nvfortran today, including mem:managed.
+    flags:
+      - "-O2"
+      - "-stdpar=gpu"
+      - "-gpu=cc89,mem:managed"
+      - "-Minfo=accel"
+
+# No separate link step today (one nvfortran call compiles and links).
+# Reserved for the future manifest-driven multi-language build (D13).
+link_flags: []
+
+required_tools:
+  - nvfortran
+  - compute-sanitizer
+
+# NVCOMPILER_ACC_NOTIFY counts kernel launches in stderr (notify: acc).
+# mandatory: false -- a host fallback here is not treated as an error.
+device_proof:
+  notify: acc
+  mandatory: false
+
+sanitizers:
+  - memcheck
+  - racecheck
+  - initcheck
+
+analyzer_command: "python3 tools/regionharness/check_sese.py"
