@@ -56,7 +56,7 @@ IN_TREE_SOURCE_ROOT = "."
 REQUIRED_SOURCE_FIELDS = ("root", "patterns")
 REQUIRED_BUILD_FIELDS = ("makefile", "targets")
 REQUIRED_TARGET_FIELDS = ("target", "executable")
-REQUIRED_INTERFACE_FIELDS = ("module", "entry", "inputs", "outputs")
+REQUIRED_INTERFACE_FIELDS = ("module", "entry", "files", "inputs", "outputs")
 REQUIRED_VARIABLE_FIELDS = ("name", "dtype", "rank")
 REQUIRED_DATASET_FIELDS = ("args",)
 REQUIRED_TIMING_FIELDS = ("args", "outputs", "budget_s")
@@ -108,6 +108,10 @@ class Variable:
 class Interface:
     module: str
     entry: str
+    # The files that implement the region, relative to the tree root and
+    # spelled the way the tree spells them: what a port edits, and what
+    # the harness's own self-check mutates.
+    files: tuple
     inputs: tuple  # (Variable, ...)
     outputs: tuple
 
@@ -236,9 +240,19 @@ def _load_variable(raw: dict, where: str) -> Variable:
 
 def _load_interface(raw: dict, where: str) -> Interface:
     _check_keys(raw, REQUIRED_INTERFACE_FIELDS, f"{where} interface")
+    files = tuple(_name(f, f"{where} interface file") for f in raw["files"])
+    if not files:
+        # A region nobody can point at is a region nobody can port or
+        # mutate, and an empty list is far likelier to be a half-written
+        # manifest than a decision.
+        raise ValueError(
+            f"{where} interface files is empty, so nothing names the code that "
+            f"implements the region"
+        )
     return Interface(
         module=_name(raw["module"], f"{where} interface module"),
         entry=_name(raw["entry"], f"{where} interface entry"),
+        files=files,
         inputs=tuple(_load_variable(v, f"{where} interface input") for v in raw["inputs"]),
         outputs=tuple(_load_variable(v, f"{where} interface output") for v in raw["outputs"]),
     )
@@ -352,6 +366,10 @@ def load_manifest(path, *, source_base=None) -> Manifest:
     build = _load_build(raw["build"], where)
     _in_tree_path(source.root, build.makefile, f"{where} build makefile")
 
+    interface = _load_interface(raw["interface"], where)
+    for path in interface.files:
+        _in_tree_path(source.root, path, f"{where} interface file")
+
     properties = None
     if raw["properties"] is not None:
         properties = _in_tree_path(source.root, raw["properties"], f"{where} properties")
@@ -359,7 +377,7 @@ def load_manifest(path, *, source_base=None) -> Manifest:
     return Manifest(**{
         **minimal,
         "build": build,
-        "interface": _load_interface(raw["interface"], where),
+        "interface": interface,
         "datasets": _load_datasets(raw["datasets"], where),
         "timing": _load_timing(raw["timing"], where),
         "tolerances": _in_tree_path(source.root, raw["tolerances"], f"{where} tolerances"),

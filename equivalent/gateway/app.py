@@ -31,7 +31,9 @@ from equivalent.components import (
     harness_build,
     harness_capture,
     harness_determinism,
+    harness_property,
     harness_replay,
+    harness_self_check,
     harness_timing,
     manifest_check,
     program_regression,
@@ -593,6 +595,50 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                     "harness/times", subjects_by_kind["tree"], "builder", result,
                     materials=_capture_set_materials(result["detail"]),
                 )
+                log("claim", claim_id=claim.id)
+                return _claim_response(claim)
+
+            if req.action == "harness_self_check":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                # `limit` scores only the first mutants. It is for a
+                # session finding its feet on a large region; the claim
+                # says how many there were, so a limited run cannot be
+                # mistaken for a whole one.
+                result = harness_self_check.check(
+                    store, subjects_by_kind["tree"], cfg.repo_dir, ref, cfg.region_id,
+                    tree_sha, load_strategy(cfg.baseline_strategy_path), builder,
+                    limit=req.config.get("limit"),
+                )
+                # The two things this verdict rests on: the answers the
+                # mutants were scored against, and the bands that decided
+                # whether a changed answer counted.
+                claim = record(
+                    "harness/self_check", subjects_by_kind["tree"], "builder", result,
+                    materials=[
+                        *_capture_set_materials(result["detail"]),
+                        Subject(kind="policy", sha256=result["detail"]["policy_sha256"]),
+                    ],
+                )
+                log("claim", claim_id=claim.id)
+                return _claim_response(claim)
+
+            if req.action == "harness_property":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                # As in the porting check, a seed the request names is the
+                # same search again and the config hash carries it; a
+                # request that names none has one drawn and written into
+                # the claim.
+                result = harness_property.check(
+                    store, subjects_by_kind["tree"], cfg.repo_dir, ref, cfg.region_id,
+                    tree_sha, load_strategy(cfg.baseline_strategy_path), builder,
+                    seed=req.config.get("seed"),
+                    max_examples=req.config.get(
+                        "max_examples", property_check.DEFAULT_MAX_EXAMPLES,
+                    ),
+                )
+                claim = record("harness/properties", subjects_by_kind["tree"], "builder", result)
                 log("claim", claim_id=claim.id)
                 return _claim_response(claim)
         except ComponentError as exc:

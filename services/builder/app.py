@@ -108,6 +108,30 @@ class PropertiesReq(BaseModel):
     max_examples: int
 
 
+class MutateReq(BaseModel):
+    attempt_id: str
+    makefile: str
+    # The manifest's replay target: what `make` is asked for, and what it
+    # must leave behind for each mutant to be replayed.
+    replay_target: dict
+    # The files the manifest says implement the region. Nothing here
+    # decides which those are; the gateway read them from the manifest.
+    files: list[str] = []
+    # The visible capture set: {name: {"inputs": {variable: b64 npy},
+    # "outputs": {...}}}. The inputs are replayed and the outputs are what
+    # each mutant is scored against.
+    cases: dict = {}
+    # The tolerance policy's band per output variable, which is what
+    # decides whether a changed answer was noticed.
+    bands: dict = {}
+    compiler: str
+    flags: list[str] = []
+    link_flags: list[str] = []
+    source_patterns: list[str] = []
+    jobs: int | None = None
+    limit: int | None = None
+
+
 class TimeReq(BaseModel):
     attempt_id: str
     executable: str  # the manifest's timing target
@@ -154,6 +178,16 @@ def properties(req: PropertiesReq, authorization: str | None = Header(default=No
     _auth(authorization)
     return stages.properties(
         req.attempt_id, req.executable, req.module, req.cases, req.seed, req.max_examples,
+    )
+
+
+@app.post("/v1/mutate")
+def mutate(req: MutateReq, authorization: str | None = Header(default=None)):
+    _auth(authorization)
+    return stages.mutate(
+        req.attempt_id, req.makefile, req.replay_target, req.files, req.cases, req.bands,
+        req.compiler, req.flags, req.link_flags, req.source_patterns,
+        jobs=req.jobs, limit=req.limit,
     )
 
 

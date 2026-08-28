@@ -99,6 +99,11 @@ ACTION_TABLE = (
               True, "builder:/v1/capture", ONBOARDING),
     ActionRow("harness_timing", ("harness/times",), (("harness/builds", "tree"),), True,
               "builder:/v1/time", ONBOARDING),
+    ActionRow("harness_self_check", ("harness/self_check",), (("harness/replays", "tree"),),
+              True, "builder:/v1/mutate", ONBOARDING, config_keys=("limit",)),
+    ActionRow("harness_property", ("harness/properties",), (("harness/replays", "tree"),),
+              True, "builder:/v1/properties", ONBOARDING,
+              config_keys=("seed", "max_examples")),
     ActionRow(
         "onboarded", (), tuple((r.predicate_type, r.subject_kind) for r in ONBOARDING_REQUIREMENTS),
         True, None, ONBOARDING,

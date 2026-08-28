@@ -343,7 +343,7 @@ def test_an_onboarding_session_is_measured_against_the_onboarding_requirements(t
         store, "sess-1", requests, [], session.join([], requests), phase=PORTING,
     )
 
-    assert onboarding.time_to_acceptance == "6s"
+    assert onboarding.time_to_acceptance == f"{len(ONBOARDING_REQUIREMENTS)}s"
     assert porting.time_to_acceptance == "not accepted"
 
 

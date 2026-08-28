@@ -74,7 +74,8 @@ def test_get_table_for_an_onboarding_region_returns_the_onboarding_rows(tmp_path
 
     assert [row["name"] for row in rows] == [
         "manifest_check", "harness_build", "harness_capture", "harness_replay",
-        "harness_determinism", "harness_timing", "onboarded",
+        "harness_determinism", "harness_timing", "harness_self_check",
+        "harness_property", "onboarded",
     ]
     # The row that names the whole list has nothing to dispatch to, the
     # same way "accept" does not.

@@ -76,6 +76,8 @@ ONBOARDING_REQUIREMENTS = (
     Requirement("harness/replays", "tree", "harness_replay"),
     Requirement("harness/deterministic", "tree", "harness_determinism"),
     Requirement("harness/times", "tree", "harness_timing"),
+    Requirement("harness/self_check", "tree", "harness_self_check"),
+    Requirement("harness/properties", "tree", "harness_property"),
 )
 
 REQUIREMENTS_BY_PHASE = {

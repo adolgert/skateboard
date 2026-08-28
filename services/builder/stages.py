@@ -26,8 +26,11 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 
-from . import contract
+import numpy as np
+
+from . import contract, mutate as mutants
 
 HARNESS = "/opt/harness"  # baked, trusted: npy_io.f90, fc-shim
 WORK_ROOT = "/work"  # one workspace per attempt, rebuilt from scratch each build
@@ -56,6 +59,20 @@ CAPTURE_TIMEOUT_S = 600
 # invocations of a region, short enough that a driver that hangs on some
 # drawn input ends the run instead of the service.
 PROPERTIES_TIMEOUT_S = 900
+# What one mutant costs at most: its own build and its replay of every
+# case together. A mutant is a single-token change to a tree that has
+# already built, so a mutant that has not finished in this long is one
+# whose fault is a hang rather than a wrong number.
+MUTATE_TIMEOUT_S = 300
+# And what a whole mutation run costs at most, however many mutants that
+# is. Reaching it leaves the rest unscored and says so. Long enough for a
+# kernel of a few hundred lines, short enough that the answer arrives
+# while the session that asked for it is still waiting.
+MUTATE_CEILING_S = 1500
+# How many mutants are built at once when the caller does not say. Each
+# worker is a compile and a run, so this is chosen against a machine the
+# rest of the harness is also using rather than against the core count.
+DEFAULT_MUTATE_JOBS = 4
 
 # The interpreter a code's property module is run under: this service's
 # own. It is the same one /healthz imports pytest and Hypothesis with, so
@@ -123,6 +140,31 @@ def _accel_lines(text: str) -> str:
     return "\n".join(lines[:40])
 
 
+def build_env(compiler, flags, link_flags, log_path, harness_dir=HARNESS) -> dict:
+    """The environment a submitted makefile is run in, wherever it is run.
+
+    The compiler it is handed is the logging shim, not the strategy's
+    compiler directly, so every invocation is recorded; the flags are in
+    the environment rather than on make's command line, so a makefile
+    that ignores them wins and is then visible in the log. The mutation
+    stage builds its mutants with this same environment, because a mutant
+    built some other way would say nothing about the build a port faces.
+    """
+    env = {
+        **os.environ,
+        "FC": os.path.join(harness_dir, "fc-shim"),
+        "FC_REAL": compiler,
+        "FC_LOG": log_path,
+        "FFLAGS": " ".join(flags),
+        "LDFLAGS": " ".join(link_flags),
+        "HARNESS": harness_dir,
+    }
+    module_flag = contract.module_flag(compiler)
+    if module_flag is not None:
+        env["MODFLAG"] = module_flag
+    return env
+
+
 def build(attempt_id, tree, makefile, targets, compiler, flags, link_flags, source_patterns,
           *, harness_dir=HARNESS, work_root=WORK_ROOT, timeout=BUILD_TIMEOUT_S) -> dict:
     """Build the submitted tree with its own makefile, and say what that did.
@@ -143,19 +185,7 @@ def build(attempt_id, tree, makefile, targets, compiler, flags, link_flags, sour
     tree_dir = write_tree(os.path.join(workspace, "tree"), tree)
     log_path = os.path.join(workspace, LOG_NAME)
 
-    env = {
-        **os.environ,
-        "FC": os.path.join(harness_dir, "fc-shim"),
-        "FC_REAL": compiler,
-        "FC_LOG": log_path,
-        "FFLAGS": " ".join(flags),
-        "LDFLAGS": " ".join(link_flags),
-        "HARNESS": harness_dir,
-    }
-    module_flag = contract.module_flag(compiler)
-    if module_flag is not None:
-        env["MODFLAG"] = module_flag
-
+    env = build_env(compiler, flags, link_flags, log_path, harness_dir)
     command = ["make", "-f", makefile, *[t["target"] for t in targets]]
     try:
         rc, out, err = _run(command, cwd=tree_dir, env=env, timeout=timeout)
@@ -593,6 +623,275 @@ def properties(attempt_id, executable, module, cases, seed, max_examples,
         # which is the whole value of a failed property run.
         "log_tail": output[-4000:],
     }
+
+
+def _output_arrays(case_dir) -> dict:
+    """Every output file one replay left in a case directory, as arrays.
+
+    The files say for themselves what they hold, so this reads them the
+    way the oracle reads a capture: nothing here is told a variable name
+    or an element type.
+    """
+    arrays = {}
+    for path in sorted(glob.glob(os.path.join(case_dir, f"*{OUTPUT_SUFFIX}"))):
+        variable = os.path.basename(path)[: -len(OUTPUT_SUFFIX)]
+        arrays[variable] = np.load(path, allow_pickle=False)
+    return arrays
+
+
+def _write_mutated(mutant_dir, mutant) -> None:
+    """The mutant's own copy of the file, with its one line changed."""
+    path = os.path.join(mutant_dir, mutant.file)
+    with open(path) as source:
+        lines = source.read().split("\n")
+    lines[mutant.line - 1] = mutant.mutated
+    with open(path, "w") as out:
+        out.write("\n".join(lines))
+
+
+def _remaining(deadline) -> float:
+    """What is left of one mutant's budget, never zero or negative."""
+    return max(1.0, deadline - time.monotonic())
+
+
+def score_mutant(job) -> dict:
+    """Build one mutant, replay every case through it, and say what happened.
+
+    Runs in a worker process, so everything it needs is in `job` and
+    everything it answers with is in the returned row. The mutant's
+    directory is a copy of the tree that already built, so `make` rebuilds
+    only what the changed file forces -- and it is removed again unless
+    the verdict is one a person has to read the source of.
+    """
+    mutant = job["mutant"]
+    mutant_dir = job["mutant_dir"]
+    deadline = time.monotonic() + job["timeout"]
+    try:
+        shutil.rmtree(mutant_dir, ignore_errors=True)
+        shutil.copytree(job["tree_dir"], mutant_dir, symlinks=True)
+        _write_mutated(mutant_dir, mutant)
+
+        command = ["make", "-f", job["makefile"], job["target"]]
+        try:
+            rc, out, err = _run(
+                command, cwd=mutant_dir, env=job["env"], timeout=_remaining(deadline),
+            )
+        except subprocess.TimeoutExpired:
+            mutant.status = mutants.BUILD_FAIL
+            mutant.note = f"the mutant's build did not finish within {job['timeout']} seconds"
+            return mutant.as_result()
+        replay = os.path.join(mutant_dir, job["executable"])
+        if rc != 0 or not os.path.exists(replay):
+            mutant.status = mutants.BUILD_FAIL
+            mutant.note = _last_line(out + err) or "make left no executable"
+            return mutant.as_result()
+
+        for name in job["cases"]:
+            case_dir = os.path.join(mutant_dir, "cases", name)
+            shutil.rmtree(case_dir, ignore_errors=True)
+            shutil.copytree(os.path.join(job["inputs_root"], name), case_dir)
+            try:
+                rc, out, err = _run(
+                    [replay, case_dir], cwd=mutant_dir, timeout=_remaining(deadline),
+                )
+            except subprocess.TimeoutExpired:
+                mutant.status = mutants.RUNTIME_FAIL
+                mutant.note = f"case '{name}': the replay did not finish in time"
+                return mutant.as_result()
+            if rc != 0:
+                mutant.status = mutants.RUNTIME_FAIL
+                mutant.note = f"case '{name}': exit {rc}: {_last_line(out + err)}"
+                return mutant.as_result()
+
+            try:
+                expected = _output_arrays(os.path.join(job["refs_root"], name))
+                got = _output_arrays(case_dir)
+            except ValueError as exc:
+                mutant.status = mutants.KILLED
+                mutant.note = f"case '{name}': the replay wrote a file that is not an array ({exc})"
+                return mutant.as_result()
+            status, note = mutants.classify(expected, got, job["bands"])
+            if status != mutants.EQUIVALENT:
+                mutant.status, mutant.note = status, f"case '{name}': {note}"
+                return mutant.as_result()
+
+        mutant.status, mutant.note = mutants.EQUIVALENT, "no output changed in any case"
+        return mutant.as_result()
+    finally:
+        if mutant.status not in mutants.KEEP_DIRECTORY:
+            shutil.rmtree(mutant_dir, ignore_errors=True)
+
+
+def _last_line(text) -> str:
+    lines = [line for line in (text or "").strip().split("\n") if line.strip()]
+    return lines[-1][:200] if lines else ""
+
+
+def _refused(reason: str) -> dict:
+    return {
+        "ok": False, "stage": "mutate", "generated": 0, "scored": 0,
+        "results": [], "counts": {}, "kept_dirs": [], "log_tail": reason,
+    }
+
+
+def _mutation_corpus(workspace, cases) -> tuple:
+    """The cases laid out on disk once: inputs to replay, outputs to score against.
+
+    Every mutant gets its own copy of the inputs, so the directory written
+    here is read and never run in. The captured outputs are written beside
+    them as the files they already are -- each says for itself what it
+    holds -- and are what every mutant is compared with.
+    """
+    # Everything an earlier mutation run of this attempt left, including
+    # the directories it kept for a reader: they belong to a run whose
+    # answer has already been read, and keeping them would make it look
+    # as though this run had produced them.
+    shutil.rmtree(os.path.join(workspace, "mutants"), ignore_errors=True)
+    inputs_root = os.path.join(workspace, "mutants", ".inputs")
+    refs_root = os.path.join(workspace, "mutants", ".refs")
+    for name, case in cases.items():
+        _write_case(os.path.join(inputs_root, name), case.get("inputs", {}))
+        reference = os.path.join(refs_root, name)
+        os.makedirs(reference, exist_ok=True)
+        for variable, encoded in case.get("outputs", {}).items():
+            with open(os.path.join(reference, f"{variable}{OUTPUT_SUFFIX}"), "wb") as out:
+                out.write(base64.b64decode(encoded))
+    return inputs_root, refs_root
+
+
+def mutate(attempt_id, makefile, replay_target, files, cases, bands, compiler, flags,
+           link_flags, source_patterns, *, jobs=None, limit=None, work_root=WORK_ROOT,
+           harness_dir=HARNESS, timeout=MUTATE_TIMEOUT_S, ceiling=MUTATE_CEILING_S) -> dict:
+    """Score every mutant of the region's own files against the captured answers.
+
+    This is the harness asking about itself: if a port of this region were
+    wrong, would the gate notice? Each mutant is one changed token in one
+    of the files the manifest says implement the region. It is built with
+    the same makefile, compiler, flags and shim as the tree it came from,
+    replayed on every case it is given, and compared with the captured
+    outputs by the same comparator and the same bands a port is judged by
+    -- so what comes back is a property of this gate as configured, not of
+    a model of it.
+
+    `replay_target` is the manifest's replay target, {"target",
+    "executable"}: what `make` is asked for, and what it must leave behind.
+    `cases` is {name: {"inputs": {variable: b64 npy}, "outputs": {...}}},
+    the visible capture set. `bands` is the tolerance policy's band per
+    output variable.
+
+    There is no coverage prepass. gcov belongs to one compiler and the
+    compiler here is whichever the strategy names, so a mutant on a line
+    the cases never execute is built, run, and comes back as a survivor
+    like any other. Reading the survivors is the point: some are
+    equivalent code, and some are region the captured inputs never reach.
+
+    Returns {ok, generated, scored, results, counts, kept_dirs}. Each
+    result is one mutant and its verdict; the directories of the two
+    verdicts a person has to read the source of are kept and named.
+    """
+    workspace = _workspace(attempt_id, work_root)
+    tree_dir = _tree_dir(attempt_id, work_root)
+    if not os.path.isdir(tree_dir):
+        return _refused(
+            f"there is no built tree for attempt '{attempt_id}'; build it before mutating it"
+        )
+
+    generated = []
+    for relative in files:
+        path = _in_tree(tree_dir, relative)
+        if path is None or not os.path.isfile(path):
+            where = "does not stay inside the tree" if path is None else "is not in the tree"
+            return _refused(f"the region file '{relative}' {where}")
+        if not contract.is_tree_source(relative, source_patterns):
+            return _refused(
+                f"the region file '{relative}' is not one this code calls its own source, "
+                f"so mutating it would say nothing about a port of it"
+            )
+        with open(path, errors="replace") as source:
+            generated.extend(mutants.generate(source.read(), relative))
+
+    todo = generated[: int(limit)] if limit else list(generated)
+    if not todo:
+        return {
+            "ok": True, "stage": "mutate", "generated": len(generated), "scored": 0,
+            "results": [], "counts": {}, "kept_dirs": [],
+            "log_tail": "no mutant was generated from the region's files",
+        }
+
+    inputs_root, refs_root = _mutation_corpus(workspace, cases)
+    env = build_env(
+        compiler, flags, link_flags, os.path.join(workspace, "mutants", ".fc.jsonl"), harness_dir,
+    )
+    payloads = [
+        {
+            "mutant": mutant,
+            "tree_dir": tree_dir,
+            "mutant_dir": os.path.join(workspace, "mutants", mutant.mid),
+            "makefile": makefile,
+            "target": replay_target["target"],
+            "executable": replay_target["executable"],
+            "env": env,
+            "inputs_root": inputs_root,
+            "refs_root": refs_root,
+            "cases": sorted(cases),
+            "bands": bands,
+            "timeout": timeout,
+        }
+        for mutant in todo
+    ]
+
+    workers = int(jobs) if jobs else min(DEFAULT_MUTATE_JOBS, os.cpu_count() or 1)
+    results = _score_all(payloads, workers, ceiling)
+    counts = {}
+    for row in results:
+        counts[row["status"]] = counts.get(row["status"], 0) + 1
+    return {
+        "ok": True, "stage": "mutate", "generated": len(generated), "scored": len(results),
+        "results": results, "counts": counts,
+        "kept_dirs": [
+            os.path.join(workspace, "mutants", row["id"]) for row in results
+            if row["status"] in mutants.KEEP_DIRECTORY
+        ],
+    }
+
+
+
+def _score_all(payloads, workers: int, ceiling) -> list:
+    """Every mutant scored, in a pool of workers, inside one overall ceiling.
+
+    Results come back in whatever order the workers finish; they are put
+    back into the order the mutants were generated, so a reader of the
+    claim walks the file from top to bottom. Anything the ceiling cut off
+    is in that list too, saying so, rather than quietly absent.
+    """
+    by_id = {payload["mutant"].mid: payload["mutant"] for payload in payloads}
+    scored = {}
+    pool = ProcessPoolExecutor(max_workers=max(1, workers))
+    deadline = time.monotonic() + ceiling
+    try:
+        futures = {pool.submit(score_mutant, payload): payload for payload in payloads}
+        for future in list(futures):
+            try:
+                row = future.result(timeout=_remaining(deadline))
+            except TimeoutError:
+                break
+            except Exception as exc:  # a worker that died is not a scored mutant
+                mutant = futures[future]["mutant"]
+                mutant.status, mutant.note = mutants.RUNTIME_FAIL, f"the scoring run failed: {exc}"
+                row = mutant.as_result()
+            scored[row["id"]] = row
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+    rows = []
+    for mid, mutant in by_id.items():
+        if mid in scored:
+            rows.append(scored[mid])
+            continue
+        mutant.status = mutants.SKIPPED
+        mutant.note = "the mutation run reached its overall ceiling before this mutant"
+        rows.append(mutant.as_result())
+    return rows
 
 
 def time_run(attempt_id, executable, args=(), env=None, outputs=(), repeats=5,

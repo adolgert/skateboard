@@ -408,8 +408,9 @@ code: a makefile with the targets the harness builds, a replay driver, a
 capture program, a tolerance policy, and a **manifest** at
 `harness/manifest.yaml` that names all of them. The manifest is the
 code's description of itself — its source tree, its build targets, the
-region's variables and their types, the runs that make the visible and
-held-out datasets, the timing run, where the tolerance policy is, and —
+files that implement the region, the region's variables and their types,
+the runs that make the visible and held-out datasets, the timing run,
+where the tolerance policy is, and —
 optionally — a `properties` module of invariants the code states about
 itself. A code with none writes `properties: null`, and its ports are
 never asked for a property claim.
@@ -417,7 +418,7 @@ Beside the code it is written once more, as `programs/<code>/manifest.yaml`;
 a code that has not been onboarded yet has only the first three fields
 of it, and a region cannot be ported until the rest exists.
 
-The session is finished when six checks have passed on one tree, at
+The session is finished when eight checks have passed on one tree, at
 which point `status` ends with `ONBOARDED` rather than `ACCEPTED`:
 
 | check | what it establishes |
@@ -428,6 +429,8 @@ which point `status` ends with `ONBOARDED` rather than `ACCEPTED`:
 | `harness_replay` | the replay driver reproduces the captured outputs bitwise from the captured inputs |
 | `harness_determinism` | capturing and replaying again agrees bitwise with what was stored |
 | `harness_timing` | the timing target runs twice inside its budget and writes the same outputs both times |
+| `harness_self_check` | single-token faults injected into the files the manifest says implement the region are built and replayed like the baseline: at least one is caught, and none changes an answer that the tolerance bands then let through |
+| `harness_property` | the code's own module of invariants passes against the baseline build — or, for a code that declares none, the claim records that it declares none |
 
 The datasets a capture writes are kept in the region's ledger, under a
 name that is a hash of their own bytes, and every claim that was reached
@@ -463,7 +466,7 @@ oracle image is built again around the new captures.
 `deploy/onboard_walkthrough.sh` drives the whole of this against a
 running stack without a model in the loop: it lays the code's bare
 baseline into the working copy, writes the manifest, submits, runs the
-six checks in order, and stops at the `ledger promote` command. It is
+eight checks in order, and stops at the `ledger promote` command. It is
 the onboarding half of `walkthrough.sh`, and it is the quickest way to
 see whether a deployment can bring a code in at all.
 

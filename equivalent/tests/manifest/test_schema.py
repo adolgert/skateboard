@@ -30,6 +30,7 @@ MANIFEST = {
     "interface": {
         "module": "mod_kernel",
         "entry": "step",
+        "files": ["src/mod_kernel.f90"],
         "inputs": [{"name": "field", "dtype": "f32", "rank": 1}],
         "outputs": [{"name": "field", "dtype": "f32", "rank": 1}],
     },
@@ -92,6 +93,9 @@ def test_the_tsunami_manifest_loads_and_resolves_its_paths():
     assert [v.name for v in manifest.interface.outputs] == [
         v.name for v in manifest.interface.inputs
     ]
+    # The files that implement the region, as the tree spells them: what a
+    # port edits and what the self-check mutates.
+    assert manifest.interface.files == ("src/mod_kernel.f90", "src/mod_diff.f90")
     assert manifest.datasets["visible"].args == ("100", "5000", "25", "0.02")
     assert manifest.timing.budget_s == 300
     # The code carries its own invariants, and the path resolves inside
@@ -166,6 +170,36 @@ def test_an_empty_name_is_rejected(tmp_path):
         load_manifest(_write(tmp_path, raw))
 
     assert "entry" in str(excinfo.value)
+
+
+def test_the_files_that_implement_the_region_are_carried_as_the_tree_spells_them(tmp_path):
+    # They are the paths a port edits and the self-check mutates, so they
+    # stay relative to the tree rather than being resolved away.
+    manifest = load_manifest(_write(tmp_path, MANIFEST))
+
+    assert manifest.interface.files == ("src/mod_kernel.f90",)
+
+
+def test_a_region_file_the_tree_does_not_hold_is_rejected_by_name(tmp_path):
+    raw = copy.deepcopy(MANIFEST)
+    raw["interface"]["files"] = ["src/mod_kernel.f90", "src/mod_nowhere.f90"]
+
+    with pytest.raises(ValueError) as excinfo:
+        load_manifest(_write(tmp_path, raw))
+
+    assert "mod_nowhere.f90" in str(excinfo.value)
+
+
+def test_a_region_that_names_no_file_is_rejected(tmp_path):
+    # Nothing to port and nothing to mutate: an empty list is far more
+    # likely to be a half-written manifest than a choice.
+    raw = copy.deepcopy(MANIFEST)
+    raw["interface"]["files"] = []
+
+    with pytest.raises(ValueError) as excinfo:
+        load_manifest(_write(tmp_path, raw))
+
+    assert "files" in str(excinfo.value)
 
 
 def test_a_build_with_no_replay_target_is_rejected(tmp_path):
@@ -343,6 +377,8 @@ def test_a_manifest_in_the_tree_naming_a_source_root_other_than_the_tree_is_reje
     raw["tolerances"] = "tolerances.json"
     _write_in_tree(tmp_path, raw)
     (tmp_path / "harness" / "Makefile").write_text("replay:\n\techo build\n")
+    (tmp_path / "harness" / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "harness" / "src" / "mod_kernel.f90").write_text("end\n")
 
     with pytest.raises(ValueError) as excinfo:
         load_tree_manifest(tmp_path)

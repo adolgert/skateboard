@@ -25,6 +25,10 @@ build:
 interface:
   module: mod_kernel
   entry: step
+  # The files that implement the region, relative to the tree root. A port
+  # edits these, and the harness's own self-check mutates them to ask
+  # whether the gate would notice a wrong one.
+  files: [src/mod_kernel.f90, src/mod_diff.f90]
   inputs:
     - {name: h, dtype: f32, rank: 1}
     - {name: u, dtype: f32, rank: 1}

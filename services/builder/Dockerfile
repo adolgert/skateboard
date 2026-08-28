@@ -42,6 +42,14 @@ RUN chmod +x /opt/harness/fc-shim
 # Service code (the build contract and the gate command lines live here).
 COPY services/builder /app/services/builder
 
+# The comparator, which is the same file the oracle is built around and the
+# same one the gateway compares a program's own outputs with
+# (equivalent/capture/compare.py). The mutation stage scores every mutant with
+# it, so what it means for a mutant to have been noticed is what it means for
+# a port to have been noticed. Copied rather than installed because this image
+# installs no Python package of this project.
+COPY equivalent/capture/compare.py /app/services/builder/compare.py
+
 WORKDIR /app
 EXPOSE 9090
 CMD ["uvicorn", "services.builder.app:app", "--host", "0.0.0.0", "--port", "9090"]

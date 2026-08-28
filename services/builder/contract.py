@@ -70,6 +70,17 @@ def _matches(path: str, pattern: str) -> bool:
     return fnmatch.fnmatchcase(lowered, pattern)
 
 
+def is_tree_source(path: str, source_patterns) -> bool:
+    """Does this code's own source-pattern list cover this path.
+
+    The build stage asks it of every file a compile named; the mutation
+    stage asks it of every file the manifest says implements the region,
+    because a file the code does not call its own source is not one a
+    port would be judged on.
+    """
+    return any(_matches(path, pattern) for pattern in source_patterns)
+
+
 def _is_source(argument: str, cwd: str) -> bool:
     """Is this argument a Fortran file that is really on disk.
 

@@ -55,6 +55,45 @@ def properties_module(manifest: Manifest) -> str:
     return manifest.properties.relative_to(manifest.source.root).as_posix()
 
 
+def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
+               *, seed=None, max_examples: int = DEFAULT_MAX_EXAMPLES) -> dict:
+    """One property run and the verdict it becomes, wherever it was asked for.
+
+    The same call and the same detail serve both the check a port faces
+    and the one an onboarding session runs against the baseline: what
+    differs between them is which workspace and which cases, and those are
+    the caller's to name. A seed of None is drawn here and written into
+    the detail, because a search nobody can repeat is not evidence.
+
+    Returns {"verdict": "pass" | "fail", "detail": {...}}. Raises
+    ComponentError if the builder could not be reached.
+    """
+    drawn = random.SystemRandom().getrandbits(SEED_BITS) if seed is None else int(seed)
+    examples = int(max_examples)
+    module = properties_module(manifest)
+    replay = manifest.build.targets["replay"]
+
+    try:
+        resp = builder.properties(
+            attempt_id, replay.executable, module, cases, drawn, examples,
+        )
+    except Exception as exc:
+        raise ComponentError(f"builder /v1/properties call failed: {exc}") from exc
+
+    return {
+        "verdict": "pass" if resp.get("ok") else "fail",
+        "detail": {
+            "module": module,
+            "seed": drawn,
+            "max_examples": examples,
+            "passed": resp.get("passed", 0),
+            "failed": resp.get("failed", 0),
+            "errors": resp.get("errors", 0),
+            "log_tail": (resp.get("log_tail") or "")[-LOG_TAIL_CHARS:],
+        },
+    }
+
+
 def check(region_id: str, tree_sha: str, manifest: Manifest, visible_cases: dict, builder,
           *, seed=None, max_examples: int = DEFAULT_MAX_EXAMPLES) -> dict:
     """Run the code's properties on the submitted tree, and say what happened.
@@ -73,28 +112,7 @@ def check(region_id: str, tree_sha: str, manifest: Manifest, visible_cases: dict
     if not visible_cases:
         raise ComponentError("no visible dataset configured for this region")
 
-    drawn = random.SystemRandom().getrandbits(SEED_BITS) if seed is None else int(seed)
-    examples = int(max_examples)
-    module = properties_module(manifest)
-    replay = manifest.build.targets["replay"]
-
-    try:
-        resp = builder.properties(
-            attempt_id_for(region_id, tree_sha), replay.executable, module,
-            visible_cases, drawn, examples,
-        )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/properties call failed: {exc}") from exc
-
-    return {
-        "verdict": "pass" if resp.get("ok") else "fail",
-        "detail": {
-            "module": module,
-            "seed": drawn,
-            "max_examples": examples,
-            "passed": resp.get("passed", 0),
-            "failed": resp.get("failed", 0),
-            "errors": resp.get("errors", 0),
-            "log_tail": (resp.get("log_tail") or "")[-LOG_TAIL_CHARS:],
-        },
-    }
+    return run_module(
+        builder, attempt_id_for(region_id, tree_sha), manifest, visible_cases,
+        seed=seed, max_examples=max_examples,
+    )

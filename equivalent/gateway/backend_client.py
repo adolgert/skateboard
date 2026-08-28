@@ -109,6 +109,27 @@ class BuilderClient:
         r.raise_for_status()
         return r.json()
 
+    def mutate(self, attempt_id: str, makefile: str, replay_target: dict, files: list[str],
+               cases: dict, bands: dict, compiler: str, flags: list[str],
+               link_flags: list[str], source_patterns: list[str],
+               jobs: int | None = None, limit: int | None = None) -> dict:
+        """Mutate the region's own files and score each mutant against the captures.
+
+        `files` are the paths the manifest says implement the region;
+        `cases` is a stored capture set, {name: {"inputs": {...},
+        "outputs": {...}}}; `bands` is the code's tolerance policy per
+        output variable. What comes back is one verdict per mutant, not
+        the outputs any of them wrote.
+        """
+        r = self._http.post("/v1/mutate", json={
+            "attempt_id": attempt_id, "makefile": makefile, "replay_target": replay_target,
+            "files": files, "cases": cases, "bands": bands, "compiler": compiler,
+            "flags": flags, "link_flags": link_flags, "source_patterns": source_patterns,
+            "jobs": jobs, "limit": limit,
+        })
+        r.raise_for_status()
+        return r.json()
+
     def time(self, attempt_id: str, executable: str, args: list[str], env: dict,
              outputs: list[str], repeats: int = 5, budget_s: int = 300) -> dict:
         """Time the manifest's timing executable and collect the files it declares.

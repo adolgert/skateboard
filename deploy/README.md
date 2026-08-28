@@ -90,7 +90,7 @@ ledger status --config deploy/state/gateway.host.yaml --region-id ch04:step
 ```
 
 The same file names the region an onboarding session is promoted from,
-once its six checks have passed and you have read them:
+once its eight checks have passed and you have read them:
 
 ```sh
 ledger promote --config deploy/state/gateway.host.yaml --region-id tsunami:onboard

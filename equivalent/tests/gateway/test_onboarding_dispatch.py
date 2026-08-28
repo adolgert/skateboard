@@ -66,6 +66,15 @@ def _onboard(client) -> dict:
     return {action: _run(client, action) for action in ONBOARDING_ACTIONS}
 
 
+def test_the_onboarding_phase_offers_every_check_a_code_has_to_pass():
+    # Written out once, here, so that adding a row to the table without
+    # deciding it belongs in an onboarding session fails a test.
+    assert ONBOARDING_ACTIONS == [
+        "manifest_check", "harness_build", "harness_capture", "harness_replay",
+        "harness_determinism", "harness_timing", "harness_self_check", "harness_property",
+    ]
+
+
 def test_the_build_check_is_refused_until_the_manifest_has_been_read(tmp_path):
     client, _, _, _ = _client(tmp_path)
 
@@ -121,7 +130,7 @@ def test_status_reports_the_onboarding_requirements_and_what_is_still_missing(tm
     assert rows["harness/builds"]["status"] == "present"
     assert rows["harness/captured"]["status"] == "missing"
     assert rows["harness/captured"]["producing_action"] == "harness_capture"
-    # Four checks of the six have not run, so the region is not onboarded.
+    # Six checks of the eight have not run, so the region is not onboarded.
     assert body["accepted"] is False
 
 
@@ -130,9 +139,9 @@ def test_every_onboarding_check_passing_leaves_the_region_onboarded(tmp_path):
 
     claims = _onboard(client)
 
-    assert [body.get("verdict") for body in claims.values()] == ["pass"] * 6
+    assert [body.get("verdict") for body in claims.values()] == ["pass"] * len(ONBOARDING_ACTIONS)
     body = client.get("/status", params={"region": REGION}, headers=HEADERS).json()
-    assert [row["status"] for row in body["rows"]] == ["present"] * 6
+    assert [row["status"] for row in body["rows"]] == ["present"] * len(ONBOARDING_ACTIONS)
     assert body["accepted"] is True
     # And what a person reading that status sees is the word for a code
     # that is ready to be reviewed and promoted.
@@ -155,6 +164,47 @@ def test_a_check_that_reads_a_capture_set_names_it_in_the_claims_materials(tmp_p
     program = by_predicate["harness/times"].predicate.detail["datasets"]["program"]
     assert [subject.sha256 for subject in by_predicate["harness/times"].materials
             if subject.kind == "capture_set"] == [program["capture_set"]]
+
+
+def test_the_self_check_claim_rests_on_the_captures_and_the_bands_it_used(tmp_path):
+    client, _, store, _ = _client(tmp_path)
+
+    _onboard(client)
+
+    by_predicate = {claim.predicateType: claim for claim in store.all_claims()}
+    claim = by_predicate["harness/self_check"]
+    visible = by_predicate["harness/captured"].predicate.detail["datasets"]["visible"]
+    kinds = {subject.kind: subject.sha256 for subject in claim.materials}
+    assert kinds["capture_set"] == visible["capture_set"]
+    # The bands are what decided whether a changed answer counted, so the
+    # policy is a material and not a note in the detail.
+    assert kinds["policy"] == claim.predicate.detail["policy_sha256"]
+
+
+def test_a_limit_the_session_asks_for_reaches_the_mutation_run(tmp_path):
+    client, _, _, builder = _client(tmp_path)
+    for action in ONBOARDING_ACTIONS[:-2]:
+        _run(client, action)
+
+    body = client.post(
+        "/run", json={"action": "harness_self_check", "region": REGION, "config": {"limit": 5}},
+        headers=HEADERS,
+    ).json()
+
+    assert body["verdict"] == "pass"
+    assert builder.mutate_calls[0]["limit"] == 5
+
+
+def test_a_code_that_states_no_invariants_still_files_the_property_claim(tmp_path):
+    # The fixture code declares `properties: null`, and the ledger should
+    # say so rather than hold a row nobody filed.
+    client, _, _, builder = _client(tmp_path)
+
+    claims = _onboard(client)
+
+    assert claims["harness_property"]["verdict"] == "pass"
+    assert claims["harness_property"]["detail"]["module"] is None
+    assert builder.properties_calls == []
 
 
 def test_a_check_that_would_run_before_its_evidence_exists_is_refused(tmp_path):

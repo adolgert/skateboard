@@ -135,6 +135,20 @@ _register(
     "declared outputs both times; the last run's outputs are stored as the code's "
     "program capture set. On the tree.",
 )
+_register(
+    "harness/self_check", True, DetailLevel.FULL,
+    "Single-token faults injected into the files the manifest says implement the "
+    "region are built and replayed the way the baseline is, and scored against the "
+    "captured answers with the code's own tolerance bands: at least one is caught, "
+    "and none changes an answer the bands then let through. Survivors -- mutants no "
+    "output changed at all for -- are listed rather than counted against. On the tree.",
+)
+_register(
+    "harness/properties", True, DetailLevel.FULL,
+    "The code's own module of invariants passes against the baseline build, at the "
+    "recorded seed. A code that declares none files this claim too, saying so, because "
+    "stating no invariants is something the code says about itself. On the tree.",
+)
 
 
 def get(name: str) -> PredicateType:

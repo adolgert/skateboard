@@ -67,6 +67,7 @@ PROGRAM_MANIFEST = {
     "interface": {
         "module": "mod_kernel",
         "entry": "step",
+        "files": ["src/mod_kernel.f90"],
         "inputs": [dict(v) for v in FIXTURE_VARIABLES],
         "outputs": [dict(v) for v in FIXTURE_VARIABLES],
     },
@@ -179,6 +180,15 @@ def captured_cases(args) -> dict:
     return cases
 
 
+def mutant_row(mid: str, status: str, *, line: int = 7, op: str = "AOR", note: str = "") -> dict:
+    """One scored mutant, shaped the way the builder's mutation stage reports one."""
+    return {
+        "id": mid, "file": "src/mod_kernel.f90", "line": line, "op": op,
+        "original": "    a = a * 2.0d0", "mutated": "    a = a / 2.0d0",
+        "status": status, "note": note,
+    }
+
+
 def timing_array(name: str):
     """The array the fixture's timing program writes into one declared file."""
     seed = int(hashlib.sha256(name.encode()).hexdigest()[:6], 16) % 1000
@@ -245,13 +255,16 @@ def in_tree_manifest(name: str = "tsunami", **overrides) -> dict:
     return {**manifest, **overrides}
 
 
-def write_tree(root, manifest: dict | None = None) -> Path:
+def write_tree(root, manifest: dict | None = None, *, properties: bool = False) -> Path:
     """A tree of the shape an onboarding session submits, and returns it.
 
     It holds what such a tree holds: the code, the makefile that builds
     it, the tolerance policy, and the manifest that names all three.
     Passing `manifest` writes a different one, which is how a test asks
-    what happens when the tree describes itself wrongly.
+    what happens when the tree describes itself wrongly. `properties`
+    writes a tree whose code states invariants of its own, which is what
+    makes the property check something to run rather than to record the
+    absence of.
     """
     root = Path(root)
     (root / "src").mkdir(parents=True, exist_ok=True)
@@ -262,9 +275,13 @@ def write_tree(root, manifest: dict | None = None) -> Path:
     tolerances = root / TOLERANCES_IN_TREE
     tolerances.parent.mkdir(parents=True, exist_ok=True)
     tolerances.write_text(json.dumps(PROGRAM_TOLERANCES, indent=2))
-    (root / IN_TREE_MANIFEST).write_text(
-        yaml.safe_dump(in_tree_manifest() if manifest is None else manifest, sort_keys=False)
-    )
+    if manifest is None:
+        manifest = in_tree_manifest(
+            **({"properties": PROPERTIES_IN_TREE} if properties else {})
+        )
+    if properties:
+        (root / PROPERTIES_IN_TREE).write_text(FIXTURE_PROPERTIES)
+    (root / IN_TREE_MANIFEST).write_text(yaml.safe_dump(manifest, sort_keys=False))
     return root
 
 
@@ -313,6 +330,18 @@ class FakeBuilder:
         # which is how a strategy asks for pytest: an executable and an
         # importable module are looked for in different ways.
         self.python_modules = {name: True for name in ("pytest", "hypothesis", "numpy")}
+        self.mutate_calls = []
+        # What one mutation run comes back with. The default is a harness
+        # that works: one mutant the bands caught, and one survivor on a
+        # line the captured inputs never reach. A test that wants a gap,
+        # or a harness that kills nothing, replaces this list.
+        self.mutate_results = [
+            mutant_row("m-0001", "KILLED"),
+            mutant_row("m-0002", "EQUIVALENT", line=42, note="no output changed"),
+        ]
+        # How many mutants were generated, when that is not simply how many
+        # came back scored -- which is what a limit makes it.
+        self.generated = None
         self.properties_calls = []
         self.properties_ok = True
         # What pytest's summary line said, as the real builder parses it.
@@ -387,6 +416,29 @@ class FakeBuilder:
             "max_examples": max_examples, **self.properties_counts,
             "log_tail": self.properties_log,
         }
+
+    def mutate(self, attempt_id, makefile, replay_target, files, cases, bands, compiler,
+               flags, link_flags, source_patterns, jobs=None, limit=None):
+        self.mutate_calls.append({
+            "attempt_id": attempt_id, "makefile": makefile, "replay_target": replay_target,
+            "files": list(files), "cases": cases, "bands": bands, "compiler": compiler,
+            "flags": flags, "link_flags": link_flags, "source_patterns": source_patterns,
+            "jobs": jobs, "limit": limit,
+        })
+        results = [dict(row) for row in self.mutate_results]
+        counts = {}
+        for row in results:
+            counts[row["status"]] = counts.get(row["status"], 0) + 1
+        return {
+            "ok": True, "stage": "mutate", "generated": self.mutants_generated(),
+            "scored": len(results), "results": results, "counts": counts,
+            "kept_dirs": [f"/work/mutants/{row['id']}" for row in results
+                          if row["status"] in ("GAP", "EQUIVALENT")],
+        }
+
+    def mutants_generated(self) -> int:
+        """How many mutants the run made, which a limit leaves larger than the scored count."""
+        return len(self.mutate_results) if self.generated is None else self.generated
 
     def capture(self, attempt_id, executable, args, run_name):
         self.capture_calls.append({
