@@ -1,0 +1,15 @@
+sese_check: Runs 'sese_check' via analyzer:check_sese. Records: sese/verified.
+
+build_replay: Runs 'build_replay' via builder:/v1/build. Records: build/replay. Requires: sese/verified = pass for this region.
+
+run_replay: Runs 'run_replay' via builder:/v1/run. Records: gpu/executed. Requires: build/replay = pass for the submitted tree.
+
+sanitize: Runs 'sanitize' via builder:/v1/sanitize. Records: sanitize/memcheck, sanitize/racecheck, sanitize/initcheck. Requires: gpu/executed = pass for the submitted tree.
+
+regression_visible: Runs 'regression_visible' via oracle:/v1/compare. Records: regression/visible. Requires: sanitize/memcheck = pass for the submitted tree; sanitize/racecheck = pass for the submitted tree.
+
+regression_holdout: Runs 'regression_holdout' via oracle:/v1/compare. Records: regression/holdout. Requires: regression/visible = pass for the submitted tree.
+
+time_port: Runs 'time_port' via builder:/v1/time. Records: timing/port. Requires: regression/holdout = pass for the submitted tree.
+
+time_baseline: Runs 'time_baseline' via builder:/v1/time. Records: timing/baseline.
