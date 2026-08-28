@@ -26,10 +26,18 @@ The file has three sections::
     regions:
       "ch04:step":
         code: tsunami
+        phase: porting
         spec_path: notes/regions/ch04-step.sese.yaml
         strategy: stdpar_managed
         baseline_strategy: cpu_reference
         visible_dataset: visible
+
+A region's `phase` says which kind of session it is for. A `porting`
+region names a spec and a visible dataset and its code's manifest must
+be complete -- everything a port is checked against has to exist before
+the first request. An `onboarding` region is where that description is
+written: it has no spec, no dataset, and a manifest that may still be
+minimal.
 
 Each region's directories are built by joining them: the ledger lives at
 `<ledger_root>/<baseline commit>/<region id with ':' replaced by '-'>`,
@@ -58,6 +66,7 @@ import yaml
 
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import baseline_commit, init_baseline_repo, region_slug
+from equivalent.ledger.acceptance import ONBOARDING, PHASES, PORTING
 from equivalent.manifest.schema import Manifest, load_manifest
 
 VERSION = 1
@@ -66,8 +75,11 @@ TOP_LEVEL_KEYS = ("version", "paths", "codes", "regions")
 REQUIRED_PATH_KEYS = ("repo", "ledger_root", "working_copy", "programs", "strategies")
 OPTIONAL_PATH_KEYS = ("seed", "sessions")
 REQUIRED_CODE_KEYS = ("manifest",)
-REQUIRED_REGION_KEYS = ("code", "spec_path", "strategy", "baseline_strategy")
-OPTIONAL_REGION_KEYS = ("visible_dataset",)
+REQUIRED_REGION_KEYS = ("code", "phase", "strategy", "baseline_strategy")
+# Both of these belong to a porting region: `spec_path` is required of
+# one and meaningless to an onboarding region, and `visible_dataset` is
+# optional even when porting.
+OPTIONAL_REGION_KEYS = ("spec_path", "visible_dataset")
 # Where a code keeps the datasets a region may name, under its own
 # directory. One spelling, so the deployment and this reader agree.
 DATASETS_DIR = "datasets"
@@ -170,6 +182,22 @@ def _strategy_path(name, field: str, paths: Paths, region_where: str) -> Path:
     return path
 
 
+def _region_spec_path(raw: dict, phase: str, region_where: str) -> str | None:
+    """The spec the analyzer reads, which a porting region must name.
+
+    An onboarding region may leave it out, and nothing reads it if it is
+    there: no single region has been chosen yet, and the allow-list comes
+    from the strategy instead.
+    """
+    spec_path = raw.get("spec_path")
+    if phase == PORTING and spec_path is None:
+        raise ValueError(
+            f"{region_where} is a porting region and names no spec_path; the analyzer "
+            f"reads that file to say what the region is"
+        )
+    return spec_path
+
+
 def _load_region(
     region_id: str, raw: dict, paths: Paths, codes: dict, commit: str, where: str
 ) -> RegionConfig:
@@ -183,6 +211,19 @@ def _load_region(
             f"not describe; it has {sorted(codes)}"
         )
 
+    phase = raw["phase"]
+    if phase not in PHASES:
+        raise ValueError(
+            f"{region_where} has phase {phase!r}; it must be one of {list(PHASES)}"
+        )
+    spec_path = _region_spec_path(raw, phase, region_where)
+    if phase == PORTING and not code.manifest.complete:
+        raise ValueError(
+            f"{region_where} is a porting region, but the manifest of code "
+            f"'{code.name}' still lacks {code.manifest.missing_parts()}; a code is "
+            f"described that fully by onboarding it before any region of it is ported"
+        )
+
     strategy_path = _strategy_path(raw["strategy"], "strategy", paths, region_where)
     # The baseline is built with a strategy of its own -- the comparison
     # floor a speedup is measured against. It is named per region rather
@@ -193,6 +234,12 @@ def _load_region(
     )
 
     visible_dataset_dir = None
+    if phase == ONBOARDING and raw.get("visible_dataset") is not None:
+        raise ValueError(
+            f"{region_where} is an onboarding region and names visible_dataset "
+            f"'{raw['visible_dataset']}'; the datasets a code is judged against are "
+            f"what onboarding produces, so there is none to name yet"
+        )
     if raw.get("visible_dataset") is not None:
         visible_dataset_dir = paths.programs / code.name / DATASETS_DIR / raw["visible_dataset"]
         if not visible_dataset_dir.is_dir():
@@ -203,8 +250,9 @@ def _load_region(
 
     return RegionConfig(
         region_id=region_id,
+        phase=phase,
         repo_dir=paths.repo,
-        spec_path=raw["spec_path"],
+        spec_path=spec_path,
         ledger_dir=paths.ledger_root / commit / region_slug(region_id),
         strategy_path=strategy_path,
         baseline_strategy_path=baseline_strategy_path,

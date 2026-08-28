@@ -18,6 +18,7 @@ CONFIG = {
     "regions": {
         "ch04:step": {
             "code": "tsunami",
+            "phase": "porting",
             "spec_path": "notes/regions/ch04-step.sese.yaml",
             "strategy": "stdpar_managed",
             "baseline_strategy": "cpu_reference",
@@ -27,7 +28,7 @@ CONFIG = {
 }
 
 
-def _tree(tmp_path, config: dict):
+def _tree(tmp_path, config: dict, *, minimal_manifest: bool = False):
     """A directory laid out the way a deployment mounts one, plus the config file naming it."""
     seed = tmp_path / "seed"
     (seed / "src").mkdir(parents=True)
@@ -40,7 +41,7 @@ def _tree(tmp_path, config: dict):
     (strategies / "stdpar_managed.yaml").write_text("name: stdpar_managed\n")
     (strategies / "cpu_reference.yaml").write_text("name: cpu_reference\n")
     (tmp_path / "working").mkdir()
-    programs = write_program(tmp_path).parent
+    programs = write_program(tmp_path, minimal=minimal_manifest).parent
 
     config = {**config, "paths": {
         "repo": str(repo),
@@ -121,6 +122,7 @@ def test_two_regions_become_two_region_configs(tmp_path):
         **CONFIG["regions"],
         "ch04:diff": {
             "code": "tsunami",
+            "phase": "porting",
             "spec_path": "notes/regions/ch04-diff.sese.yaml",
             "strategy": "stdpar_managed",
             "baseline_strategy": "cpu_reference",
@@ -138,7 +140,8 @@ def test_two_regions_become_two_region_configs(tmp_path):
 
 def test_a_region_missing_a_required_field_names_the_field_and_the_region(tmp_path):
     config = {**CONFIG, "regions": {"ch04:step": {
-        "code": "tsunami", "spec_path": "notes/regions/ch04-step.sese.yaml",
+        "code": "tsunami", "phase": "porting",
+        "spec_path": "notes/regions/ch04-step.sese.yaml",
         "baseline_strategy": "cpu_reference",
     }}}
     path, _ = _tree(tmp_path, config)
@@ -260,6 +263,7 @@ def test_the_deployments_own_config_names_a_checked_in_spec_for_every_region():
 
     assert sorted(config["regions"]) == ["ch04:step", "ch04:step-stencil"]
     for region_id, region in config["regions"].items():
+        assert region["phase"] == "porting"
         code = region["code"]
         spec = REPO_ROOT / "programs" / code / "regions" / f"{region_slug(region_id)}.sese.yaml"
         assert spec.is_file(), f"{region_id} has no checked-in spec at {spec}"
@@ -268,3 +272,74 @@ def test_the_deployments_own_config_names_a_checked_in_spec_for_every_region():
         # derives from the region id alone, so the two spellings have to
         # agree or the gateway would read a spec nobody wrote.
         assert region["spec_path"] == f"notes/regions/{region_slug(region_id)}.sese.yaml"
+
+
+ONBOARDING_REGION = {
+    "code": "tsunami",
+    "phase": "onboarding",
+    "strategy": "stdpar_managed",
+    "baseline_strategy": "cpu_reference",
+}
+
+
+def test_an_onboarding_region_loads_on_a_manifest_that_is_still_minimal(tmp_path):
+    # The code has not been described yet -- describing it is what the
+    # session is for -- and no region of it has been chosen either.
+    config = {**CONFIG, "regions": {"tsunami:onboarding": ONBOARDING_REGION}}
+    path, _ = _tree(tmp_path, config, minimal_manifest=True)
+
+    cfg = load_gateway_config(path).regions["tsunami:onboarding"]
+
+    assert cfg.phase == "onboarding"
+    assert cfg.spec_path is None
+    assert cfg.visible_dataset_dir is None
+    assert cfg.manifest.complete is False
+
+
+def test_a_porting_region_on_a_manifest_that_is_still_minimal_names_what_is_absent(tmp_path):
+    path, _ = _tree(tmp_path, CONFIG, minimal_manifest=True)
+
+    with pytest.raises(ValueError) as excinfo:
+        load_gateway_config(path)
+
+    message = str(excinfo.value)
+    assert "ch04:step" in message
+    assert "interface" in message and "datasets" in message
+
+
+def test_a_porting_region_with_no_spec_path_is_refused(tmp_path):
+    config = {**CONFIG, "regions": {"ch04:step": {
+        key: value for key, value in CONFIG["regions"]["ch04:step"].items()
+        if key != "spec_path"
+    }}}
+    path, _ = _tree(tmp_path, config)
+
+    with pytest.raises(ValueError) as excinfo:
+        load_gateway_config(path)
+
+    assert "spec_path" in str(excinfo.value)
+
+
+def test_an_onboarding_region_naming_a_visible_dataset_is_refused(tmp_path):
+    # The datasets a code is judged against are what onboarding produces.
+    config = {**CONFIG, "regions": {
+        "tsunami:onboarding": {**ONBOARDING_REGION, "visible_dataset": "visible"},
+    }}
+    path, _ = _tree(tmp_path, config, minimal_manifest=True)
+
+    with pytest.raises(ValueError) as excinfo:
+        load_gateway_config(path)
+
+    assert "visible_dataset" in str(excinfo.value)
+
+
+def test_a_phase_this_reader_does_not_know_is_refused_by_name(tmp_path):
+    config = {**CONFIG, "regions": {
+        "ch04:step": {**CONFIG["regions"]["ch04:step"], "phase": "porting-ish"},
+    }}
+    path, _ = _tree(tmp_path, config)
+
+    with pytest.raises(ValueError) as excinfo:
+        load_gateway_config(path)
+
+    assert "porting-ish" in str(excinfo.value)

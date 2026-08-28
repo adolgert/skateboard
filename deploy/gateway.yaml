@@ -16,6 +16,7 @@ codes:
 regions:
   "ch04:step":
     code: tsunami                   # -> the codes entry above
+    phase: porting                  # a region of a code that has been brought in
     spec_path: notes/regions/ch04-step.sese.yaml
     strategy: stdpar_managed        # -> <strategies>/stdpar_managed.yaml
     baseline_strategy: cpu_reference # what the pristine baseline is timed against
@@ -24,6 +25,7 @@ regions:
   # stencil module as well, so a port may change both files.
   "ch04:step-stencil":
     code: tsunami
+    phase: porting
     spec_path: notes/regions/ch04-step-stencil.sese.yaml
     strategy: stdpar_managed
     baseline_strategy: cpu_reference

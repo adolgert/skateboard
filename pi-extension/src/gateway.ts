@@ -36,8 +36,15 @@ function sessionHeaders(
   };
 }
 
+/**
+ * The table names a region because the actions a session has are the
+ * actions of that region's phase: bringing a code in and porting a
+ * region of one are different lists.
+ */
 export async function fetchTable(config: GatewayConfig): Promise<ActionRow[]> {
-  const res = await fetch(`${config.url}/table`, { headers: authHeaders(config) });
+  const res = await fetch(`${config.url}/table?region=${encodeURIComponent(config.region)}`, {
+    headers: authHeaders(config),
+  });
   return (await res.json()) as ActionRow[];
 }
 

@@ -1,0 +1,53 @@
+name: onboarding
+version: 1
+
+# The whole tree. While a code is being brought in, the agent is writing
+# the build, the replay driver, the capture program, the tolerances, and
+# the manifest itself -- there is no part of the tree that is being held
+# still, and no region yet whose edits could be narrowed to a few files.
+# What keeps this honest is not the allow-list but the checks: every
+# claim is filed against the tree the agent submitted, and a person reads
+# what passed before any of it is promoted.
+allow_globs:
+  - "*"
+
+languages:
+  fortran:
+    compiler: nvfortran
+    # Exactly the flags of the port strategy this code is headed for
+    # (stdpar_managed). Onboarding builds the tree under these as well as
+    # under the baseline strategy, so the build a port will need is
+    # checked while the makefile is still being written, rather than
+    # after someone has ported a region against it.
+    flags:
+      - "-O2"
+      - "-stdpar=gpu"
+      - "-gpu=cc89,mem:managed"
+      - "-Minfo=accel"
+
+link_flags: []
+
+# Nothing here runs the sanitizers: what onboarding checks is that the
+# code builds, captures, replays, and times, which needs the compiler and
+# the tree's own makefile and nothing else.
+required_tools:
+  - nvfortran
+  - make
+
+# Same proof and same leniency as the port strategy: a host fallback
+# during onboarding is not an error, because whether the region offloads
+# is a question for the port, not for the harness around it.
+device_proof:
+  notify: acc
+  mandatory: false
+
+sanitizers: []
+
+# Unused while `sanitizers` is empty, but the field is required of every
+# strategy and this is the value the porting strategies use.
+sanitize_cases: first
+
+# Unused here as well: an onboarding region has no spec for the analyzer
+# to read. The field is required of every strategy, and this is the same
+# command the porting strategies name.
+analyzer_command: "python3 -m equivalent.analyzers.check_sese"

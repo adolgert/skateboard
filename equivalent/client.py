@@ -28,8 +28,9 @@ class GatewayClient:
     def __init__(self, http: httpx.Client):
         self._http = http
 
-    def table(self) -> list:
-        r = self._http.get("/table")
+    def table(self, region: str) -> list:
+        """The actions this region may run -- which are the actions of its phase."""
+        r = self._http.get("/table", params={"region": region})
         r.raise_for_status()
         return r.json()
 

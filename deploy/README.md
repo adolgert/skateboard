@@ -15,10 +15,12 @@ tree by running that tree's own makefile, with the compiler and flags
 the strategy names, and reports back what the compiler was actually
 asked to do. Both image builds take the repository root as
 their context, and the oracle takes the code as a build argument
-(`EQUIVALENT_CODE`) because it bakes that code's answers in: its
-`captures/`, its `tolerances.json`, and its `manifest.yaml`, which is how
-the oracle knows which outputs it has to have a tolerance band for
-before it will start.
+(`EQUIVALENT_CODE`) because it bakes that code's answers in: the whole
+of `programs/<code>/`, so that it has the manifest, the captures, and
+the tolerance policy inside the source tree wherever the manifest says
+they are. A code that has not been brought in yet has only some of
+those, and the oracle starts anyway, reporting that it is not ready and
+answering every comparison with the name of what is missing.
 
 | file | what it is |
 | --- | --- |

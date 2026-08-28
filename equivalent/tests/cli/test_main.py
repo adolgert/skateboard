@@ -121,7 +121,8 @@ def test_status_with_a_configuration_file_shows_the_tree_the_gateway_shows(tmp_p
         },
         "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
         "regions": {"ch04:step": {
-            "code": "tsunami", "spec_path": spec_path, "strategy": "stdpar_managed",
+            "code": "tsunami", "phase": "porting", "spec_path": spec_path,
+            "strategy": "stdpar_managed",
             "baseline_strategy": "cpu_reference",
         }},
     }))
@@ -167,7 +168,7 @@ def test_session_command_runs_end_to_end(tmp_path, capsys):
             "sessions": str(sessions),
         },
         "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
-        "regions": {"ch04:step": {"code": "tsunami",
+        "regions": {"ch04:step": {"code": "tsunami", "phase": "porting",
                                   "spec_path": "notes/regions/ch04-step.sese.yaml",
                                   "strategy": "stdpar_managed",
                                   "baseline_strategy": "cpu_reference"}},

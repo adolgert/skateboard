@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from equivalent.gateway.app import create_app
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import frozen_for_allow_globs, init_baseline_repo
+from equivalent.ledger.acceptance import PORTING
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.fakes import write_program
@@ -89,7 +90,7 @@ def _client(tmp_path, source, hi):
     working = tmp_path / "working"
     working.mkdir()
     cfg = RegionConfig(
-        region_id="ch04:step", repo_dir=repo_dir, spec_path=SPEC_PATH,
+        region_id="ch04:step", phase=PORTING, repo_dir=repo_dir, spec_path=SPEC_PATH,
         ledger_dir=tmp_path / "ledger", strategy_path=STRATEGY_PATH,
         baseline_strategy_path=BASELINE_STRATEGY_PATH,
         working_copy_dir=working,

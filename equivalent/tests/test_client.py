@@ -6,10 +6,12 @@ from equivalent.client import GatewayClient
 from equivalent.gateway.app import create_app
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import init_baseline_repo
+from equivalent.ledger.acceptance import PORTING
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.fakes import write_program
 
 TOKEN = "test-token"
+REGION = "ch04:step"
 STRATEGY_PATH = Path(__file__).resolve().parent.parent / "strategy" / "files" / "stdpar_managed.yaml"
 BASELINE_STRATEGY_PATH = STRATEGY_PATH.parent / "cpu_reference.yaml"
 
@@ -22,7 +24,7 @@ def _client_pair(tmp_path):
     working = tmp_path / "working"
     working.mkdir()
     cfg = RegionConfig(
-        region_id="ch04:step", repo_dir=repo_dir,
+        region_id="ch04:step", phase=PORTING, repo_dir=repo_dir,
         spec_path="notes/regions/ch04-step.sese.yaml", ledger_dir=tmp_path / "ledger",
         strategy_path=STRATEGY_PATH, baseline_strategy_path=BASELINE_STRATEGY_PATH,
         working_copy_dir=working,
@@ -41,8 +43,8 @@ def _client_pair(tmp_path):
 def test_client_table_matches_calling_the_endpoint_directly(tmp_path):
     client, fastapi_client, cfg = _client_pair(tmp_path)
 
-    assert client.table() == fastapi_client.get(
-        "/table", headers={"Authorization": f"Bearer {TOKEN}"},
+    assert client.table(REGION) == fastapi_client.get(
+        "/table", params={"region": REGION}, headers={"Authorization": f"Bearer {TOKEN}"},
     ).json()
 
 

@@ -28,6 +28,7 @@ import numpy as np
 import yaml
 
 from equivalent.capture import npy
+from equivalent.manifest.schema import IN_TREE_MANIFEST
 
 # The region interface the fixture code declares, and the shape each
 # variable has in its dataset. Everything the fakes hand back is built
@@ -37,6 +38,11 @@ FIXTURE_VARIABLES = (
     {"name": "flux", "dtype": "f64", "rank": 2},
 )
 FIXTURE_SHAPES = {"field": (4,), "flux": (2, 3)}
+
+# Where the tolerance policy sits inside the source tree. Every path a
+# manifest names other than the source root is read from there, so the
+# fixture keeps its policy where a real code keeps one.
+TOLERANCES_IN_TREE = "harness/tolerances.json"
 
 # A code small enough to read here, with every field the manifest schema
 # requires. The visible dataset holds one case, which is what the
@@ -63,7 +69,7 @@ PROGRAM_MANIFEST = {
         "holdout": {"args": ["100", "5000", "60", "0.01"]},
     },
     "timing": {"args": [], "outputs": [], "budget_s": 300},
-    "tolerances": "tolerances.json",
+    "tolerances": TOLERANCES_IN_TREE,
     "properties": None,
 }
 
@@ -99,12 +105,24 @@ def fixture_case(offset: int = 0) -> dict:
     }
 
 
-def write_program(root, name: str = "tsunami") -> Path:
+def program_tolerances(directory) -> Path:
+    """The tolerance policy of a code written by `write_program`.
+
+    A manifest's tolerance path is relative to its source tree, so the
+    file is inside `baseline/`, not beside the manifest.
+    """
+    return Path(directory) / "baseline" / TOLERANCES_IN_TREE
+
+
+def write_program(root, name: str = "tsunami", *, minimal: bool = False) -> Path:
     """Write `<root>/programs/<name>/` and return that code's directory.
 
     The programs directory a deployment mounts is its parent, and the
     manifest is `manifest.yaml` inside it -- so a caller needs no third
     thing told to it.
+
+    `minimal` writes the form a code starts in: the tree and its name,
+    and none of what onboarding produces.
     """
     directory = Path(root) / "programs" / name
     (directory / "baseline" / "src").mkdir(parents=True, exist_ok=True)
@@ -112,15 +130,56 @@ def write_program(root, name: str = "tsunami") -> Path:
         "module mod_kernel\ncontains\nsubroutine step\nend subroutine\nend module\n"
     )
     (directory / "baseline" / "Makefile").write_text("replay:\n\techo build\n")
-    (directory / "tolerances.json").write_text(json.dumps(PROGRAM_TOLERANCES, indent=2))
+    tolerances = directory / "baseline" / TOLERANCES_IN_TREE
+    tolerances.parent.mkdir(parents=True, exist_ok=True)
+    tolerances.write_text(json.dumps(PROGRAM_TOLERANCES, indent=2))
 
     visible = directory / "datasets" / "visible"
     npy.write_case(visible / VISIBLE_CASE, fixture_arrays(), {})
     (visible / npy.CASES_FILE).write_text(json.dumps({"cases": [VISIBLE_CASE]}))
 
     manifest = {**PROGRAM_MANIFEST, "name": name}
+    if minimal:
+        manifest = {key: manifest[key] for key in ("version", "name", "source")}
     (directory / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
     return directory
+
+
+def in_tree_manifest(name: str = "tsunami", **overrides) -> dict:
+    """The fixture manifest as a tree carries it while the code is being brought in.
+
+    The only difference from the promoted form is where it says its
+    source is: inside the tree, the tree itself.
+    """
+    manifest = {
+        **PROGRAM_MANIFEST,
+        "name": name,
+        "source": {"root": ".", "patterns": PROGRAM_MANIFEST["source"]["patterns"]},
+    }
+    return {**manifest, **overrides}
+
+
+def write_tree(root, manifest: dict | None = None) -> Path:
+    """A tree of the shape an onboarding session submits, and returns it.
+
+    It holds what such a tree holds: the code, the makefile that builds
+    it, the tolerance policy, and the manifest that names all three.
+    Passing `manifest` writes a different one, which is how a test asks
+    what happens when the tree describes itself wrongly.
+    """
+    root = Path(root)
+    (root / "src").mkdir(parents=True, exist_ok=True)
+    (root / "src" / "mod_kernel.f90").write_text(
+        "module mod_kernel\ncontains\nsubroutine step\nend subroutine\nend module\n"
+    )
+    (root / "Makefile").write_text("replay:\n\techo build\n")
+    tolerances = root / TOLERANCES_IN_TREE
+    tolerances.parent.mkdir(parents=True, exist_ok=True)
+    tolerances.write_text(json.dumps(PROGRAM_TOLERANCES, indent=2))
+    (root / IN_TREE_MANIFEST).write_text(
+        yaml.safe_dump(in_tree_manifest() if manifest is None else manifest, sort_keys=False)
+    )
+    return root
 
 
 class FakeBuilder:

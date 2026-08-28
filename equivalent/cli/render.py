@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 
+from equivalent.ledger.acceptance import FINISHED_WORD
+
 from .session import parse_ts
 
 
@@ -28,7 +30,9 @@ def render_status(status: dict, region: str) -> str:
         else:
             lines.append(f"  {row['predicateType']:<20} MISSING  (run: {row['producing_action']})")
     if status["accepted"]:
-        lines.append(f"ACCEPTED on {short(status['tree'])}")
+        # The word depends on the phase: an onboarded code is ready for a
+        # person to review and promote, an accepted port is ready to merge.
+        lines.append(f"{FINISHED_WORD[status['phase']]} on {short(status['tree'])}")
     return "\n".join(lines) + "\n"
 
 

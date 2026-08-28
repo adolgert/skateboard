@@ -11,9 +11,18 @@ from equivalent.gateway.submit import (
     tracked_files,
     tree_payload,
 )
+from equivalent.ledger.acceptance import ONBOARDING, PORTING
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import tree_subject
+from equivalent.strategy.schema import load_strategy
+
+STRATEGY = load_strategy(
+    Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
+)
+ONBOARDING_STRATEGY = load_strategy(
+    Path(__file__).resolve().parents[2] / "strategy" / "files" / "onboarding.yaml"
+)
 
 
 def _write(root, path, content):
@@ -260,7 +269,7 @@ def test_resolve_allow_globs_before_and_after_sese_verified(tmp_path):
     store = LedgerStore(tmp_path / "region")
     spec_path = "notes/regions/ch04-step.sese.yaml"
 
-    assert resolve_allow_globs(store, spec_path) == [spec_path]
+    assert resolve_allow_globs(store, spec_path, PORTING, STRATEGY) == [spec_path]
 
     store.record_claim(
         [], "sese/verified",
@@ -271,7 +280,7 @@ def test_resolve_allow_globs_before_and_after_sese_verified(tmp_path):
         [], "sess-1",
     )
 
-    assert resolve_allow_globs(store, spec_path) == ["src/mod_kernel.f90", spec_path]
+    assert resolve_allow_globs(store, spec_path, PORTING, STRATEGY) == ["src/mod_kernel.f90", spec_path]
 
 
 def test_receipt_names_allowed_baseline_paths_that_were_not_sent(tmp_path):
@@ -302,3 +311,40 @@ def test_submit_with_nothing_matching_allow_list_is_a_no_op(tmp_path):
     assert receipt.committed is False
     baseline_tree = tree_subject(tracked_files(repo_dir, "main")).sha256
     assert receipt.tree == baseline_tree
+
+
+def test_an_onboarding_region_may_submit_anything_the_strategy_allows(tmp_path):
+    # There is no region and no analyzer claim while a code is being
+    # brought in: the strategy's own allow-list is the whole answer, and
+    # onboarding.yaml allows the tree.
+    store = LedgerStore(tmp_path / "ledger")
+    repo_dir = tmp_path / "repo"
+    init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
+    working = tmp_path / "working"
+    _write(working, "src/mod_kernel.f90", "subroutine step\nend subroutine\n")
+    _write(working, "harness/manifest.yaml", "version: 1\n")
+    _write(working, "Makefile", "replay:\n\techo build\n")
+
+    allow_globs = resolve_allow_globs(store, None, ONBOARDING, ONBOARDING_STRATEGY)
+    receipt = submit(repo_dir, "tsunami:onboarding", working, allow_globs, "sess-1")
+
+    assert allow_globs == ["*"]
+    assert receipt.rejected == ()
+    assert receipt.committed is True
+
+
+def test_an_onboarding_regions_frozen_set_is_whatever_its_allow_list_leaves(tmp_path):
+    # With the whole tree allowed, nothing is frozen -- and an empty
+    # frozen set is a real value, not a missing one.
+    from equivalent.gateway.submit import current_tree_and_frozen
+    from equivalent.ledger.subjects import frozen_subject
+
+    store = LedgerStore(tmp_path / "ledger")
+    repo_dir = tmp_path / "repo"
+    init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
+
+    _, frozen_sha = current_tree_and_frozen(
+        repo_dir, "tsunami:onboarding", store, None, ONBOARDING, ONBOARDING_STRATEGY,
+    )
+
+    assert frozen_sha == frozen_subject([]).sha256

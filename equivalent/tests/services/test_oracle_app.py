@@ -19,9 +19,10 @@ from equivalent.tests.fakes import (
     FIXTURE_VARIABLES,
     PROGRAM_TOLERANCES,
     fixture_arrays,
+    program_tolerances,
     write_program,
 )
-from services.oracle.app import create_app
+from services.oracle.app import create_app, policy_path_for
 
 VISIBLE = ["case0000", "case0001"]
 HOLDOUT = ["hcase0000"]
@@ -47,8 +48,8 @@ def _client(tmp_path, tolerances=None):
     program = write_program(tmp_path)
     captures = _captures(tmp_path)
     if tolerances is not None:
-        (program / "tolerances.json").write_text(json.dumps(tolerances))
-    return TestClient(create_app(captures, program / "tolerances.json", program / "manifest.yaml"))
+        program_tolerances(program).write_text(json.dumps(tolerances))
+    return TestClient(create_app(captures, program_tolerances(program), program / "manifest.yaml"))
 
 
 def _submission(offset: int = 0) -> dict:
@@ -181,6 +182,55 @@ def test_startup_fails_when_a_dataset_is_missing(tmp_path):
     (captures / "visible").mkdir(parents=True)
 
     with pytest.raises(ValueError) as caught:
-        create_app(captures, program / "tolerances.json", program / "manifest.yaml")
+        create_app(captures, program_tolerances(program), program / "manifest.yaml")
 
     assert "holdout" in str(caught.value)
+
+
+def _not_ready_client(tmp_path, *, minimal: bool = True):
+    """The oracle of a deployment whose code has not been brought in yet.
+
+    There are no captures, and the manifest is still the minimal form, so
+    it does not even say where a tolerance policy would be.
+    """
+    program = write_program(tmp_path, minimal=minimal)
+    manifest_path = program / "manifest.yaml"
+    return TestClient(create_app(
+        program / "captures", policy_path_for(program, manifest_path), manifest_path,
+    ))
+
+
+def test_an_oracle_with_nothing_to_compare_still_starts_and_says_it_is_not_ready(tmp_path):
+    # A deployment is brought up in order to produce the captures this
+    # service is missing, so refusing to start would be refusing to start
+    # the work.
+    body = _not_ready_client(tmp_path).get("/healthz").json()
+
+    assert body["ok"] is True
+    assert body["ready"] is False
+    assert body["n_visible"] == 0
+    assert body["n_holdout"] == 0
+    assert "captures" in body["missing"] and "tolerances" in body["missing"]
+
+
+def test_an_oracle_that_is_not_ready_refuses_every_question_about_a_comparison(tmp_path):
+    client = _not_ready_client(tmp_path)
+
+    for response in (
+        client.get("/v1/policy"),
+        client.get("/v1/dataset/holdout/inputs"),
+        client.post("/v1/compare", json={"dataset": "visible", "outputs": {}}),
+    ):
+        assert response.status_code == 409
+        assert "captures" in response.json()["detail"]
+
+
+def test_a_complete_manifest_says_where_its_tolerance_policy_is(tmp_path):
+    # Inside the source tree, not beside the manifest: every path a
+    # manifest names other than its source root is read from the tree.
+    program = write_program(tmp_path)
+
+    found = policy_path_for(program, program / "manifest.yaml")
+
+    assert found == program_tolerances(program)
+    assert found.is_file()

@@ -14,8 +14,24 @@ export interface StatusRow {
 export interface StatusBody {
   tree: string | null;
   frozen: string | null;
+  phase: string;
   rows: StatusRow[];
   accepted: boolean;
+}
+
+/**
+ * The word for a region that has met every requirement of its phase.
+ * They differ because they mean different things: an onboarded code is
+ * ready for a person to review and promote, an accepted port is ready to
+ * merge.
+ */
+const FINISHED_WORD: Record<string, string> = {
+  onboarding: "ONBOARDED",
+  porting: "ACCEPTED",
+};
+
+function finishedWord(phase: string): string {
+  return FINISHED_WORD[phase] ?? "ACCEPTED";
 }
 
 export function renderStatus(body: StatusBody): string {
@@ -28,6 +44,7 @@ export function renderStatus(body: StatusBody): string {
       lines.push(`  ${row.predicateType}  missing  (run ${row.producing_action})`);
     }
   }
-  lines.push(body.accepted ? "ACCEPTED" : "not accepted");
+  const word = finishedWord(body.phase);
+  lines.push(body.accepted ? word : `not ${word.toLowerCase()}`);
   return lines.join("\n");
 }

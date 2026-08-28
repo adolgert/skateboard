@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from equivalent.manifest.schema import load_manifest, source_files
+from equivalent.manifest.schema import (
+    COMPLETING_FIELDS,
+    IN_TREE_MANIFEST,
+    load_manifest,
+    load_tree_manifest,
+    source_files,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TSUNAMI = REPO_ROOT / "programs" / "tsunami" / "manifest.yaml"
@@ -37,12 +43,33 @@ MANIFEST = {
 }
 
 
+MINIMAL = {key: MANIFEST[key] for key in ("version", "name", "source")}
+
+
 def _write(tmp_path, manifest: dict) -> Path:
-    """A code directory laid out the way `programs/<name>/` is, plus its manifest."""
-    (tmp_path / "baseline" / "src").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "baseline" / "src" / "mod_kernel.f90").write_text("end\n")
-    (tmp_path / "tolerances.json").write_text("{}\n")
+    """A code directory laid out the way `programs/<name>/` is, plus its manifest.
+
+    Everything the manifest names other than the source root lives inside
+    the tree, which is where the loader looks for it.
+    """
+    tree = tmp_path / "baseline"
+    (tree / "src").mkdir(parents=True, exist_ok=True)
+    (tree / "src" / "mod_kernel.f90").write_text("end\n")
+    (tree / "Makefile").write_text("replay:\n\techo build\n")
+    (tree / "tolerances.json").write_text("{}\n")
     path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False))
+    return path
+
+
+def _write_in_tree(tree, manifest: dict) -> Path:
+    """The form a manifest takes while it is being written: inside the tree."""
+    (tree / "src").mkdir(parents=True, exist_ok=True)
+    (tree / "src" / "mod_kernel.f90").write_text("end\n")
+    (tree / "Makefile").write_text("replay:\n\techo build\n")
+    path = tree / IN_TREE_MANIFEST
+    path.parent.mkdir(parents=True, exist_ok=True)
+    (tree / "harness" / "tolerances.json").write_text("{}\n")
     path.write_text(yaml.safe_dump(manifest, sort_keys=False))
     return path
 
@@ -53,7 +80,10 @@ def test_the_tsunami_manifest_loads_and_resolves_its_paths():
     assert manifest.name == "tsunami"
     assert manifest.source.root == TSUNAMI.parent / "baseline"
     assert manifest.source.root.is_dir()
-    assert manifest.tolerances == TSUNAMI.parent / "tolerances.json"
+    # Every path but the source root is read from inside the tree, so the
+    # same manifest text works beside the tree and inside it.
+    assert manifest.tolerances == TSUNAMI.parent / "baseline" / "harness" / "tolerances.json"
+    assert manifest.complete
     assert manifest.build.targets["replay"].target == "replay"
     assert manifest.build.targets["timing"].executable == "tsunami"
     # The region reads and writes the same two arrays, which is what makes
@@ -254,3 +284,82 @@ def test_the_tsunami_timing_run_keeps_the_allocator_arena():
         "MALLOC_TRIM_THRESHOLD_": "-1",
         "MALLOC_MMAP_THRESHOLD_": "1073741824",
     }
+
+
+def test_a_minimal_manifest_loads_and_says_it_is_not_complete(tmp_path):
+    # The form a code arrives in: a tree and a name, and none of what
+    # onboarding produces.
+    manifest = load_manifest(_write(tmp_path, MINIMAL))
+
+    assert manifest.name == "tsunami"
+    assert manifest.source.root == tmp_path / "baseline"
+    assert manifest.complete is False
+    assert manifest.build is None
+    assert manifest.interface is None
+    assert manifest.datasets is None
+    assert manifest.timing is None
+    assert manifest.tolerances is None
+    assert manifest.properties is None
+    assert manifest.missing_parts() == list(COMPLETING_FIELDS)
+
+
+@pytest.mark.parametrize("field", sorted(COMPLETING_FIELDS))
+def test_a_manifest_with_some_but_not_all_of_the_six_names_what_is_absent(tmp_path, field):
+    # Half a description is far more likely to be a half-written file than
+    # a choice, so it is refused rather than read as the minimal form.
+    raw = copy.deepcopy(MANIFEST)
+    del raw[field]
+
+    with pytest.raises(ValueError) as excinfo:
+        load_manifest(_write(tmp_path, raw))
+
+    assert field in str(excinfo.value)
+
+
+def test_a_minimal_manifest_is_a_subject_like_any_other(tmp_path):
+    manifest = load_manifest(_write(tmp_path, MINIMAL))
+
+    assert manifest.as_subject().sha256 == manifest.sha256
+
+
+def test_a_manifest_in_the_tree_resolves_its_paths_against_the_tree(tmp_path):
+    raw = {**copy.deepcopy(MANIFEST), "source": {"root": ".", "patterns": ["**/*.f90"]}}
+    raw["tolerances"] = "harness/tolerances.json"
+    _write_in_tree(tmp_path, raw)
+
+    manifest = load_tree_manifest(tmp_path)
+
+    assert manifest.source.root == tmp_path
+    assert manifest.tolerances == tmp_path / "harness" / "tolerances.json"
+    assert manifest.complete
+
+
+def test_a_manifest_in_the_tree_naming_a_source_root_other_than_the_tree_is_rejected(tmp_path):
+    # A root that resolves to a real directory, so what is refused is the
+    # root itself and not a path that happened to be missing under it.
+    raw = {**copy.deepcopy(MANIFEST), "source": {"root": "harness", "patterns": ["**/*.f90"]}}
+    raw["tolerances"] = "tolerances.json"
+    _write_in_tree(tmp_path, raw)
+    (tmp_path / "harness" / "Makefile").write_text("replay:\n\techo build\n")
+
+    with pytest.raises(ValueError) as excinfo:
+        load_tree_manifest(tmp_path)
+
+    assert "source root" in str(excinfo.value)
+
+
+def test_a_tree_with_no_manifest_in_it_says_which_path_it_looked_at(tmp_path):
+    with pytest.raises(OSError) as excinfo:
+        load_tree_manifest(tmp_path)
+
+    assert IN_TREE_MANIFEST.split("/")[-1] in str(excinfo.value)
+
+
+def test_a_makefile_the_tree_does_not_hold_is_rejected_by_name(tmp_path):
+    raw = copy.deepcopy(MANIFEST)
+    raw["build"]["makefile"] = "build/Makefile.nowhere"
+
+    with pytest.raises(ValueError) as excinfo:
+        load_manifest(_write(tmp_path, raw))
+
+    assert "Makefile.nowhere" in str(excinfo.value)

@@ -2,7 +2,12 @@ import json
 from pathlib import Path
 
 from equivalent.cli import render
-from equivalent.ledger.acceptance import ACCEPTANCE_REQUIREMENTS
+from equivalent.ledger.acceptance import (
+    ACCEPTANCE_REQUIREMENTS,
+    ONBOARDING,
+    ONBOARDING_REQUIREMENTS,
+    PORTING,
+)
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.status import compute_status
 from equivalent.ledger.store import LedgerStore
@@ -24,11 +29,30 @@ def test_status_text_matches_golden_file(tmp_path):
     store = LedgerStore(tmp_path / "region")
     _all_passing_claims(store, tree, frozen)
 
-    status = compute_status(store)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
     text = render.render_status(status, "ch04:step")
 
     golden = (GOLDEN_DIR / "status_accepted.txt").read_text()
     assert text == golden
+
+
+def test_a_finished_onboarding_reads_as_onboarded_rather_than_accepted(tmp_path):
+    # The two words mean different things: an onboarded code is ready for
+    # a person to review and promote, an accepted port is ready to merge.
+    tree, frozen = "a" * 64, "b" * 64
+    store = LedgerStore(tmp_path / "region")
+    for req in ONBOARDING_REQUIREMENTS:
+        predicate = Predicate(tool="t", version="0.1", configHash="cfg", verdict="pass", detail={})
+        store.record_claim(
+            [Subject(kind=req.subject_kind, sha256=tree)], req.predicate_type, predicate, [], "sess-1",
+        )
+
+    status = compute_status(store, ONBOARDING_REQUIREMENTS, ONBOARDING)
+    text = render.render_status(status, "tsunami:onboarding")
+
+    assert text.splitlines()[-1] == f"ONBOARDED on {tree[:12]}"
+    assert "ACCEPTED" not in text
+    assert frozen[:12] not in text
 
 
 def test_render_claim_shows_full_detail_even_for_a_verdict_only_predicate():

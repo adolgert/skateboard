@@ -12,8 +12,19 @@ wrong. Its sha256 goes into every claim's materials, so a manifest
 edited mid-session cannot be mistaken for the one the claims were filed
 under.
 
-Every path in the file is relative to the manifest's own directory, so a
-code directory can be moved or mounted anywhere without editing it.
+A manifest has two forms. The minimal one -- `version`, `name`, and
+`source` -- is enough to seed a baseline and start bringing a new code
+in; the other six sections are what that work produces, and a manifest
+holding all of them is `complete`. Nothing that checks a port will run
+against a minimal manifest. Holding some but not all six is neither
+form and is refused, naming what is absent, because it is far more
+likely to be a half-written file than a choice anyone made.
+
+`source.root` is relative to the manifest's own directory, so a code
+directory can be moved or mounted anywhere without editing the file.
+Every other path -- the makefile, the tolerance policy, the properties
+module -- is relative to the source tree root, so the same text reads
+the same whether the manifest sits beside that tree or inside it.
 """
 from __future__ import annotations
 
@@ -27,10 +38,21 @@ from equivalent.ledger.subjects import Subject, hash_bytes
 
 VERSION = 1
 
-REQUIRED_FIELDS = (
-    "version", "name", "source", "build", "interface", "datasets",
-    "timing", "tolerances", "properties",
+# What every manifest says, in both forms.
+REQUIRED_FIELDS = ("version", "name", "source")
+# What a manifest gains when a code has been brought in far enough to be
+# ported: all six together, or none of them.
+COMPLETING_FIELDS = (
+    "build", "interface", "datasets", "timing", "tolerances", "properties",
 )
+
+# Where a manifest lives while it is being written: inside the tree it
+# describes, beside the driver and the tolerances it names. Spelled once
+# here so the components that read it and the tree that carries it never
+# disagree.
+IN_TREE_MANIFEST = "harness/manifest.yaml"
+# And what such a manifest says its source root is: the tree itself.
+IN_TREE_SOURCE_ROOT = "."
 REQUIRED_SOURCE_FIELDS = ("root", "patterns")
 REQUIRED_BUILD_FIELDS = ("makefile", "targets")
 REQUIRED_TARGET_FIELDS = ("target", "executable")
@@ -59,7 +81,7 @@ MAX_RANK = 4
 
 @dataclass(frozen=True)
 class Source:
-    root: Path  # resolved against the manifest's directory
+    root: Path  # the source tree, resolved against the manifest's directory
     patterns: tuple
 
 
@@ -108,13 +130,34 @@ class Manifest:
     version: int
     name: str
     source: Source
-    build: Build
-    interface: Interface
-    datasets: dict  # {name: Dataset}
-    timing: Timing
-    tolerances: Path  # resolved against the manifest's directory
-    properties: Path | None  # a pytest module of invariants, or none
+    # The six a minimal manifest leaves out. They are None together or
+    # present together; the loader accepts no state in between.
+    build: Build | None
+    interface: Interface | None
+    datasets: dict | None  # {name: Dataset}
+    timing: Timing | None
+    tolerances: Path | None  # resolved against the source tree root
+    properties: Path | None  # a pytest module of invariants, or none declared
     sha256: str
+
+    @property
+    def complete(self) -> bool:
+        """Does this manifest describe a code well enough to check a port of it.
+
+        `properties` is left out of the test on purpose: a complete
+        manifest writes `properties: null` when the code has no property
+        module, so that field being None says nothing about which form
+        this manifest is in.
+        """
+        return None not in (self.build, self.interface, self.datasets, self.timing, self.tolerances)
+
+    def missing_parts(self) -> list:
+        """What a minimal manifest still has to gain before a port can be checked.
+
+        The loader takes all six or none, so this is either the whole
+        list or empty -- there is no half-described code to report.
+        """
+        return [] if self.complete else list(COMPLETING_FIELDS)
 
     def as_subject(self) -> Subject:
         return Subject(kind="manifest", sha256=self.sha256)
@@ -253,39 +296,93 @@ def _load_timing_env(raw, where: str) -> dict:
     return env
 
 
-def load_manifest(path) -> Manifest:
-    """Read one code's manifest, resolving its paths against its own directory."""
+def _in_tree_path(root: Path, value, where: str) -> Path:
+    """One of the manifest's paths, resolved and checked inside the source tree."""
+    path = _resolve(root, value, where)
+    if not path.is_file():
+        raise ValueError(f"{where} {value!r} is not a file in the source tree ({path})")
+    return path
+
+
+def _completing_fields(raw: dict, where: str) -> bool:
+    """Is this the complete form? Anything between the two forms is an error."""
+    absent = [field for field in COMPLETING_FIELDS if field not in raw]
+    if not absent:
+        return True
+    if len(absent) == len(COMPLETING_FIELDS):
+        return False
+    raise ValueError(
+        f"{where} is missing field(s): {absent}. A manifest either says only "
+        f"{list(REQUIRED_FIELDS)}, which is enough to seed a baseline and start "
+        f"describing a code, or says all of {list(COMPLETING_FIELDS)} as well"
+    )
+
+
+def load_manifest(path, *, source_base=None) -> Manifest:
+    """Read one code's manifest.
+
+    `source.root` is resolved against `source_base`, which defaults to the
+    manifest's own directory; every other path is resolved against the
+    source tree root that names. Pass `source_base` for a manifest that
+    sits inside the tree it describes rather than beside it --
+    `load_tree_manifest` is the one caller that does.
+    """
     path = Path(path)
     where = f"manifest {path}"
     raw_bytes = path.read_bytes()
     raw = yaml.safe_load(raw_bytes)
-    _check_keys(raw, REQUIRED_FIELDS, where)
+    _check_keys(raw, REQUIRED_FIELDS, where, optional=COMPLETING_FIELDS)
     if raw["version"] != VERSION:
         raise ValueError(f"{where} has version {raw['version']!r}; this reader understands {VERSION}")
 
-    directory = path.parent
-    tolerances = _resolve(directory, raw["tolerances"], f"{where} tolerances")
-    if not tolerances.is_file():
-        raise ValueError(f"{where} tolerances {raw['tolerances']!r} is not a file ({tolerances})")
+    source = _load_source(
+        raw["source"], Path(path.parent if source_base is None else source_base), where,
+    )
+    minimal = dict(
+        version=raw["version"],
+        name=_name(raw["name"], f"{where} name"),
+        source=source,
+        build=None, interface=None, datasets=None, timing=None,
+        tolerances=None, properties=None,
+        sha256=hash_bytes(raw_bytes),
+    )
+    if not _completing_fields(raw, where):
+        return Manifest(**minimal)
+
+    build = _load_build(raw["build"], where)
+    _in_tree_path(source.root, build.makefile, f"{where} build makefile")
 
     properties = None
     if raw["properties"] is not None:
-        properties = _resolve(directory, raw["properties"], f"{where} properties")
-        if not properties.is_file():
-            raise ValueError(f"{where} properties {raw['properties']!r} is not a file ({properties})")
+        properties = _in_tree_path(source.root, raw["properties"], f"{where} properties")
 
-    return Manifest(
-        version=raw["version"],
-        name=_name(raw["name"], f"{where} name"),
-        source=_load_source(raw["source"], directory, where),
-        build=_load_build(raw["build"], where),
-        interface=_load_interface(raw["interface"], where),
-        datasets=_load_datasets(raw["datasets"], where),
-        timing=_load_timing(raw["timing"], where),
-        tolerances=tolerances,
-        properties=properties,
-        sha256=hash_bytes(raw_bytes),
-    )
+    return Manifest(**{
+        **minimal,
+        "build": build,
+        "interface": _load_interface(raw["interface"], where),
+        "datasets": _load_datasets(raw["datasets"], where),
+        "timing": _load_timing(raw["timing"], where),
+        "tolerances": _in_tree_path(source.root, raw["tolerances"], f"{where} tolerances"),
+        "properties": properties,
+    })
+
+
+def load_tree_manifest(tree_dir) -> Manifest:
+    """Read the manifest a tree carries, at the one path a tree carries it.
+
+    A manifest written inside the tree it describes says so: its source
+    root is the tree itself. Anything else would name a directory outside
+    the submission, which is not something a tree gets to do.
+    """
+    tree_dir = Path(tree_dir)
+    manifest = load_manifest(tree_dir / IN_TREE_MANIFEST, source_base=tree_dir)
+    if manifest.source.root.resolve() != tree_dir.resolve():
+        raise ValueError(
+            f"the manifest at {IN_TREE_MANIFEST} has a source root outside the tree "
+            f"({manifest.source.root}); a manifest in the tree must say "
+            f"source root {IN_TREE_SOURCE_ROOT!r}, which is the tree itself"
+        )
+    return manifest
 
 
 def _normalized(path: str) -> str:

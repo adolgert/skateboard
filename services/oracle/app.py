@@ -14,6 +14,14 @@ down here. The one thing this service insists on is that every floating-point
 output the manifest declares has a tolerance band before it will start: a
 variable compared with no band is a comparison nobody chose.
 
+It also starts when it has nothing to answer with. A deployment can be
+brought up while its code is still being brought in -- before any capture
+exists, and while the manifest is still minimal -- and this service comes
+up saying it is not ready, answering every question about a comparison
+with 409 and the name of what is missing. Coming up in that state is the
+point: the alternative is a container that will not start, in a
+deployment whose whole purpose is to produce the thing it is missing.
+
 This image installs numpy, yaml, and the web server, and nothing else of this
 project -- so this file and compare.py import nothing from `equivalent`, and
 read the capture format's few conventions directly.
@@ -44,6 +52,20 @@ OUTPUT_SUFFIX = ".out.npy"
 # The two datasets every code is judged against.
 DATASETS = ("visible", "holdout")
 
+# Where this image keeps the one code it answers for, and what is inside
+# that directory. The whole code directory is copied in, so these are the
+# same names the repository uses.
+PROGRAM_DIR_VAR = "PROGRAM_DIR"
+DEFAULT_PROGRAM_DIR = "/program"
+MANIFEST_NAME = "manifest.yaml"
+CAPTURES_NAME = "captures"
+
+# What a request needs before it can be answered, named the way the
+# not-ready reply names it.
+CAPTURES = "captures"
+TOLERANCES = "tolerances"
+MANIFEST = "manifest"
+
 # The manifest dtypes whose comparison consults a tolerance band. Any other
 # declared output type is compared exactly and needs no entry.
 BANDED_DTYPES = ("f32", "f64")
@@ -60,10 +82,65 @@ def _encode(array: np.ndarray) -> str:
     return base64.b64encode(buffer.getvalue()).decode()
 
 
-def _declared_outputs(manifest_path) -> list:
-    """The region's output variables, as the code's manifest declares them."""
-    manifest = yaml.safe_load(Path(manifest_path).read_bytes())
+def _manifest(manifest_path):
+    """The code's manifest, or None if this image was built without one."""
+    manifest_path = Path(manifest_path)
+    if not manifest_path.is_file():
+        return None
+    return yaml.safe_load(manifest_path.read_bytes())
+
+
+def _declared_outputs(manifest_path) -> list | None:
+    """The region's output variables, or None while the manifest is still minimal.
+
+    A minimal manifest is the form a code arrives in: it names the tree
+    and nothing about the region yet. There is then no list of outputs to
+    hold to a tolerance band, and nothing to compare either.
+    """
+    manifest = _manifest(manifest_path)
+    if manifest is None or "interface" not in manifest:
+        return None
     return list(manifest["interface"]["outputs"])
+
+
+def policy_path_for(program_dir, manifest_path):
+    """Where the code's manifest says its tolerance policy is, if it says.
+
+    Every path a manifest names other than its source root is relative to
+    the source tree, so the policy is read from inside the tree rather
+    than beside the manifest.
+    """
+    manifest = _manifest(manifest_path)
+    if manifest is None or "tolerances" not in manifest or "source" not in manifest:
+        return None
+    return Path(program_dir) / manifest["source"]["root"] / manifest["tolerances"]
+
+
+def _what_is_missing(captures_dir: Path, tolerances_path, outputs) -> list:
+    """What this oracle would need before it could answer a comparison.
+
+    A captures directory that exists but holds only half a capture set is
+    a different thing from one that was never written, and is an error:
+    somebody built this image from a directory that was being written at
+    the time.
+    """
+    missing = []
+    if not captures_dir.is_dir():
+        missing.append(CAPTURES)
+    else:
+        absent = [name for name in DATASETS if not (captures_dir / name).is_dir()]
+        if absent and len(absent) < len(DATASETS):
+            raise ValueError(
+                f"captures directory {captures_dir} holds no '{absent[0]}' dataset, "
+                f"although it holds the other one"
+            )
+        if absent:
+            missing.append(CAPTURES)
+    if tolerances_path is None or not Path(tolerances_path).is_file():
+        missing.append(TOLERANCES)
+    if outputs is None:
+        missing.append(MANIFEST)
+    return missing
 
 
 def _check_policy(policy: dict, outputs: list) -> None:
@@ -95,15 +172,21 @@ class CompareReq(BaseModel):
 
 def create_app(captures_dir, tolerances_path, manifest_path, token: str = "") -> FastAPI:
     captures_dir = Path(captures_dir)
-    for dataset in DATASETS:
-        if not (captures_dir / dataset).is_dir():
-            raise ValueError(f"captures directory {captures_dir} holds no '{dataset}' dataset")
+    outputs = _declared_outputs(manifest_path)
+    missing = _what_is_missing(captures_dir, tolerances_path, outputs)
+    ready = not missing
 
-    policy_bytes = Path(tolerances_path).read_bytes()
-    policy = json.loads(policy_bytes)
-    policy_sha = hashlib.sha256(policy_bytes).hexdigest()
-    _check_policy(policy, _declared_outputs(manifest_path))
-    bands = policy["variables"]
+    policy = None
+    policy_sha = None
+    bands = {}
+    if ready:
+        policy_bytes = Path(tolerances_path).read_bytes()
+        policy = json.loads(policy_bytes)
+        policy_sha = hashlib.sha256(policy_bytes).hexdigest()
+        # Only when there is something to compare. Until then there is no
+        # list of outputs to insist on a band for.
+        _check_policy(policy, outputs)
+        bands = policy["variables"]
 
     app = FastAPI(title="skateboard-oracle")
 
@@ -112,6 +195,20 @@ def create_app(captures_dir, tolerances_path, manifest_path, token: str = "") ->
             return
         if authorization != f"Bearer {token}":
             raise HTTPException(status_code=401, detail="bad or missing token")
+
+    def _ready():
+        """Refuse anything about a comparison this oracle cannot make.
+
+        409 rather than 500: nothing went wrong, the answer simply does
+        not exist yet, and the reply names what would have to exist.
+        """
+        if not ready:
+            raise HTTPException(
+                status_code=409,
+                detail=f"this oracle has no answers to compare against: {missing} "
+                       f"missing. It holds one code's captures and tolerance policy, "
+                       f"baked in when the image was built.",
+            )
 
     def _cases(dataset: str) -> list:
         return list(json.loads((captures_dir / dataset / CASES_FILE).read_text())["cases"])
@@ -125,12 +222,14 @@ def create_app(captures_dir, tolerances_path, manifest_path, token: str = "") ->
     @app.get("/v1/policy")
     def get_policy(authorization: str | None = Header(default=None)):
         _auth(authorization)
+        _ready()
         return {"policy_version": policy["policy_version"], "policy_sha256": policy_sha}
 
     @app.get("/v1/dataset/holdout/inputs")
     def holdout_inputs(authorization: str | None = Header(default=None)):
         """Served once, at acceptance. Inputs only -- never expected outputs."""
         _auth(authorization)
+        _ready()
         cases = {}
         for case in _cases("holdout"):
             cases[case] = {
@@ -142,6 +241,7 @@ def create_app(captures_dir, tolerances_path, manifest_path, token: str = "") ->
     @app.post("/v1/compare")
     def compare_outputs(req: CompareReq, authorization: str | None = Header(default=None)):
         _auth(authorization)
+        _ready()
         if req.dataset not in DATASETS:
             raise HTTPException(status_code=400, detail="unknown dataset")
 
@@ -175,21 +275,32 @@ def create_app(captures_dir, tolerances_path, manifest_path, token: str = "") ->
 
     @app.get("/healthz")
     def healthz():
+        """Alive either way, and honest about whether it can answer anything."""
         return {
             "ok": True,
+            "ready": ready,
+            "missing": list(missing),
             "policy_sha256": policy_sha,
-            "n_visible": len(_cases("visible")),
-            "n_holdout": len(_cases("holdout")),
+            "n_visible": len(_cases("visible")) if ready else 0,
+            "n_holdout": len(_cases("holdout")) if ready else 0,
         }
 
     return app
 
 
 def from_environment() -> FastAPI:
-    """The app this image serves: paths and token from the container's environment."""
+    """The app this image serves: one code's whole directory, and the token.
+
+    The image copies `programs/<code>/` in as it stands, so everything
+    this service reads is found the way the repository lays it out --
+    the manifest at the top, the captures beside it, and the tolerance
+    policy wherever inside the source tree the manifest says.
+    """
+    program_dir = Path(os.environ.get(PROGRAM_DIR_VAR, DEFAULT_PROGRAM_DIR))
+    manifest_path = program_dir / MANIFEST_NAME
     return create_app(
-        os.environ.get("CAPTURES_DIR", "/captures"),
-        os.environ.get("TOLERANCES", "/tolerances.json"),
-        os.environ.get("MANIFEST", "/manifest.yaml"),
+        program_dir / CAPTURES_NAME,
+        policy_path_for(program_dir, manifest_path),
+        manifest_path,
         token=os.environ.get("SKATEBOARD_TOKEN", ""),
     )

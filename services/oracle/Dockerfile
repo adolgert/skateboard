@@ -14,14 +14,18 @@ COPY services/oracle /app/services/oracle
 # switching codes is a rebuild, which is also a human decision.
 ARG CODE=tsunami
 
-# Reference answers, the tolerance policy, and the code's manifest are BAKED
-# IN. They are part of the image, not a mounted volume, so no other container
-# can reach them and changing them requires rebuilding this image (a git
-# commit + human sign-off). The manifest is here because the oracle refuses to
-# start unless every output the code declares has a tolerance band.
-COPY programs/${CODE}/captures /captures
-COPY programs/${CODE}/tolerances.json /tolerances.json
-COPY programs/${CODE}/manifest.yaml /manifest.yaml
+# The code's whole directory is BAKED IN: its manifest, its captures, and
+# the source tree that holds its tolerance policy. It is part of the
+# image, not a mounted volume, so no other container can reach it and
+# changing it requires rebuilding this image (a git commit + human
+# sign-off). The manifest is what says which outputs have to have a
+# tolerance band before this service will answer anything.
+#
+# The whole directory rather than three named paths, because a code that
+# has not been brought in yet has only some of them, and this image has
+# to build for that code too: the oracle starts anyway and reports that
+# it is not ready.
+COPY programs/${CODE} /program
 
 EXPOSE 7070
 CMD ["uvicorn", "services.oracle.serve:app", "--host", "0.0.0.0", "--port", "7070"]

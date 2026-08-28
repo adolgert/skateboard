@@ -72,30 +72,20 @@ def _outside_tree(compiles) -> list:
     return seen
 
 
-def check(
-    repo_dir, ref: str, region_id: str, tree_sha: str,
-    strategy: Strategy, manifest: Manifest, builder,
-) -> dict:
-    """Build the region's current tree with the strategy's own flags.
+def build_verdict(builder, attempt_id: str, tree: list[dict], strategy: Strategy,
+                  manifest: Manifest) -> dict:
+    """One tree, one strategy: build it and say whether that build counts.
 
-    The flags come from the strategy file and the build recipe from the
-    code's manifest; nothing about either lives in the builder. The
-    builder echoes back every compiler command line it saw, and that is
-    what goes into the claim's detail.
+    Three statements have to hold, and each is a verdict about the code
+    rather than an error: the build succeeded, the strategy's flags
+    reached every compile, and every file compiled was the tree's own
+    source. This is the whole of what a build claim means, so both the
+    porting check below and onboarding's two-strategy check call it
+    rather than each deciding for itself.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}. Raises
-    ComponentError if the builder call itself couldn't be completed (not a
-    verdict about the code).
+    Returns {"verdict": "pass" | "fail", "detail": {...}}.
     """
-    tracked = tracked_files(repo_dir, ref)
-    if not source_files(manifest, sorted(f["path"] for f in tracked)):
-        raise ComponentError(
-            f"no file in tree {tree_sha} at ref {ref} matches the source patterns "
-            f"of code '{manifest.name}'"
-        )
-
-    attempt_id = attempt_id_for(region_id, tree_sha)
-    resp = build_tree(builder, attempt_id, tree_payload(repo_dir, ref), strategy, manifest)
+    resp = build_tree(builder, attempt_id, tree, strategy, manifest)
 
     compiles = resp.get("compiles", [])
     common = {
@@ -143,3 +133,31 @@ def check(
             "log_tail": resp.get("log_tail", ""),
         },
     }
+
+
+def check(
+    repo_dir, ref: str, region_id: str, tree_sha: str,
+    strategy: Strategy, manifest: Manifest, builder,
+) -> dict:
+    """Build the region's current tree with the strategy's own flags.
+
+    The flags come from the strategy file and the build recipe from the
+    code's manifest; nothing about either lives in the builder. The
+    builder echoes back every compiler command line it saw, and that is
+    what goes into the claim's detail.
+
+    Returns {"verdict": "pass" | "fail", "detail": {...}}. Raises
+    ComponentError if the builder call itself couldn't be completed (not a
+    verdict about the code).
+    """
+    tracked = tracked_files(repo_dir, ref)
+    if not source_files(manifest, sorted(f["path"] for f in tracked)):
+        raise ComponentError(
+            f"no file in tree {tree_sha} at ref {ref} matches the source patterns "
+            f"of code '{manifest.name}'"
+        )
+
+    return build_verdict(
+        builder, attempt_id_for(region_id, tree_sha), tree_payload(repo_dir, ref),
+        strategy, manifest,
+    )

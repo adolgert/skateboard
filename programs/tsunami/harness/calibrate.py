@@ -37,7 +37,7 @@ from equivalent.manifest.schema import load_manifest  # noqa: E402
 TREE = os.path.join(CODE, "baseline")
 VIS_IN = os.path.join(CODE, "datasets", "visible")
 MANIFEST = os.path.join(CODE, "manifest.yaml")
-OUT = os.path.join(CODE, "tolerances.json")
+OUT = os.path.join(TREE, "harness", "tolerances.json")
 
 PROFILES = {
     "plain":    ["-O2", "-ffree-line-length-none"],

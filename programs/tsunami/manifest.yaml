@@ -41,5 +41,5 @@ timing:
     # stencil is timed, not page faults.
     MALLOC_TRIM_THRESHOLD_: "-1"
     MALLOC_MMAP_THRESHOLD_: "1073741824"
-tolerances: tolerances.json
+tolerances: harness/tolerances.json   # relative to the source tree root
 properties: null            # or a path to a pytest module

@@ -14,6 +14,7 @@ from equivalent.tests.fakes import FakeBuilder, write_program
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
 STRATEGIES_DIR = Path(__file__).resolve().parents[2] / "strategy" / "files"
+REGION = {"region": "ch04:step"}
 SPEC_PATH = "notes/regions/ch04-step.sese.yaml"
 
 SOURCE = """\
@@ -74,8 +75,8 @@ def _deployment(tmp_path, monkeypatch, token=TOKEN, strategies=STRATEGIES_DIR, *
         },
         "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
         "regions": {"ch04:step": {
-            "code": "tsunami", "spec_path": SPEC_PATH, "strategy": "stdpar_managed",
-            "baseline_strategy": "cpu_reference",
+            "code": "tsunami", "phase": "porting", "spec_path": SPEC_PATH,
+            "strategy": "stdpar_managed", "baseline_strategy": "cpu_reference",
         }},
     }))
 
@@ -112,8 +113,8 @@ def test_the_gateway_it_builds_serves_the_table_and_still_wants_the_token(tmp_pa
     _deployment(tmp_path, monkeypatch)
     client = TestClient(build_app_from_env())
 
-    assert client.get("/table", headers=HEADERS).status_code == 200
-    assert client.get("/table").status_code == 401
+    assert client.get("/table", params=REGION, headers=HEADERS).status_code == 200
+    assert client.get("/table", params=REGION).status_code == 401
 
 
 def test_with_no_builder_or_oracle_configured_the_analyzer_side_still_works(tmp_path, monkeypatch):
@@ -176,7 +177,7 @@ def test_startup_accepts_a_builder_that_has_every_required_tool(tmp_path, monkey
 
     app = build_app_from_env(builder=FakeBuilder())
 
-    assert TestClient(app).get("/table", headers=HEADERS).status_code == 200
+    assert TestClient(app).get("/table", params=REGION, headers=HEADERS).status_code == 200
 
 
 def test_a_required_tool_the_builder_lacks_stops_startup_and_names_it(tmp_path, monkeypatch):

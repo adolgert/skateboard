@@ -337,6 +337,50 @@ through, and the time from the first request to acceptance. The session
 id is shown by `pi` and is the suffix of the transcript's filename under
 `deploy/state/sessions`.
 
+## Onboarding a code
+
+Everything above is about porting a region of a code the harness already
+knows. Bringing a new code in is a session of its own, and the region it
+is configured for says so: a region has a **phase**, either `porting` or
+`onboarding`, and the phase decides which tools the session gets and
+what `status` asks for.
+
+An onboarding session works on the whole tree. There is no spec and no
+analyzer verdict, because no region has been chosen yet; the strategy
+allows every path, and what keeps the work honest is that every claim is
+filed against the tree that was submitted, and a person reads what
+passed before any of it is promoted.
+
+What the model writes during onboarding lives in the tree beside the
+code: a makefile with the targets the harness builds, a replay driver, a
+capture program, a tolerance policy, and a **manifest** at
+`harness/manifest.yaml` that names all of them. The manifest is the
+code's description of itself — its source tree, its build targets, the
+region's variables and their types, the runs that make the visible and
+held-out datasets, the timing run, and where the tolerance policy is.
+Beside the code it is written once more, as `programs/<code>/manifest.yaml`;
+a code that has not been onboarded yet has only the first three fields
+of it, and a region cannot be ported until the rest exists.
+
+The session is finished when six checks have passed on one tree, at
+which point `status` ends with `ONBOARDED` rather than `ACCEPTED`:
+
+| check | what it establishes |
+| --- | --- |
+| `manifest_check` | the manifest is there, complete, names only files the tree holds, gives every floating-point output a tolerance band, and has the visible and held-out runs differ |
+| `harness_build` | every target the manifest declares builds under both the baseline strategy and the port strategy, with each strategy's flags proven to have reached every compile |
+| `harness_capture` | the capture program writes a visible and a held-out dataset that match the declared interface |
+| `harness_replay` | the replay driver reproduces the captured outputs bitwise from the captured inputs |
+| `harness_determinism` | capturing and replaying again agrees bitwise with what was stored |
+| `harness_timing` | the timing target runs twice inside its budget and writes the same outputs both times |
+
+The first two are built; the other four are the next piece of work, and
+until they exist an onboarding session can reach them and be told the
+check is not implemented yet. Promoting what passed — copying the
+manifest and the datasets out of the tree and making the tree the new
+baseline — is a person's step, not a gateway action, and is also still
+to come.
+
 ## Things worth knowing
 
 - Work in the working copy is invisible to the gateway until submitted.

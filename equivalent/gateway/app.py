@@ -6,7 +6,9 @@ region's progress comes from what this module reads and returns; a bug
 here can make a bad port look accepted.
 
 The endpoints are GET /table, GET /status, POST /submit, POST /run, and
-an unauthenticated GET /healthz for container healthchecks. POST /run
+an unauthenticated GET /healthz for container healthchecks. Both /table
+and /status name a region, because what a session may do and what it
+must still do are both properties of the region's phase. POST /run
 refuses a request whose required claims are missing, returns an existing
 claim for a repeated deterministic request, and otherwise dispatches to
 the action's component. Every row in
@@ -24,10 +26,23 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from equivalent.components import build_replay, regression, run_replay, sanitize, sese_check, timing
+from equivalent.components import (
+    build_replay,
+    harness_build,
+    manifest_check,
+    regression,
+    run_replay,
+    sanitize,
+    sese_check,
+    timing,
+)
 from equivalent.components.errors import ComponentError
 from equivalent.gateway.datasets import load_visible_cases
-from equivalent.ledger.acceptance import ACCEPTANCE_REQUIREMENTS
+from equivalent.ledger.acceptance import (
+    ACCEPTANCE_REQUIREMENTS,
+    ONBOARDING_REQUIREMENTS,
+    requirements_for,
+)
 from equivalent.ledger.predicates import agent_receipt
 from equivalent.ledger.records import Predicate, RequestLogLine
 from equivalent.ledger.status import compute_status, requirement_status
@@ -44,18 +59,21 @@ from .submit import (
     resolve_allow_globs,
 )
 from .submit import submit as do_submit
-from .table import ACTION_TABLE
+from .table import ACTION_TABLE, rows_for
 
 ROWS_BY_NAME = {row.name: row for row in ACTION_TABLE}
 PRODUCERS = {predicate_type: row.name for row in ACTION_TABLE for predicate_type in row.emits}
 # Which subject a predicate type's own claim is recorded against -- e.g.
-# sese/verified is scoped to "frozen", everything else in this list to
-# "tree". Reused from the accept row's own requirements rather than a
-# second hand-written copy. Falls back to "tree" for anything not listed
+# sese/verified is scoped to "frozen", everything else in these lists to
+# "tree". Reused from the two phases' own requirement lists rather than a
+# third hand-written copy. Falls back to "tree" for anything not listed
 # there: timing/baseline (nondeterministic, so it never reaches the
 # duplicate check that uses this) and sanitize/initcheck (recorded on
 # "tree", which is what the fallback says).
-SUBJECT_KIND_OF = {req.predicate_type: req.subject_kind for req in ACCEPTANCE_REQUIREMENTS}
+SUBJECT_KIND_OF = {
+    req.predicate_type: req.subject_kind
+    for req in (*ACCEPTANCE_REQUIREMENTS, *ONBOARDING_REQUIREMENTS)
+}
 
 
 def _claim_response(claim) -> dict:
@@ -156,6 +174,17 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             stores[region_id] = LedgerStore(regions[region_id].ledger_dir)
         return stores[region_id]
 
+    def _current(cfg: RegionConfig, store: LedgerStore, strategy) -> tuple[str, str]:
+        """The region's current tree and frozen hashes.
+
+        The strategy is one of the answers: an onboarding region's
+        allow-list is the strategy's own, and the frozen set is whatever
+        that list leaves uncovered.
+        """
+        return current_tree_and_frozen(
+            cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase, strategy,
+        )
+
     def _visible_cases(cfg: RegionConfig) -> dict:
         if cfg.region_id not in visible_cases:
             if cfg.visible_dataset_dir is None:
@@ -164,8 +193,20 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         return visible_cases[cfg.region_id]
 
     @app.get("/table")
-    def get_table(authorization: str | None = Header(default=None)):
+    def get_table(region: str | None = None, authorization: str | None = Header(default=None)):
+        """The action rows of one region's phase.
+
+        The region is required: an onboarding session and a porting
+        session have different actions, and a table served without one
+        would have to be either both at once or a guess.
+        """
         _auth(authorization)
+        if region is None:
+            raise HTTPException(
+                status_code=400,
+                detail="GET /table needs a region: the actions a session has are the "
+                       "actions of its region's phase",
+            )
         return [
             {
                 "name": row.name,
@@ -174,7 +215,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 "deterministic": row.deterministic,
                 "component": row.component,
             }
-            for row in ACTION_TABLE
+            for row in rows_for(_region(region).phase)
         ]
 
     @app.get("/status")
@@ -182,9 +223,9 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         _auth(authorization)
         cfg = _region(region)
         store = _store(region)
-        tree_sha, frozen_sha = current_tree_and_frozen(cfg.repo_dir, cfg.region_id, store, cfg.spec_path)
+        tree_sha, frozen_sha = _current(cfg, store, load_strategy(cfg.strategy_path))
         return compute_status(
-            store,
+            store, requirements_for(cfg.phase), cfg.phase,
             tree=Subject(kind="tree", sha256=tree_sha),
             frozen=Subject(kind="frozen", sha256=frozen_sha),
         )
@@ -200,7 +241,9 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         _auth(authorization)
         cfg = _region(req.region)
         store = _store(req.region)
-        allow_globs = resolve_allow_globs(store, cfg.spec_path)
+        allow_globs = resolve_allow_globs(
+            store, cfg.spec_path, cfg.phase, load_strategy(cfg.strategy_path),
+        )
         receipt = do_submit(cfg.repo_dir, cfg.region_id, cfg.working_copy_dir, allow_globs, x_session_id)
 
         store.append_request(RequestLogLine(
@@ -244,7 +287,8 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                        f"allowed: {sorted(row.config_keys)}",
             )
 
-        tree_sha, frozen_sha = current_tree_and_frozen(cfg.repo_dir, cfg.region_id, store, cfg.spec_path)
+        strategy = load_strategy(cfg.strategy_path)
+        tree_sha, frozen_sha = _current(cfg, store, strategy)
         subjects_by_kind = {
             "tree": Subject(kind="tree", sha256=tree_sha),
             "frozen": Subject(kind="frozen", sha256=frozen_sha),
@@ -299,9 +343,6 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             )
 
         try:
-            # row.component is never None here -- that case already raised
-            # above -- so every action reaching this point has a strategy.
-            strategy = load_strategy(cfg.strategy_path)
             ref = current_ref(cfg.repo_dir, cfg.region_id)
 
             if req.action == "sese_check":
@@ -400,6 +441,29 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                     repeats=int(req.config.get("repeats", 5)),
                 )
                 claim = record("timing/baseline", Subject(kind="tree", sha256=base_tree), "builder", result)
+                log("claim", claim_id=claim.id)
+                return _claim_response(claim)
+
+            # The onboarding actions. The rest of that phase's rows fall
+            # through to the "not implemented yet" answer below, which is
+            # what a session asking for one of them is told today.
+            if req.action == "manifest_check":
+                # No builder: the manifest is read on this side, where the
+                # gateway already has the tree and the loader that knows
+                # what a manifest has to say.
+                result = manifest_check.check(cfg.repo_dir, ref)
+                claim = record("manifest/valid", subjects_by_kind["tree"], "manifest_check", result)
+                log("claim", claim_id=claim.id)
+                return _claim_response(claim)
+
+            if req.action == "harness_build":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                result = harness_build.check(
+                    cfg.repo_dir, ref, cfg.region_id, tree_sha, strategy,
+                    load_strategy(cfg.baseline_strategy_path), builder,
+                )
+                claim = record("harness/builds", subjects_by_kind["tree"], "builder", result)
                 log("claim", claim_id=claim.id)
                 return _claim_response(claim)
         except ComponentError as exc:

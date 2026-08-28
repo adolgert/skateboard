@@ -100,7 +100,7 @@ def _deployment(tmp_path, with_sessions=True):
         "version": 1,
         "paths": paths,
         "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
-        "regions": {"ch04:step": {"code": "tsunami",
+        "regions": {"ch04:step": {"code": "tsunami", "phase": "porting",
                                   "spec_path": "notes/regions/ch04-step.sese.yaml",
                                   "strategy": "stdpar_managed",
                                   "baseline_strategy": "cpu_reference"}},
@@ -217,6 +217,24 @@ def test_a_status_call_a_local_call_and_an_unlogged_gateway_call_are_all_reporte
     assert "(local)" in text
     assert "(no request line)" in text
     assert "no request line for status" in text
+
+
+def test_an_onboarding_action_is_a_gateway_call_too(tmp_path):
+    # One reader reads both kinds of transcript, so the tool names it
+    # knows are every action in the table, not one phase's.
+    path = _write_session(tmp_path / "onboarding.jsonl", [
+        _assistant("a", None, "2026-01-01T00:00:00.000Z", [
+            {"type": "toolCall", "id": "t1", "name": "manifest_check", "arguments": {}},
+            {"type": "toolCall", "id": "t2", "name": "harness_build", "arguments": {}},
+        ]),
+    ])
+    _, _, events = session.read_session(path)
+
+    joined = session.join(events, [])
+
+    assert [(e.tool_name, e.kind) for e in joined.unmatched_calls] == [
+        ("manifest_check", "tool_call"), ("harness_build", "tool_call"),
+    ]
 
 
 def test_a_request_line_with_no_tool_call_beside_it_is_reported():

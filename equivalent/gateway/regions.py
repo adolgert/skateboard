@@ -15,8 +15,16 @@ from equivalent.manifest.schema import Manifest
 @dataclass(frozen=True)
 class RegionConfig:
     region_id: str
+    # Which kind of session this region is for: bringing a code in, or
+    # porting a region of one that has been brought in. It decides which
+    # action rows the region has, which requirement list its status is
+    # judged by, and how its allow-list is arrived at.
+    phase: str
     repo_dir: Path
-    spec_path: str
+    # The region spec the analyzer reads. A region being onboarded has
+    # none: nothing about a single region has been decided yet, and its
+    # allow-list comes from the strategy rather than from a spec.
+    spec_path: str | None
     ledger_dir: Path
     strategy_path: Path
     # The strategy the pristine baseline is built with, so a speedup

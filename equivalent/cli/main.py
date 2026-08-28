@@ -37,9 +37,11 @@ from pathlib import Path
 
 from equivalent.gateway.config import load_gateway_config
 from equivalent.gateway.submit import current_tree_and_frozen
+from equivalent.ledger.acceptance import PORTING, requirements_for
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
+from equivalent.strategy.schema import load_strategy
 
 from . import render, session
 
@@ -94,11 +96,14 @@ def _named_region(parser: argparse.ArgumentParser, config_path, region_id):
 
 
 def _open_region(parser: argparse.ArgumentParser, args):
-    """The store to read, the current tree and frozen subjects if they are knowable, and a display name.
+    """The store, the current tree and frozen subjects if knowable, the phase, and a display name.
 
     The tree and frozen subjects come back as None when only a directory
     was named: the ledger alone cannot say what the region's current tree
     is, and guessing is the status computation's own documented fallback.
+    A directory named on its own says nothing about the phase either, and
+    a ledger directory holding a port's claims is by far the common case,
+    so that reading is what a bare directory gets.
     """
     named_config = args.config is not None or args.region_id is not None
     if named_config and (args.config is None or args.region_id is None):
@@ -109,15 +114,19 @@ def _open_region(parser: argparse.ArgumentParser, args):
         parser.error("name a region directory, or --config with --region-id")
 
     if args.region_dir is not None:
-        return LedgerStore(args.region_dir), None, None, Path(args.region_dir).name
+        return LedgerStore(args.region_dir), None, None, PORTING, Path(args.region_dir).name
 
     _, cfg = _named_region(parser, args.config, args.region_id)
     store = LedgerStore(cfg.ledger_dir)
-    tree_sha, frozen_sha = current_tree_and_frozen(cfg.repo_dir, cfg.region_id, store, cfg.spec_path)
+    tree_sha, frozen_sha = current_tree_and_frozen(
+        cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase,
+        load_strategy(cfg.strategy_path),
+    )
     return (
         store,
         Subject(kind="tree", sha256=tree_sha),
         Subject(kind="frozen", sha256=frozen_sha),
+        cfg.phase,
         cfg.region_id,
     )
 
@@ -175,8 +184,8 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "status":
-        store, tree, frozen, name = _open_region(parser, args)
-        status = compute_status(store, tree=tree, frozen=frozen)
+        store, tree, frozen, phase, name = _open_region(parser, args)
+        status = compute_status(store, requirements_for(phase), phase, tree=tree, frozen=frozen)
         if args.json:
             print(json.dumps(status, indent=2, sort_keys=True))
         else:
@@ -184,7 +193,7 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "history":
-        store, _, _, _ = _open_region(parser, args)
+        store, _, _, _, _ = _open_region(parser, args)
         history = compute_history(store)
         if args.json:
             print(json.dumps(history, indent=2, sort_keys=True))

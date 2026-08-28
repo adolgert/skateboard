@@ -26,6 +26,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from equivalent.ledger.acceptance import ONBOARDING
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import frozen_subject, tree_subject
 
@@ -120,15 +121,25 @@ def _matches_any(path: str, globs: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, g) for g in globs)
 
 
-def resolve_allow_globs(store: LedgerStore, spec_path: str) -> list[str]:
+def resolve_allow_globs(store: LedgerStore, spec_path, phase: str, strategy) -> list[str]:
     """The region's current allow-list.
 
-    Before any passing sese/verified claim exists for the region, the
-    allow-list is the spec file alone (the bootstrap rule). After one
-    exists, the allow-list is whatever that claim's own detail recorded --
-    the sese_check component is the thing that writes that field; this
-    function only reads it.
+    While a code is being onboarded there is no region and no SESE claim:
+    the agent is rewriting the build, the drivers, and the manifest, and
+    the strategy's own `allow_globs` is the whole of the answer.
+
+    While a region is being ported the list narrows. Before any passing
+    sese/verified claim exists it is the spec file alone (the bootstrap
+    rule). After one exists it is whatever that claim's own detail
+    recorded -- the sese_check component is the thing that writes that
+    field; this function only reads it.
+
+    The phase and the strategy are passed in rather than read from a
+    configuration file here, so this stays a function of what it is
+    given and the caller stays the one place that knows the region.
     """
+    if phase == ONBOARDING:
+        return list(strategy.allow_globs)
     passing = [
         c for c in store.all_claims()
         if c.predicateType == "sese/verified" and c.predicate.verdict == "pass"
@@ -246,6 +257,19 @@ def materialize_tree(repo_dir, ref: str, dest_dir) -> None:
         path.write_bytes(f["content"])
 
 
+def attempt_id_for_strategy(region_id: str, tree_sha: str, strategy_name: str) -> str:
+    """The workspace key for building one tree with one named strategy.
+
+    Onboarding builds the same tree twice, once per strategy, and each
+    build needs its own workspace on the builder -- two builds sharing one
+    would leave the second reading the first's object files. Every later
+    onboarding step that wants one of those builds derives the same key
+    from the same three things rather than being handed it.
+    """
+    safe_strategy = re.sub(r"[^A-Za-z0-9._-]", "-", strategy_name)
+    return f"{attempt_id_for(region_id, tree_sha)}-{safe_strategy}"
+
+
 def attempt_id_for(region_id: str, tree_sha: str) -> str:
     """A stable workspace key the builder can reuse across build/run/sanitize/time.
 
@@ -290,15 +314,21 @@ def baseline_tree_sha(repo_dir) -> str:
     return tree_subject(tracked_files(repo_dir, "main")).sha256
 
 
-def current_tree_and_frozen(repo_dir, region_id: str, store: LedgerStore, spec_path: str) -> tuple[str, str]:
+def current_tree_and_frozen(
+    repo_dir, region_id: str, store: LedgerStore, spec_path, phase: str, strategy,
+) -> tuple[str, str]:
     """The region's current tree and frozen-set hashes, read straight from the gateway repo.
 
     Before the region's first submit, the branch doesn't exist yet and the
     current tree is just the baseline itself. This never runs `submit()`
     and never writes anything; it only reads what is already there.
+
+    An onboarding region whose strategy allows the whole tree has an empty
+    frozen set, and that is the honest answer: nothing about the code is
+    being held still while it is brought in.
     """
     ref = current_ref(repo_dir, region_id)
-    allow_globs = resolve_allow_globs(store, spec_path)
+    allow_globs = resolve_allow_globs(store, spec_path, phase, strategy)
     return (
         tree_subject(tracked_files(repo_dir, ref)).sha256,
         frozen_for_allow_globs(repo_dir, allow_globs),

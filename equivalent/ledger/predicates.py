@@ -81,6 +81,43 @@ _register(
     "Wall-clock timing of the pristine baseline build, on the baseline tree.",
 )
 
+# What an onboarding session files. All of it is the agent's own work
+# being checked -- the manifest, the makefile, the drivers it wrote -- so
+# the agent sees the whole detail: it is the only way it can fix what
+# failed.
+_register(
+    "manifest/valid", True, DetailLevel.FULL,
+    "The manifest the tree carries describes the code completely: every path it "
+    "names is in the tree, every floating-point output has a tolerance band, and "
+    "the two datasets are different runs. On the tree.",
+)
+_register(
+    "harness/builds", True, DetailLevel.FULL,
+    "Every target the tree's manifest declares builds under both the baseline "
+    "strategy and the port strategy, with each strategy's flags proven to have "
+    "reached every compile. On the tree.",
+)
+_register(
+    "harness/captured", True, DetailLevel.FULL,
+    "The capture program wrote a visible and a held-out dataset that match the "
+    "declared interface and are different runs. On the tree.",
+)
+_register(
+    "harness/replays", True, DetailLevel.FULL,
+    "The replay driver reproduces the captured outputs bitwise from the captured "
+    "inputs, on the tree.",
+)
+_register(
+    "harness/deterministic", True, DetailLevel.FULL,
+    "Capturing and replaying a second time agrees bitwise with the stored capture "
+    "set, on the tree.",
+)
+_register(
+    "harness/times", True, DetailLevel.FULL,
+    "The timing target runs twice inside its budget and writes the same declared "
+    "outputs both times, on the tree.",
+)
+
 
 def get(name: str) -> PredicateType:
     return PREDICATE_TYPES[name]

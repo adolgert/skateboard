@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from equivalent.gateway.app import create_app
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import init_baseline_repo
+from equivalent.ledger.acceptance import ONBOARDING, PORTING, requirements_for
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
@@ -22,13 +23,14 @@ def _seed(root):
     return root
 
 
-def _region(tmp_path, region_id="ch04:step"):
+def _region(tmp_path, region_id="ch04:step", phase=PORTING):
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
     working = tmp_path / "working"
     working.mkdir()
     cfg = RegionConfig(
         region_id=region_id,
+        phase=phase,
         repo_dir=repo_dir,
         spec_path="notes/regions/ch04-step.sese.yaml",
         ledger_dir=tmp_path / "ledger",
@@ -46,14 +48,41 @@ def _client(tmp_path, region_id="ch04:step"):
     return TestClient(app), cfg
 
 
-def test_get_table_returns_the_action_rows(tmp_path):
-    client, _ = _client(tmp_path)
+def test_get_table_returns_the_action_rows_of_the_regions_phase(tmp_path):
+    client, cfg = _client(tmp_path)
 
-    r = client.get("/table", headers=HEADERS)
+    r = client.get("/table", params={"region": cfg.region_id}, headers=HEADERS)
 
     assert r.status_code == 200
     names = {row["name"] for row in r.json()}
     assert {"sese_check", "build_replay", "accept"} <= names
+    # Nothing from the other phase: what a session may do is decided by
+    # the region it is for.
+    assert "manifest_check" not in names
+
+
+def test_get_table_for_an_onboarding_region_returns_the_onboarding_rows(tmp_path):
+    cfg = _region(tmp_path, "tsunami:onboarding", phase=ONBOARDING)
+    client = TestClient(create_app({cfg.region_id: cfg}, TOKEN))
+
+    rows = client.get("/table", params={"region": cfg.region_id}, headers=HEADERS).json()
+
+    assert [row["name"] for row in rows] == [
+        "manifest_check", "harness_build", "harness_capture", "harness_replay",
+        "harness_determinism", "harness_timing", "onboarded",
+    ]
+    # The row that names the whole list has nothing to dispatch to, the
+    # same way "accept" does not.
+    assert rows[-1]["component"] is None
+
+
+def test_get_table_without_a_region_says_it_needs_one(tmp_path):
+    client, _ = _client(tmp_path)
+
+    r = client.get("/table", headers=HEADERS)
+
+    assert r.status_code == 400
+    assert "region" in r.json()["detail"]
 
 
 def test_get_table_matches_the_pi_extension_fixture(tmp_path):
@@ -69,7 +98,7 @@ def test_get_table_matches_the_pi_extension_fixture(tmp_path):
     fixture_path = Path(__file__).resolve().parents[3] / "pi-extension" / "test" / "fixtures" / "table.json"
     fixture = json.loads(fixture_path.read_text())
 
-    r = client.get("/table", headers=HEADERS)
+    r = client.get("/table", params={"region": "ch04:step"}, headers=HEADERS)
 
     assert r.json() == fixture
 
@@ -87,10 +116,16 @@ def test_get_status_reports_the_real_current_tree_before_any_check_has_run(tmp_p
     # The gateway's answer matches what compute_status itself would say
     # given the same tree/frozen -- one rendering, not two.
     from equivalent.gateway.submit import current_tree_and_frozen
+    from equivalent.ledger.acceptance import requirements_for
     from equivalent.ledger.subjects import Subject
-    tree_sha, frozen_sha = current_tree_and_frozen(cfg.repo_dir, cfg.region_id, store, cfg.spec_path)
+    from equivalent.strategy.schema import load_strategy
+    tree_sha, frozen_sha = current_tree_and_frozen(
+        cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase,
+        load_strategy(cfg.strategy_path),
+    )
     expected = compute_status(
-        store, tree=Subject(kind="tree", sha256=tree_sha), frozen=Subject(kind="frozen", sha256=frozen_sha),
+        store, requirements_for(cfg.phase), cfg.phase,
+        tree=Subject(kind="tree", sha256=tree_sha), frozen=Subject(kind="frozen", sha256=frozen_sha),
     )
     assert body == expected
 
@@ -141,7 +176,7 @@ def test_compute_status_and_history_without_repo_info_are_unchanged(tmp_path):
     # The CLI's own behaviour and golden file must keep working: no tree
     # or frozen argument means fall back to the claims-based guess.
     store = LedgerStore(tmp_path / "region")
-    status = compute_status(store)
+    status = compute_status(store, requirements_for(PORTING), PORTING)
     history = compute_history(store)
     assert status["tree"] is None
     assert status["accepted"] is False

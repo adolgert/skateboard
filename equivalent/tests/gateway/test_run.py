@@ -6,11 +6,13 @@ from equivalent.gateway.app import config_hash, create_app
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import current_tree_and_frozen, init_baseline_repo, tracked_files
 from equivalent.gateway.table import ACTION_TABLE
+from equivalent.ledger.acceptance import PHASES, PORTING
 from equivalent.ledger.predicates import PREDICATE_TYPES
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject, frozen_subject
 from equivalent.manifest.schema import load_manifest
+from equivalent.strategy.schema import load_strategy
 from equivalent.tests.fakes import write_program
 
 TOKEN = "test-token"
@@ -34,10 +36,19 @@ def _region(tmp_path, with_makefile=False):
     working = tmp_path / "working"
     working.mkdir()
     return RegionConfig(
-        region_id="ch04:step", repo_dir=repo_dir, spec_path=SPEC_PATH, ledger_dir=tmp_path / "ledger",
+        region_id="ch04:step", phase=PORTING, repo_dir=repo_dir, spec_path=SPEC_PATH,
+        ledger_dir=tmp_path / "ledger",
         strategy_path=STRATEGY_PATH, baseline_strategy_path=BASELINE_STRATEGY_PATH,
         working_copy_dir=working,
         manifest=load_manifest(write_program(tmp_path) / "manifest.yaml"),
+    )
+
+
+def _current(cfg, store):
+    """The tree and frozen hashes the gateway itself would compute."""
+    return current_tree_and_frozen(
+        cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase,
+        load_strategy(cfg.strategy_path),
     )
 
 
@@ -101,7 +112,7 @@ def test_frozen_requirement_survives_an_allowed_edit_but_tree_requirement_does_n
     (working / "src").mkdir(parents=True)
     (working / "src" / "mod_kernel.f90").write_text("subroutine step\n  x = 1\nend subroutine\n")
     client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
-    tree_a, _ = current_tree_and_frozen(cfg.repo_dir, cfg.region_id, store, cfg.spec_path)
+    tree_a, _ = _current(cfg, store)
     store.record_claim(
         [Subject(kind="tree", sha256=tree_a)], "build/replay",
         Predicate(tool="builder", version="0.1", configHash="cfg", verdict="pass", detail={}),
@@ -134,7 +145,7 @@ def test_a_failing_requirement_claim_still_refuses_the_dependent_action(tmp_path
     # that the check never ran.
     client, cfg, store = _client(tmp_path)
     _submit_spec_only(client, cfg)
-    _, frozen_sha = current_tree_and_frozen(cfg.repo_dir, cfg.region_id, store, cfg.spec_path)
+    _, frozen_sha = _current(cfg, store)
     failed = store.record_claim(
         [Subject(kind="frozen", sha256=frozen_sha)], "sese/verified",
         Predicate(tool="sese_check", version="0.1", configHash="cfg", verdict="fail", detail={}),
@@ -198,7 +209,7 @@ def test_every_run_call_writes_exactly_one_request_log_line_with_the_session_id(
 
 
 def test_every_row_references_real_predicate_types_and_agrees_with_the_registry_on_determinism():
-    known_component_prefixes = ("analyzer:", "builder:", "oracle:")
+    known_component_prefixes = ("analyzer:", "builder:", "oracle:", "gateway:")
     for row in ACTION_TABLE:
         for predicate_type in row.emits:
             assert predicate_type in PREDICATE_TYPES
@@ -206,9 +217,12 @@ def test_every_row_references_real_predicate_types_and_agrees_with_the_registry_
             assert predicate_type in PREDICATE_TYPES
             assert subject_kind in ("tree", "frozen")
         if row.component is None:
-            assert row.name == "accept"
+            # The one row per phase that names the whole requirement list
+            # has nothing to dispatch to.
+            assert row.name in ("accept", "onboarded")
         else:
             assert row.component.startswith(known_component_prefixes)
+        assert row.phase in PHASES
         if row.emits:
             assert row.deterministic == all(PREDICATE_TYPES[pt].deterministic for pt in row.emits)
         assert isinstance(row.config_keys, tuple)

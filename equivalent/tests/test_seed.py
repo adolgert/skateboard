@@ -17,13 +17,15 @@ CODE = "tsunami"
 # compiler output, and a seed that grew a .mod file or a binary would
 # change the baseline hash without anyone choosing to.
 #
-# The two under harness/ are the replay driver and the capture program.
-# They are the code's own, built by the code's own makefile and frozen
-# while a region of it is ported -- no strategy allows them to be edited.
+# The ones under harness/ are the replay driver, the capture program, and
+# the tolerance policy. They are the code's own, built or read by the
+# code's own makefile and frozen while a region of it is ported -- no
+# strategy allows them to be edited.
 BASELINE = [
     "Makefile",
     "harness/gen_reference.f90",
     "harness/replay.f90",
+    "harness/tolerances.json",
     "src/mod_diff.f90",
     "src/mod_initial.f90",
     "src/mod_kernel.f90",
