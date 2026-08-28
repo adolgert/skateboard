@@ -22,13 +22,36 @@ services:
       context: ..
       dockerfile: deploy/agent/Dockerfile
     networks: [agent_net, egress_net]
+    # A name for this machine as seen from inside the container, so a model
+    # server running here -- ollama, say -- can be named in models.json. It is
+    # a widening: the session can reach services on this machine that are not
+    # exposed to the internet. Remove this line to take it back.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     gpus: all
     environment:
       - EQUIVALENT_GATEWAY_URL=http://gateway:8000
       - EQUIVALENT_GATEWAY_TOKEN=${EQUIVALENT_TOKEN}
       - EQUIVALENT_REGION=${EQUIVALENT_REGION:-ch04:step}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # How the session reaches a model. Each of these is empty unless it is
+      # set in this terminal or in deploy/.env, and the terminal wins. The
+      # session is the only container with a route to the internet, so these
+      # belong here and nowhere else. The names are pi's own, from the
+      # environment section of `pi --help`; add one that is missing.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - CEREBRAS_API_KEY=${CEREBRAS_API_KEY:-}
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      - TOGETHER_API_KEY=${TOGETHER_API_KEY:-}
+      - FIREWORKS_API_KEY=${FIREWORKS_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
     volumes:
       - ./state/working:/working
       - ./state/sessions:/sessions

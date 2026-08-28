@@ -50,8 +50,9 @@ directory under `deploy/state/` on the host, owned by you:
 - Python 3.12 on the host, for reading the ledger from outside the
   containers. Node is not needed on the host; `pi` runs inside the agent
   container.
-- A model for `pi` to run. `pi` authenticates through its own
-  `/login` command, so no API key is written anywhere in this repository.
+- A model for `pi` to run, by any of the three routes under "Choosing a
+  model" below: `pi`'s own `/login`, an API key passed through Docker, or
+  a provider you define yourself.
 
 ## Install
 
@@ -140,21 +141,76 @@ extension prints one line when it has connected:
 
     equivalent: registered 10 tools for region ch04:step
 
-Log in once:
+An argument to `pi.sh` that begins with a dash is added to the session's
+own command line (`./pi.sh --model ollama/devstral-small-2:24b`).
+Anything else replaces the command, which is how the isolation check
+above is run.
 
-    /login
+## Choosing a model
 
-`pi` writes the credentials to `state/pi-home/agent/auth.json`, which is
-a mount, so later sessions are already logged in. If the login flow
-needs a browser that cannot be reached from inside the container, run
-`pi` and `/login` on the host instead and copy the resulting
+The session container is the only one with a route to the internet, so
+this is the only place a model credential belongs. The gateway has no
+internet route and never sees one. `deploy/state/pi-home` is mounted as
+`pi`'s configuration directory inside the container, with the same layout
+as `~/.pi` on the host, and git ignores it. Three routes, which combine:
+
+**An API key, passed through Docker.** The agent service in
+`docker-compose.yml` forwards a list of provider variables —
+`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and others — to
+that container and to no other. Each is empty unless you set it, in
+either of two places:
+
+    export GEMINI_API_KEY=...           # in this terminal; never on disk
+    echo 'GEMINI_API_KEY=...' >> .env   # or in deploy/.env, which git ignores
+
+A value in the terminal wins over one in `.env`. If your shell profile
+already exports the key, it is already forwarded and there is nothing to
+do. The variable names are `pi`'s own, listed in the environment section
+of `pi --help`; to use a provider whose name is not in the compose file,
+add a line for it there.
+
+**`/login`, inside the session.** Type it at the `pi` prompt and follow
+the flow. `pi` writes the result to `state/pi-home/agent/auth.json`, so
+later sessions are already logged in. If the login needs a browser the
+container cannot open, run `pi` and `/login` on the host and copy your
 `~/.pi/agent/auth.json` to `deploy/state/pi-home/agent/auth.json`; it is
-the same file.
+the same file. Copying it means one credential is refreshed from two
+places, which for a rotating token can log one of them out — a
+container-only login avoids that.
+
+**A provider you define, in `models.json`.** For a local server or an
+endpoint `pi` does not know, put a `models.json` in
+`deploy/state/pi-home/agent/`. It is read exactly as `~/.pi/agent/models.json`
+is on the host, so your own file can be copied in, with one change: a
+`baseUrl` naming `localhost` means the container, not this machine. The
+compose file gives the session the name `host.docker.internal` for this
+machine, so for a server on the host — ollama, say — rewrite the URL as
+you copy:
+
+    sed 's#//localhost:#//host.docker.internal:#' \
+        ~/.pi/agent/models.json > state/pi-home/agent/models.json
+
+The server has to be listening on more than the loopback address for
+that to reach it: ollama needs `OLLAMA_HOST=0.0.0.0`. Naming this
+machine is a widening — the session can reach services here that are not
+exposed to the internet — and the `extra_hosts` line in the compose file
+is where it is granted and can be taken back. It does not affect the
+session's isolation from the builder, the oracle, or the ledger, which
+`isolation_check.sh` still asserts.
+
+Confirm what the session can actually use:
+
+    ./pi.sh --list-models
+
+Without a stated preference `pi` starts on Google's default model. To
+change that for every session, write `state/pi-home/agent/settings.json`
+with the provider and model you want:
+
+    {"defaultProvider": "ollama", "defaultModel": "devstral-small-2:24b"}
+
+Within a session, Ctrl+P cycles models.
 
 From here, `pi-users-manual.md` takes over.
-
-Arguments to `pi.sh` are passed to the container's command, which is how
-the isolation check above is run.
 
 ## Read the ledger while a session is running
 
