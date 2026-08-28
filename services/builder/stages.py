@@ -12,7 +12,14 @@ import shutil
 import subprocess
 import time
 
-HARNESS = "/opt/harness"  # baked, trusted: mod_capture.f90, replay.f90
+HARNESS = "/opt/harness"  # baked, trusted: npy_io.f90, replay.f90
+
+# The capture format on disk: one file per variable in the case directory,
+# <variable>.npy going in and <variable>.out.npy coming out. Each file says
+# for itself what type and shape it holds, so this service never has to be
+# told a variable name or an element type.
+INPUT_SUFFIX = ".npy"
+OUTPUT_SUFFIX = ".out.npy"
 
 # Compile profiles. The orchestrator selects one per rung/baseline; the agent
 # never supplies flags. cc89 = RTX 4000 Ada.
@@ -24,9 +31,9 @@ PROFILES = {
 }
 
 # Fixed source lists (dependency order). Content comes from the payload for the
-# work-tree modules; mod_capture/replay come from the trusted baked copy.
+# work-tree modules; npy_io/replay come from the trusted baked copy.
 REPLAY_PAYLOAD = ["mod_params.f90", "mod_diff.f90", "mod_kernel.f90"]
-REPLAY_BAKED = [f"{HARNESS}/mod_capture.f90", f"{HARNESS}/replay.f90"]
+REPLAY_BAKED = [f"{HARNESS}/npy_io.f90", f"{HARNESS}/replay.f90"]
 TSUNAMI_PAYLOAD = ["mod_params.f90", "mod_diff.f90", "mod_initial.f90", "mod_kernel.f90", "tsunami.f90"]
 
 
@@ -141,12 +148,43 @@ def kernel_launches(stderr, notify):
     return len(found), found
 
 
+def _write_case(cdir, arrs):
+    """One case directory holding the inputs the caller sent, and nothing else.
+
+    The variable names come from the request; what each file holds comes
+    from the file. The directory is rebuilt from scratch every time, so a
+    replay never sees an output an earlier run left behind.
+    """
+    shutil.rmtree(cdir, ignore_errors=True)
+    os.makedirs(cdir, exist_ok=True)
+    for variable, encoded in arrs.items():
+        with open(os.path.join(cdir, f"{variable}{INPUT_SUFFIX}"), "wb") as f:
+            f.write(base64.b64decode(encoded))
+    return cdir
+
+
+def _read_outputs(cdir):
+    """Every output file the replay driver left in one case directory.
+
+    The builder is not told which outputs to expect: it returns whatever
+    the driver wrote, and the gateway and the oracle are the ones that
+    know what the code declares. So a driver that wrote nothing produces
+    an empty set here rather than an error about a name this file guessed.
+    """
+    outputs = {}
+    for path in sorted(glob.glob(os.path.join(cdir, f"*{OUTPUT_SUFFIX}"))):
+        variable = os.path.basename(path)[: -len(OUTPUT_SUFFIX)]
+        with open(path, "rb") as f:
+            outputs[variable] = base64.b64encode(f.read()).decode()
+    return outputs
+
+
 # net_jail (unshare -n) is defense-in-depth. It needs CAP_SYS_ADMIN, which the
 # builder container does not hold by default, and build_net is already
 # internal: true (no internet, no route to the oracle) -- so we leave it off
 # tonight and turn it on as later hardening once the container has the cap.
 def run(attempt_id, profile, cases, mandatory=False, net_jail=False):
-    """cases: {name: {h_in: b64, u_in: b64}} -> replay each, return outputs + kernel count."""
+    """cases: {name: {variable: b64 npy}} -> replay each, return outputs + kernel count."""
     prof = PROFILES[profile]
     ws = _ws(attempt_id)
     replay = os.path.join(ws, "replay")
@@ -159,12 +197,7 @@ def run(attempt_id, profile, cases, mandatory=False, net_jail=False):
     launched_at = set()
     log_tail = ""
     for name, arrs in cases.items():
-        cdir = os.path.join(ws, "cases", name)
-        shutil.rmtree(cdir, ignore_errors=True)
-        os.makedirs(cdir, exist_ok=True)
-        for k in ("h_in", "u_in"):
-            with open(os.path.join(cdir, f"{k}.bin"), "wb") as f:
-                f.write(base64.b64decode(arrs[k]))
+        cdir = _write_case(os.path.join(ws, "cases", name), arrs)
         # jail the child from the network (defense in depth; build_net is already internal)
         prefix = ["unshare", "-n", "--"] if net_jail else []
         try:
@@ -177,11 +210,7 @@ def run(attempt_id, profile, cases, mandatory=False, net_jail=False):
         total_kernels += kernels
         launched_at.update(launches)
         log_tail = err[-1500:]
-        with open(os.path.join(cdir, "h_out.bin"), "rb") as f:
-            h_b = f.read()
-        with open(os.path.join(cdir, "u_out.bin"), "rb") as f:
-            u_b = f.read()
-        outputs[name] = {"h": base64.b64encode(h_b).decode(), "u": base64.b64encode(u_b).decode()}
+        outputs[name] = _read_outputs(cdir)
 
     return {
         "ok": True, "stage": "run", "outputs": outputs,
@@ -194,18 +223,8 @@ def run(attempt_id, profile, cases, mandatory=False, net_jail=False):
     }
 
 
-def _write_case(ws, name, arrs):
-    cdir = os.path.join(ws, "san", name)
-    shutil.rmtree(cdir, ignore_errors=True)
-    os.makedirs(cdir, exist_ok=True)
-    for k in ("h_in", "u_in"):
-        with open(os.path.join(cdir, f"{k}.bin"), "wb") as f:
-            f.write(base64.b64decode(arrs[k]))
-    return cdir
-
-
 def sanitize(attempt_id, profile, cases, tools):
-    """cases: {name: {h_in: b64, u_in: b64}} -> run every tool over every case.
+    """cases: {name: {variable: b64 npy}} -> run every tool over every case.
 
     The caller chooses how many cases to send; whether that is one or all
     of them is the strategy's decision, not this file's. There is still
@@ -225,7 +244,7 @@ def sanitize(attempt_id, profile, cases, tools):
         last_log = ""
         unavailable = None
         for name, arrs in cases.items():
-            cdir = _write_case(ws, name, arrs)
+            cdir = _write_case(os.path.join(ws, "san", name), arrs)
             cmd = ["compute-sanitizer", "--tool", tool, "--error-exitcode", "1", replay, cdir]
             try:
                 rc, out, err = _run(cmd, cwd=ws, timeout=600)

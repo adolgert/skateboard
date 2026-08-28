@@ -20,22 +20,29 @@ what the manifest's build section already names.
 import json
 import os
 import shutil
-import struct
 import subprocess
 import sys
 import tempfile
 
+import numpy as np
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 CODE = os.path.dirname(HERE)
 REPO = os.path.dirname(os.path.dirname(CODE))
+sys.path.insert(0, REPO)
+
+from equivalent.capture import npy  # noqa: E402  (found through the path added above)
+from equivalent.manifest.schema import load_manifest  # noqa: E402
+
 WORK = os.path.join(CODE, "baseline", "src")
 CAPTURE = os.path.join(REPO, "services", "builder", "harness")
 VIS_IN = os.path.join(CODE, "datasets", "visible")
+MANIFEST = os.path.join(CODE, "manifest.yaml")
 OUT = os.path.join(CODE, "tolerances.json")
 
 KMODS = [f"{WORK}/mod_params.f90", f"{WORK}/mod_diff.f90",
          f"{WORK}/mod_initial.f90", f"{WORK}/mod_kernel.f90"]
-CAP = f"{CAPTURE}/mod_capture.f90"
+NPY_IO = f"{CAPTURE}/npy_io.f90"
 REPLAY = f"{CAPTURE}/replay.f90"
 
 PROFILES = {
@@ -45,30 +52,29 @@ PROFILES = {
 
 
 def build(profile_flags, outbin, tmp):
-    cmd = ["gfortran", *profile_flags, "-J", tmp, "-o", outbin, *KMODS, CAP, REPLAY]
+    cmd = ["gfortran", *profile_flags, "-J", tmp, "-o", outbin, NPY_IO, *KMODS, REPLAY]
     subprocess.run(cmd, check=True, cwd=tmp)
 
 
-def read_f32(path):
-    with open(path, "rb") as f:
-        data = f.read()
-    n = len(data) // 4
-    return list(struct.unpack(f"<{n}f", data))
-
-
-def f32_bits(x):
-    return struct.unpack("<i", struct.pack("<f", x))[0]
-
-
 def ulp_diff(a, b):
-    ia, ib = f32_bits(a), f32_bits(b)
-    if (ia < 0) != (ib < 0):  # opposite signs: distance across zero
-        return abs(ia) + abs(ib)
-    return abs(ia - ib)
+    """Distance in representable steps of a's own float type."""
+    as_int = {np.float32: np.int32, np.float64: np.int64}[a.dtype.type]
+    ia = a.view(as_int).astype(np.int64)
+    ib = b.view(as_int).astype(np.int64)
+    floor = np.int64(np.iinfo(as_int).min)
+    ia = np.where(ia < 0, floor - ia, ia)
+    ib = np.where(ib < 0, floor - ib, ib)
+    return np.abs(ia - ib)
 
 
 def main():
-    cases = json.load(open(os.path.join(VIS_IN, "cases.json")))["cases"]
+    manifest = load_manifest(MANIFEST)
+    # The variables to calibrate are the ones the manifest declares as
+    # outputs of the region, and only the floating-point ones: an integer
+    # or logical output is compared exactly and has no band to set.
+    variables = [v.name for v in manifest.interface.outputs if v.dtype in ("f32", "f64")]
+    cases = npy.dataset_cases(VIS_IN)
+
     with tempfile.TemporaryDirectory() as tmp:
         bins = {}
         for name, flags in PROFILES.items():
@@ -76,32 +82,33 @@ def main():
             build(flags, b, tmp)
             bins[name] = b
 
-        obs = {"h": {"abs": 0.0, "rel": 0.0, "ulp": 0}, "u": {"abs": 0.0, "rel": 0.0, "ulp": 0}}
+        obs = {v: {"abs": 0.0, "rel": 0.0, "ulp": 0} for v in variables}
         for c in cases:
             # run both builds on a private copy of this case's inputs
             outs = {}
             for name, b in bins.items():
                 d = os.path.join(tmp, name, c)
                 os.makedirs(d, exist_ok=True)
-                shutil.copy(os.path.join(VIS_IN, c, "h_in.bin"), d)
-                shutil.copy(os.path.join(VIS_IN, c, "u_in.bin"), d)
+                for entry in os.listdir(os.path.join(VIS_IN, c)):
+                    shutil.copy(os.path.join(VIS_IN, c, entry), d)
                 subprocess.run([b, d], check=True)
-                outs[name] = {v: read_f32(os.path.join(d, f"{v}_out.bin")) for v in ("h", "u")}
-            for v in ("h", "u"):
-                a_list, b_list = outs["plain"][v], outs["fastmath"][v]
-                for a, bb in zip(a_list, b_list):
-                    ad = abs(a - bb)
-                    rd = ad / (abs(a) + 1e-30)
-                    obs[v]["abs"] = max(obs[v]["abs"], ad)
-                    obs[v]["rel"] = max(obs[v]["rel"], rd)
-                    obs[v]["ulp"] = max(obs[v]["ulp"], ulp_diff(a, bb))
+                outs[name] = {
+                    v: npy.decode(npy.output_path(d, v).read_bytes()) for v in variables
+                }
+            for v in variables:
+                a, b = outs["plain"][v], outs["fastmath"][v]
+                ad = np.abs(a - b)
+                rd = ad / (np.abs(a) + np.finfo(a.dtype).tiny)
+                obs[v]["abs"] = max(obs[v]["abs"], float(ad.max()))
+                obs[v]["rel"] = max(obs[v]["rel"], float(rd.max()))
+                obs[v]["ulp"] = max(obs[v]["ulp"], int(ulp_diff(a, b).max()))
 
-    # bands: a few multiples above observed CPU spread, with floors for float32
+    # bands: a few multiples above observed CPU spread, with floors
     MARGIN = 8
     ABS_FLOOR, REL_FLOOR, ULP_FLOOR = 1e-6, 1e-5, 16
-    variables = {}
-    for v in ("h", "u"):
-        variables[v] = {
+    bands = {}
+    for v in variables:
+        bands[v] = {
             "abs": max(ABS_FLOOR, MARGIN * obs[v]["abs"]),
             "rel": max(REL_FLOOR, MARGIN * obs[v]["rel"]),
             "ulp": int(max(ULP_FLOOR, MARGIN * obs[v]["ulp"])),
@@ -117,7 +124,7 @@ def main():
             "note": "Recalibrate against nvfortran once the HPC SDK image is available.",
         },
         "acceptance": "A variable passes if (max_abs <= abs) OR (max_rel <= rel) OR (max_ulp <= ulp).",
-        "variables": variables,
+        "variables": bands,
     }
     json.dump(policy, open(OUT, "w"), indent=2)
     print(json.dumps(policy, indent=2))

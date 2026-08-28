@@ -44,11 +44,15 @@ class BuilderClient:
         return r.json()
 
     def run(self, attempt_id: str, profile: str, cases: dict, mandatory: bool = False) -> dict:
+        """Replay every case. `cases` is {name: {variable: base64 of its .npy file}},
+        and the outputs come back in the same shape. The .npy file says what
+        type and shape each array is, so nothing on the wire repeats it."""
         r = self._http.post("/v1/run", json={"attempt_id": attempt_id, "profile": profile, "cases": cases, "mandatory": mandatory})
         r.raise_for_status()
         return r.json()
 
     def sanitize(self, attempt_id: str, profile: str, cases: dict, tools: list[str]) -> dict:
+        """Run each sanitizer over each case. `cases` is shaped as for run()."""
         r = self._http.post("/v1/sanitize", json={"attempt_id": attempt_id, "profile": profile, "cases": cases, "tools": tools})
         r.raise_for_status()
         return r.json()
@@ -69,11 +73,13 @@ class OracleClient:
         return r.json()
 
     def holdout_inputs(self) -> dict:
+        """{"dataset": "holdout", "cases": {name: {variable: base64 npy}}} -- inputs only."""
         r = self._http.get("/v1/dataset/holdout/inputs")
         r.raise_for_status()
         return r.json()
 
     def compare(self, dataset: str, outputs: dict, attempt_id: str = "unknown") -> dict:
+        """Judge one dataset's outputs, shaped {case: {variable: base64 npy}}."""
         r = self._http.post("/v1/compare", json={"attempt_id": attempt_id, "dataset": dataset, "outputs": outputs})
         r.raise_for_status()
         return r.json()

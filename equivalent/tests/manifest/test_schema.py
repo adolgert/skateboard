@@ -24,8 +24,8 @@ MANIFEST = {
     "interface": {
         "module": "mod_kernel",
         "entry": "step",
-        "inputs": [{"name": "h", "dtype": "f32", "rank": 1}],
-        "outputs": [{"name": "h", "dtype": "f32", "rank": 1}],
+        "inputs": [{"name": "field", "dtype": "f32", "rank": 1}],
+        "outputs": [{"name": "field", "dtype": "f32", "rank": 1}],
     },
     "datasets": {
         "visible": {"args": ["100", "5000", "25", "0.02"]},
@@ -56,7 +56,12 @@ def test_the_tsunami_manifest_loads_and_resolves_its_paths():
     assert manifest.tolerances == TSUNAMI.parent / "tolerances.json"
     assert manifest.build.targets["replay"].target == "replay"
     assert manifest.build.targets["timing"].executable == "tsunami"
-    assert [v.name for v in manifest.interface.outputs] == ["h", "u"]
+    # The region reads and writes the same two arrays, which is what makes
+    # a one-step replay of it possible at all.
+    assert len(manifest.interface.outputs) == 2
+    assert [v.name for v in manifest.interface.outputs] == [
+        v.name for v in manifest.interface.inputs
+    ]
     assert manifest.datasets["visible"].args == ("100", "5000", "25", "0.02")
     assert manifest.timing.budget_s == 300
     assert manifest.properties is None

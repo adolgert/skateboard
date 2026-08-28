@@ -17,9 +17,9 @@ SCRIPT = PROJECT_ROOT / "tools" / "regionharness" / "check_sese.py"
 CLEAN_SOURCE = """\
 module mod_kernel
 contains
-subroutine step(h, u)
-  real :: h, u
-  h = h + u
+subroutine step(a, b)
+  real :: a, b
+  a = a + b
 end subroutine step
 end module mod_kernel
 """
@@ -27,10 +27,10 @@ end module mod_kernel
 GOTO_SOURCE = """\
 module mod_kernel
 contains
-subroutine step(h, u)
-  real :: h, u
+subroutine step(a, b)
+  real :: a, b
   if (h > 0) goto 10
-  h = h + u
+  a = a + b
 10 continue
 end subroutine step
 end module mod_kernel

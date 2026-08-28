@@ -2,20 +2,21 @@ program gen_reference
 
   ! Reference (ground-truth) generator. Runs the FULL simulation on the CPU
   ! using the pristine kernel, and snapshots a handful of single-step cases:
-  ! for each captured step, the state going in (h_in,u_in) and the state one
-  ! step later (h_out,u_out). Those snapshots are the oracle's expected answers.
+  ! for each captured step, the state going in and the state one step later.
+  ! Those snapshots are the oracle's expected answers.
   !
   ! Usage: gen_reference <grid_size> <num_steps> <icenter> <decay> <outdir>
-  ! Emits: <outdir>/caseNNNN/{h_in,u_in,h_out,u_out}.bin  (5 evenly spaced steps)
+  ! Emits: <outdir>/caseNNNN/{h,u}.npy, {h,u}.out.npy, and case.json naming
+  !        them  (5 evenly spaced steps)
 
   use iso_fortran_env, only: int32, real32
   use mod_initial, only: set_gaussian
   use mod_kernel, only: step
-  use mod_capture, only: dump_r32
+  use npy_io, only: npy_save
 
   implicit none
 
-  integer(int32) :: n, j, ncase, grid_size, num_steps, icenter
+  integer(int32) :: n, j, ncase, grid_size, num_steps, icenter, unit
   real(real32) :: decay
   character(len=512) :: arg, outdir, casedir
   integer(int32) :: capsteps(5)
@@ -41,11 +42,15 @@ program gen_reference
     if (any(capsteps == n)) then
       write(casedir, '(a,"/case",i4.4)') trim(outdir), ncase
       call execute_command_line('mkdir -p ' // trim(casedir))
-      call dump_r32(trim(casedir) // '/h_in.bin', h)
-      call dump_r32(trim(casedir) // '/u_in.bin', u)
+      call npy_save(trim(casedir) // '/h.npy', h)
+      call npy_save(trim(casedir) // '/u.npy', u)
       call step(h, u)
-      call dump_r32(trim(casedir) // '/h_out.bin', h)
-      call dump_r32(trim(casedir) // '/u_out.bin', u)
+      call npy_save(trim(casedir) // '/h.out.npy', h)
+      call npy_save(trim(casedir) // '/u.out.npy', u)
+      ! What this directory holds, so a reader needs no list from elsewhere.
+      open(newunit=unit, file=trim(casedir) // '/case.json', status='replace', action='write')
+      write(unit, '(a)') '{"inputs": ["h", "u"], "outputs": ["h", "u"]}'
+      close(unit)
       ncase = ncase + 1
     else
       call step(h, u)

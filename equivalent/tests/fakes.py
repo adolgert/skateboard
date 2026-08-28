@@ -12,13 +12,31 @@ against the real thing; only what's inside the box differs.
 laid out the way `programs/<code>/` is, so every test that needs a
 manifest gets one from the same place. A test that copied its own
 manifest would keep passing after the schema changed under it.
+
+The fixture code's variables are deliberately not the worked example's:
+two variables of different element types and different ranks, so a test
+that passed only because everything was one rank-1 float array would
+fail here.
 """
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
+import numpy as np
 import yaml
+
+from equivalent.capture import npy
+
+# The region interface the fixture code declares, and the shape each
+# variable has in its dataset. Everything the fakes hand back is built
+# from these, so the fixture's arrays always match its own manifest.
+FIXTURE_VARIABLES = (
+    {"name": "field", "dtype": "f32", "rank": 1},
+    {"name": "flux", "dtype": "f64", "rank": 2},
+)
+FIXTURE_SHAPES = {"field": (4,), "flux": (2, 3)}
 
 # A code small enough to read here, with every field the manifest schema
 # requires. The visible dataset holds one case, which is what the
@@ -31,16 +49,14 @@ PROGRAM_MANIFEST = {
         "makefile": "Makefile",
         "targets": {
             "replay": {"target": "replay", "executable": "replay"},
-            "timing": {"target": "timing", "executable": "tsunami"},
+            "timing": {"target": "timing", "executable": "whole_program"},
         },
     },
     "interface": {
         "module": "mod_kernel",
         "entry": "step",
-        "inputs": [{"name": "h", "dtype": "f32", "rank": 1},
-                   {"name": "u", "dtype": "f32", "rank": 1}],
-        "outputs": [{"name": "h", "dtype": "f32", "rank": 1},
-                    {"name": "u", "dtype": "f32", "rank": 1}],
+        "inputs": [dict(v) for v in FIXTURE_VARIABLES],
+        "outputs": [dict(v) for v in FIXTURE_VARIABLES],
     },
     "datasets": {
         "visible": {"args": ["100", "5000", "25", "0.02"]},
@@ -51,7 +67,36 @@ PROGRAM_MANIFEST = {
     "properties": None,
 }
 
+# Bands wide enough that the fixture's arrays compare equal to themselves
+# under any of the three metrics.
+PROGRAM_TOLERANCES = {
+    "policy_version": "fixture-v1",
+    "variables": {v["name"]: {"abs": 1e-6, "rel": 1e-5, "ulp": 16} for v in FIXTURE_VARIABLES},
+}
+
 VISIBLE_CASE = "case0000"
+
+
+def fixture_arrays(offset: int = 0) -> dict:
+    """One array per fixture variable, of the type and rank it declares."""
+    arrays = {}
+    for variable in FIXTURE_VARIABLES:
+        name = variable["name"]
+        shape = FIXTURE_SHAPES[name]
+        n = int(np.prod(shape, dtype=int))
+        values = np.arange(offset, offset + n)
+        arrays[name] = np.asarray(
+            values, dtype=npy.NUMPY_DTYPE[variable["dtype"]]
+        ).reshape(shape, order="F")
+    return arrays
+
+
+def fixture_case(offset: int = 0) -> dict:
+    """One case as it travels on the wire: {variable: base64 of its .npy file}."""
+    return {
+        name: base64.b64encode(npy.encode(array)).decode()
+        for name, array in fixture_arrays(offset).items()
+    }
 
 
 def write_program(root, name: str = "tsunami") -> Path:
@@ -67,15 +112,11 @@ def write_program(root, name: str = "tsunami") -> Path:
         "module mod_kernel\ncontains\nsubroutine step\nend subroutine\nend module\n"
     )
     (directory / "baseline" / "Makefile").write_text("replay:\n\techo build\n")
-    (directory / "tolerances.json").write_text(json.dumps({"variables": {}}))
+    (directory / "tolerances.json").write_text(json.dumps(PROGRAM_TOLERANCES, indent=2))
 
-    visible = directory / "datasets" / "visible" / VISIBLE_CASE
-    visible.mkdir(parents=True, exist_ok=True)
-    (visible / "h_in.bin").write_bytes(b"\x00" * 16)
-    (visible / "u_in.bin").write_bytes(b"\x00" * 16)
-    (directory / "datasets" / "visible" / "cases.json").write_text(
-        json.dumps({"cases": [VISIBLE_CASE]})
-    )
+    visible = directory / "datasets" / "visible"
+    npy.write_case(visible / VISIBLE_CASE, fixture_arrays(), {})
+    (visible / npy.CASES_FILE).write_text(json.dumps({"cases": [VISIBLE_CASE]}))
 
     manifest = {**PROGRAM_MANIFEST, "name": name}
     (directory / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
@@ -92,6 +133,9 @@ class FakeBuilder:
         self.run_ok = True
         self.run_kernels = 4
         self.run_launches = [["src/mod_kernel.f90", "step", "42"]]
+        # What one replay writes back. A test that wants an output missing
+        # or of the wrong type replaces this.
+        self.run_outputs = fixture_case()
         self.sanitize_ok = True
         self.time_ok = True
         self.runs_s = [0.21, 0.20, 0.22]
@@ -122,7 +166,7 @@ class FakeBuilder:
         self.run_calls.append({"attempt_id": attempt_id, "profile": profile, "cases": cases, "mandatory": mandatory})
         if not self.run_ok:
             return {"ok": False, "stage": "run", "log_tail": "runtime crash"}
-        outputs = {name: {"h": "aGVsbG8=", "u": "d29ybGQ="} for name in cases}
+        outputs = {name: dict(self.run_outputs) for name in cases}
         return {"ok": True, "stage": "run", "outputs": outputs, "kernels_launched": self.run_kernels,
                 "launches": self.run_launches, "log_tail": ""}
 
@@ -134,7 +178,7 @@ class FakeBuilder:
     def time(self, attempt_id, repeats=5):
         self.time_calls.append({"attempt_id": attempt_id, "repeats": repeats})
         if not self.time_ok:
-            return {"ok": False, "stage": "time", "log_tail": "tsunami binary not built"}
+            return {"ok": False, "stage": "time", "log_tail": "timing binary not built"}
         return {"ok": True, "stage": "time", "runs_s": self.runs_s, "gpu_exclusive": True, "diagnostic": ""}
 
 
@@ -148,7 +192,7 @@ class FakeOracle:
         return {"policy_version": "1", "policy_sha256": "policyabc"}
 
     def holdout_inputs(self):
-        return {"dataset": "holdout", "cases": {"hcase0": {"h_in": "aGk=", "u_in": "aGk="}}}
+        return {"dataset": "holdout", "cases": {"hcase0": fixture_case(offset=7)}}
 
     def compare(self, dataset, outputs, attempt_id="unknown"):
         self.compare_calls.append({"dataset": dataset, "outputs": outputs, "attempt_id": attempt_id})

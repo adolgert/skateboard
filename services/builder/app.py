@@ -8,7 +8,7 @@ import shutil
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-import stages
+from . import stages
 
 TOKEN = os.environ.get("SKATEBOARD_TOKEN", "")
 
@@ -40,16 +40,18 @@ class BuildReq(BaseModel):
 class RunReq(BaseModel):
     attempt_id: str
     profile: str
-    cases: dict             # {name: {"h_in": b64, "u_in": b64}}
+    # {name: {variable: base64 of that variable's .npy file}}. The file
+    # says what type and shape the array is; nothing else has to.
+    cases: dict
     mandatory: bool = False
 
 
 class SanitizeReq(BaseModel):
     attempt_id: str
     profile: str
-    # {name: {"h_in","u_in"}} for every case to sanitize. How many cases
-    # that is comes from the gateway's hashed strategy file; the builder
-    # runs whatever it is sent.
+    # One entry per case to sanitize, shaped like RunReq.cases. How many
+    # cases that is comes from the gateway's hashed strategy file; the
+    # builder runs whatever it is sent.
     cases: dict
     tools: list = ["memcheck", "racecheck"]
 

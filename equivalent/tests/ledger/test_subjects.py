@@ -72,7 +72,8 @@ def test_binary_subject_and_outputs_subject_are_deterministic():
     data = b"\x00\x01\x02binary-bytes"
     assert binary_subject(data).sha256 == binary_subject(data).sha256
 
-    cases = {"case0000": {"h": b"hhh", "u": b"uuu"}, "case0001": {"h": b"HHH", "u": b"UUU"}}
+    cases = {"case0000": {"field": b"aaa", "flux": b"bbb"},
+             "case0001": {"field": b"AAA", "flux": b"BBB"}}
     a = outputs_subject(cases)
     b = outputs_subject(dict(reversed(list(cases.items()))))
     assert a.sha256 == b.sha256

@@ -4,10 +4,10 @@ import yaml
 
 from equivalent.components import sanitize
 from equivalent.strategy.schema import load_strategy
-from equivalent.tests.fakes import FakeBuilder
+from equivalent.tests.fakes import FakeBuilder, fixture_case
 
 STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
-CASES = {"case0000": {"h_in": "aGk=", "u_in": "aGk="}, "case0001": {"h_in": "eW8=", "u_in": "eW8="}}
+CASES = {"case0000": fixture_case(), "case0001": fixture_case(offset=4)}
 
 
 def _strategy_sanitizing(tmp_path, which_cases):

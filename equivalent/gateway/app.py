@@ -160,7 +160,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         if cfg.region_id not in visible_cases:
             if cfg.visible_dataset_dir is None:
                 raise ComponentError(f"no visible dataset configured for region {cfg.region_id}")
-            visible_cases[cfg.region_id] = load_visible_cases(cfg.visible_dataset_dir)
+            visible_cases[cfg.region_id] = load_visible_cases(cfg.visible_dataset_dir, cfg.manifest)
         return visible_cases[cfg.region_id]
 
     @app.get("/table")
@@ -334,7 +334,9 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             if req.action == "run_replay":
                 if builder is None:
                     raise ComponentError("builder not configured")
-                result = run_replay.check(cfg.region_id, tree_sha, strategy, _visible_cases(cfg), builder)
+                result = run_replay.check(
+                    cfg.region_id, tree_sha, strategy, cfg.manifest, _visible_cases(cfg), builder,
+                )
                 claim = record("gpu/executed", subjects_by_kind["tree"], "builder", result)
                 log("claim", claim_id=claim.id)
                 return _claim_response(claim)

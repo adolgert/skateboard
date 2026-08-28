@@ -18,9 +18,9 @@ SPEC_PATH = "notes/regions/ch04-step.sese.yaml"
 SOURCE = """\
 module mod_kernel
 contains
-subroutine step(h, u)
-  real :: h, u
-  h = h + u
+subroutine step(a, b)
+  real :: a, b
+  a = a + b
 end subroutine step
 end module mod_kernel
 """

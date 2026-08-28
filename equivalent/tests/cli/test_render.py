@@ -43,13 +43,13 @@ def test_render_claim_shows_full_detail_even_for_a_verdict_only_predicate():
         subject=(Subject(kind="tree", sha256="a" * 64),),
         predicateType="regression/holdout",
         predicate=Predicate(tool="oracle", version="0.3.1", configHash="cfg", verdict="pass",
-                             detail={"case0000": {"u": {"max_rel": 1e-6, "pass": True}}}),
+                             detail={"case0000": {"field": {"max_rel": 1e-6, "pass": True}}}),
         materials=(),
         session="sess-1",
     )
     text = render.render_claim(claim)
     parsed = json.loads(text)
-    assert parsed["predicate"]["detail"] == {"case0000": {"u": {"max_rel": 1e-6, "pass": True}}}
+    assert parsed["predicate"]["detail"] == {"case0000": {"field": {"max_rel": 1e-6, "pass": True}}}
 
 
 def test_render_requests_prints_one_line_per_request_in_order():

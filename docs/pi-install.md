@@ -257,7 +257,16 @@ A new region is a new entry in `gateway.yaml` and `EQUIVALENT_REGION` in
 `.env`; a new strategy is a new YAML file; a new code is a new directory
 under `programs/`, a new `codes:` entry, and `EQUIVALENT_CODE` in
 `.env`. Changing the code also means rebuilding the oracle image, which
-bakes in that code's captures. Restart the gateway after editing
+bakes in that code's captures, tolerance policy, and manifest.
+
+A dataset directory holds a `cases.json` naming its cases and one
+directory per case. Inside a case, each variable is a NumPy `.npy` file
+-- `<variable>.npy` for an input, `<variable>.out.npy` for an output --
+and a `case.json` names exactly what that directory holds. The `.npy`
+file carries its own element type, shape, and element order, so a
+variable's name is the only thing written down anywhere; the code's
+manifest is what says which names the region has and what type and rank
+each one is. Restart the gateway after editing
 `gateway.yaml`, and re-run `up.sh` so the host copy is regenerated.
 
 ## When something is wrong

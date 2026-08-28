@@ -1,26 +1,29 @@
 program replay
 
-  ! Standalone replay driver. Reads ONE case's input state from a directory,
-  ! applies exactly one step of the (possibly ported) kernel, and writes the
-  ! output state back into the same directory. Size-agnostic: the grid size is
-  ! recovered from the input file, so the same binary replays any dataset.
+  ! Standalone replay driver: reads ONE case's input arrays from a directory,
+  ! calls the region entry exactly once, and writes the output arrays back into
+  ! the same directory. Shapes come from the input files, so the same binary
+  ! replays any dataset of this code.
   !
   ! Usage: replay <case_dir>   (default '.')
-  ! Reads:  <case_dir>/h_in.bin, <case_dir>/u_in.bin
-  ! Writes: <case_dir>/h_out.bin, <case_dir>/u_out.bin
+  !
+  ! This driver names one code's kernel and one code's variables, which is
+  ! unavoidable -- a driver has to call something. It is baked into the builder
+  ! image for now; a later change moves the driver into each code's own tree,
+  ! written once during that code's onboarding and frozen for the port, so that
+  ! the image holds no code-specific file at all.
   !
   ! The builder runs this once per case, in a scratch directory holding only the
   ! inputs it was given -- so replay never sees, and cannot overwrite, the
   ! oracle's reference outputs.
 
-  use iso_fortran_env, only: int32, real32
+  use iso_fortran_env, only: real32
   use mod_kernel, only: step
-  use mod_capture, only: dump_r32, load_r32, file_n_r32
+  use npy_io, only: npy_save, npy_load
 
   implicit none
 
   character(len=1024) :: casedir
-  integer(int32) :: ngrid
   real(real32), allocatable :: h(:), u(:)
 
   if (command_argument_count() < 1) then
@@ -29,15 +32,12 @@ program replay
     call get_command_argument(1, casedir)
   end if
 
-  ngrid = file_n_r32(trim(casedir) // '/h_in.bin')
-  allocate(h(ngrid), u(ngrid))
-
-  call load_r32(trim(casedir) // '/h_in.bin', h)
-  call load_r32(trim(casedir) // '/u_in.bin', u)
+  call npy_load(trim(casedir) // '/h.npy', h)
+  call npy_load(trim(casedir) // '/u.npy', u)
 
   call step(h, u)
 
-  call dump_r32(trim(casedir) // '/h_out.bin', h)
-  call dump_r32(trim(casedir) // '/u_out.bin', u)
+  call npy_save(trim(casedir) // '/h.out.npy', h)
+  call npy_save(trim(casedir) // '/u.out.npy', u)
 
 end program replay

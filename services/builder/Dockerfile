@@ -14,10 +14,10 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 RUN mkdir -p /opt/harness /work
 
 # Trusted, baked replay harness -- NOT from the agent's payload.
-COPY services/builder/harness/mod_capture.f90 services/builder/harness/replay.f90 /opt/harness/
+COPY services/builder/harness/npy_io.f90 services/builder/harness/replay.f90 /opt/harness/
 # Service code (all gate command lines live in stages.py).
-COPY services/builder/app.py services/builder/stages.py /app/
+COPY services/builder /app/services/builder
 
 WORKDIR /app
 EXPOSE 9090
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "9090"]
+CMD ["uvicorn", "services.builder.app:app", "--host", "0.0.0.0", "--port", "9090"]

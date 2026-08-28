@@ -24,9 +24,9 @@ SPEC_PATH = "notes/regions/ch04-step.sese.yaml"
 CLEAN_SOURCE = """\
 module mod_kernel
 contains
-subroutine step(h, u)
-  real :: h, u
-  h = h + u
+subroutine step(a, b)
+  real :: a, b
+  a = a + b
 end subroutine step
 end module mod_kernel
 """
@@ -175,7 +175,7 @@ def test_time_baseline_is_filed_against_the_baseline_tree_not_the_current_tree(t
     _run(client, cfg, "sese_check")  # widens the allow-list to include mod_kernel.f90
 
     (working / "src").mkdir(parents=True)
-    (working / "src" / "mod_kernel.f90").write_text(CLEAN_SOURCE.replace("h + u", "h + u + 0"))
+    (working / "src" / "mod_kernel.f90").write_text(CLEAN_SOURCE.replace("a + b", "a + b + 0"))
     client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
 
     result = _run(client, cfg, "time_baseline")

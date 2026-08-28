@@ -5,6 +5,11 @@
 #   - visible EXPECTED    -> captures/visible      (oracle-only)
 #   - held-out EVERYTHING -> captures/holdout      (oracle-only)
 #
+# Each case directory holds one .npy file per variable -- <name>.npy going in,
+# <name>.out.npy coming out -- and a case.json naming exactly what that
+# directory holds. Each dataset directory also holds a cases.json listing its
+# case names.
+#
 # Also runs a self-test: replaying the visible inputs through the SAME pristine
 # kernel must reproduce the reference outputs bit-for-bit.
 #
@@ -32,8 +37,8 @@ cd "$BUILD"
 
 echo "=== compiling gen_reference and replay (pristine kernel, $FC) ==="
 KMODS="$WORK/mod_params.f90 $WORK/mod_diff.f90 $WORK/mod_initial.f90 $WORK/mod_kernel.f90"
-$FC $FFLAGS -o gen_reference $KMODS "$CAPTURE/mod_capture.f90" "$HERE/gen_reference.f90"
-$FC $FFLAGS -o replay        $KMODS "$CAPTURE/mod_capture.f90" "$CAPTURE/replay.f90"
+$FC $FFLAGS -o gen_reference "$CAPTURE/npy_io.f90" $KMODS "$HERE/gen_reference.f90"
+$FC $FFLAGS -o replay        "$CAPTURE/npy_io.f90" $KMODS "$CAPTURE/replay.f90"
 
 echo "=== generating VISIBLE dataset (icenter=25 decay=0.02) ==="
 ./gen_reference $GRID $STEPS 25 0.02 "$BUILD/visible"
@@ -45,11 +50,14 @@ echo "=== self-test: replay(pristine) == reference ==="
 fail=0
 for c in "$BUILD"/visible/case*; do
   tmp="$BUILD/selftest/$(basename "$c")"; mkdir -p "$tmp"
-  cp "$c/h_in.bin" "$c/u_in.bin" "$tmp/"
+  cp "$c"/*.npy "$tmp/"
+  rm -f "$tmp"/*.out.npy
   ./replay "$tmp" >/dev/null
-  if ! cmp -s "$tmp/h_out.bin" "$c/h_out.bin" || ! cmp -s "$tmp/u_out.bin" "$c/u_out.bin"; then
-    echo "  MISMATCH in $(basename "$c")"; fail=1
-  fi
+  for f in "$c"/*.out.npy; do
+    if ! cmp -s "$tmp/$(basename "$f")" "$f"; then
+      echo "  MISMATCH in $(basename "$c") $(basename "$f")"; fail=1
+    fi
+  done
 done
 [ "$fail" = 0 ] && echo "  self-test PASSED (replay reproduces reference)" || { echo "  self-test FAILED"; exit 1; }
 
@@ -64,29 +72,47 @@ cases=()
 for c in "$BUILD"/visible/case*; do
   name="$(basename "$c")"; cases+=("$name")
   mkdir -p "$VIS_IN/$name" "$VIS_EXP/$name"
-  cp "$c/h_in.bin"  "$c/u_in.bin"  "$VIS_IN/$name/"
-  cp "$c/h_out.bin" "$c/u_out.bin" "$VIS_EXP/$name/"
+  for f in "$c"/*.npy; do
+    case "$(basename "$f")" in
+      *.out.npy) cp "$f" "$VIS_EXP/$name/" ;;
+      *)         cp "$f" "$VIS_IN/$name/"  ;;
+    esac
+  done
 done
 hcases=()
 for c in "$BUILD"/holdout/case*; do
   name="$(basename "$c")"; hcases+=("$name")
   mkdir -p "$HLD/$name"
-  cp "$c"/*.bin "$HLD/$name/"
+  cp "$c"/*.npy "$HLD/$name/"
 done
 
-# --- cases.json manifests
-manifest() {  # $1=dir  $2..=case names
+# --- case.json per case, cases.json per dataset
+# Each case.json names exactly the files that directory holds: the visible
+# dataset holds inputs, the visible capture set holds outputs, and the held-out
+# capture set holds both.
+list_cases() {  # $1=dir  $2..=case names
   local dir="$1"; shift
-  python3 - "$dir" "$GRID" "$@" <<'PY'
-import json, sys
-d, grid, *cases = sys.argv[1:]
-grid = int(grid)
-json.dump({"grid_size": grid, "cases": sorted(cases)}, open(d + "/cases.json", "w"), indent=2)
+  python3 - "$dir" "$@" <<'PY'
+import json, os, sys
+directory, *cases = sys.argv[1:]
+for case in cases:
+    names = {"inputs": [], "outputs": []}
+    for entry in sorted(os.listdir(os.path.join(directory, case))):
+        if entry.endswith(".out.npy"):
+            names["outputs"].append(entry[: -len(".out.npy")])
+        elif entry.endswith(".npy"):
+            names["inputs"].append(entry[: -len(".npy")])
+    with open(os.path.join(directory, case, "case.json"), "w") as out:
+        json.dump(names, out, indent=2)
+        out.write("\n")
+with open(os.path.join(directory, "cases.json"), "w") as out:
+    json.dump({"cases": sorted(cases)}, out, indent=2)
+    out.write("\n")
 PY
 }
-manifest "$VIS_IN"  "${cases[@]}"
-manifest "$VIS_EXP" "${cases[@]}"
-manifest "$HLD"     "${hcases[@]}"
+list_cases "$VIS_IN"  "${cases[@]}"
+list_cases "$VIS_EXP" "${cases[@]}"
+list_cases "$HLD"     "${hcases[@]}"
 
 echo
 echo "=== done ==="

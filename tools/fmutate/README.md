@@ -113,7 +113,8 @@ root. See `targets/tsunami.json`.
   "build": {
     "fc": "gfortran",
     "sources": ["mod_params.f90", "..."],        // compiled from src_dir, in order
-    "extra_sources": ["services/builder/harness/replay.f90"], // driver + harness, absolute-ish
+    "extra_sources": ["services/builder/harness/npy_io.f90",
+                      "services/builder/harness/replay.f90"], // driver + harness, repo-relative
     "exe": "replay",
     "run_args": ["{case_dir}"],                  // {case_dir} is substituted
     "flags":          ["-O2", "..."],            // release build (the gate's build)
@@ -124,8 +125,9 @@ root. See `targets/tsunami.json`.
     "inputs":   "programs/tsunami/datasets/visible",   // per-case input dirs
     "expected": "programs/tsunami/captures/visible",   // per-case reference dirs
     "case_glob": "case[0-9]*",
-    "input_files": ["h_in.bin", "u_in.bin"],
-    "variables": { "h": "h_out.bin", "u": "u_out.bin" }
+    "input_files": ["h.npy", "u.npy"],           // copied into the case dir
+    "variables": { "h": "h.out.npy", "u": "u.out.npy" },
+    "raw_dtype": "<f8"                           // only for corpora that are not .npy
   },
   "comparator": {
     "module":     "services/oracle/compare.py",       // must expose compare_variable()
@@ -138,6 +140,11 @@ The driver contract is the one `services/builder/harness/replay.f90` already imp
 is invoked as `driver <case_dir>`, reads `input_files` from that directory, and
 writes the files named in `variables` back into it. Any kernel wrapped that way
 can be targeted without changing this tool.
+
+Corpus files ending in `.npy` carry their own element type, shape, and element
+order, and are read as they are. A target whose corpus is raw streams instead
+has to say what is in them with `raw_dtype`; without it, such a file is
+refused rather than guessed at.
 
 `case_glob` is deliberately `case[0-9]*` rather than `case*`: the latter also
 matches `cases.json`.

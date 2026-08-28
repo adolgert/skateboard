@@ -324,7 +324,7 @@ program, and require that a tag reaches a monitored variable. Reported up to **8
 faults detected** than MC/DC at the same nominal structural coverage.
 
 **Relevance to a GPU port.** Masking is the exact phenomenon behind §4.3 and §4.4 — the
-fault is executed, and its effect never reaches `h_out`/`u_out`. OMC/DC is the metric that
+fault is executed, and its effect never reaches the region's output arrays. OMC/DC is the metric that
 would have predicted those survivors without running a 93-mutant campaign.
 
 **Fortran path.** There is no OMC/DC tool for Fortran. The tagging-semantics implementation

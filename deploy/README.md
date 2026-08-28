@@ -11,7 +11,10 @@ one directory per code, holding that code's manifest, baseline sources,
 datasets, captures, and tolerance policy; and `services/`, holding the
 builder and the oracle. Both image builds take the repository root as
 their context, and the oracle takes the code as a build argument
-(`EQUIVALENT_CODE`) because it bakes that code's answers in.
+(`EQUIVALENT_CODE`) because it bakes that code's answers in: its
+`captures/`, its `tolerances.json`, and its `manifest.yaml`, which is how
+the oracle knows which outputs it has to have a tolerance band for
+before it will start.
 
 | file | what it is |
 | --- | --- |
