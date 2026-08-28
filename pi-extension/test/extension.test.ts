@@ -61,7 +61,69 @@ describe("equivalentExtension", () => {
     equivalentExtension(pi as any);
     await pi.handlers.get("session_start")({}, fakeCtx());
 
-    expect([...pi.tools.keys()].sort()).toEqual(["sese_check", "status", "submit"]);
+    expect([...pi.tools.keys()].sort()).toEqual(["claim", "sese_check", "status", "submit"]);
+  });
+
+  it("reads one claim by the id it is given and renders the verdict with its detail", async () => {
+    const table = [
+      { name: "sese_check", emits: ["sese/verified"], requires: [], deterministic: true, component: "analyzer:check_sese" },
+    ];
+    const claim = {
+      claim_id: "c-0007",
+      predicateType: "harness/self_check",
+      verdict: "fail",
+      subject: [{ kind: "tree", sha256: "a".repeat(64) }],
+      materials: [],
+      detail: { reason: "no injected fault was caught" },
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(table))
+      .mockResolvedValueOnce(jsonResponse(claim));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pi = fakePi();
+    equivalentExtension(pi as any);
+    const ctx = fakeCtx();
+    await pi.handlers.get("session_start")({}, ctx);
+
+    const tool = pi.tools.get("claim");
+    expect(tool.parameters.required).toEqual(["claim_id"]);
+    expect(tool.parameters.properties.claim_id.type).toBe("string");
+
+    const result = await tool.execute("call-9", { claim_id: "c-0007" }, undefined, undefined, ctx);
+
+    expect(String(fetchMock.mock.calls[1][0])).toContain("/claims/c-0007");
+    expect(fetchMock.mock.calls[1][1].headers["X-Tool-Call-Id"]).toBe("call-9");
+    expect(result.content[0].text).toContain("harness/self_check: fail (c-0007)");
+    expect(result.content[0].text).toContain("no injected fault was caught");
+  });
+
+  it("says what the gateway said when the claim id is not one of this region's", async () => {
+    const table = [
+      { name: "sese_check", emits: ["sese/verified"], requires: [], deterministic: true, component: "analyzer:check_sese" },
+    ];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(table))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ detail: "unknown claim: c-9999" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pi = fakePi();
+    equivalentExtension(pi as any);
+    const ctx = fakeCtx();
+    await pi.handlers.get("session_start")({}, ctx);
+
+    const result = await pi.tools.get("claim").execute(
+      "call-9", { claim_id: "c-9999" }, undefined, undefined, ctx,
+    );
+
+    expect(result.content[0].text).toBe("error: unknown claim: c-9999");
   });
 
   it("a refusal from /run becomes the tool's result text, missing claims verbatim", async () => {

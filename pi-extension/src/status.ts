@@ -40,6 +40,14 @@ export function renderStatus(body: StatusBody): string {
   for (const row of body.rows) {
     if (row.status === "present") {
       lines.push(`  ${row.predicateType}  ${row.verdict}  ${row.claim_id}`);
+    } else if (row.verdict) {
+      // The check ran and did not pass. That is still an unmet
+      // requirement, but "missing" would say it never ran; the claim id
+      // is there to be read, so the row shows it.
+      lines.push(
+        `  ${row.predicateType}  ${row.verdict}  ${row.claim_id}` +
+          `  (fix and run ${row.producing_action} again)`,
+      );
     } else {
       lines.push(`  ${row.predicateType}  missing  (run ${row.producing_action})`);
     }

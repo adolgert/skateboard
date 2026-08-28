@@ -93,3 +93,54 @@ def test_render_requests_prints_one_line_per_request_in_order():
     assert "refused" in out_lines[0]
     assert "missing=" in out_lines[0]
     assert "c-0001" in out_lines[1]
+
+
+def test_a_requirement_whose_check_failed_reads_as_a_fail_with_its_claim_id(tmp_path):
+    # The requirement is unmet either way, but "never ran" and "ran and
+    # failed" are different situations, and the claim id is what has the
+    # reason in it. The pi extension's renderStatus prints the same row
+    # in the same words (pi-extension/src/status.ts).
+    tree = "a" * 64
+    store = LedgerStore(tmp_path / "region")
+    store.record_claim(
+        [Subject(kind="tree", sha256=tree)], "gpu/executed",
+        Predicate(tool="builder", version="0.1", configHash="cfg", verdict="fail", detail={}),
+        [], "sess-1",
+    )
+
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    lines = render.render_status(status, "ch04:step").splitlines()
+    row = next(line for line in lines if "gpu/executed" in line)
+
+    assert "fail" in row
+    assert "MISSING" not in row
+    assert "(fix and run run_replay again)" in row
+
+
+def test_a_requirement_no_check_has_run_for_still_reads_as_missing(tmp_path):
+    store = LedgerStore(tmp_path / "region")
+
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    row = next(
+        line for line in render.render_status(status, "ch04:step").splitlines()
+        if "gpu/executed" in line
+    )
+
+    assert "MISSING" in row
+    assert "(run: run_replay)" in row
+
+
+def test_a_claim_read_is_not_reported_as_a_claim_filed():
+    # The claim endpoint reads back a verdict already recorded. Wording
+    # it like a filing would put a claim on the timeline that nothing
+    # produced.
+    from equivalent.cli.session import TimelineRow
+    from equivalent.ledger.records import RequestLogLine
+
+    line = RequestLogLine(
+        ts="2026-01-01T00:00:03Z", session="s1", model="m", endpoint="claim", action="claim",
+        region="ch04:step", tree=None, config_hash=None, outcome="read", claim_id="c-0007",
+    )
+    row = TimelineRow(ts=line.ts, source="both", who="claim", request=line, verdict="fail")
+
+    assert render._outcome(row) == "-> read claim c-0007 fail"

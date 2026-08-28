@@ -274,3 +274,94 @@ def test_submit_records_the_caller_tool_call_id_when_it_sends_one(tmp_path):
     first, second = store.all_requests()
     assert first.tool_call_id == "tool:1:ccc"
     assert second.tool_call_id is None
+
+
+def _file_a_claim(cfg, predicate_type="harness/self_check", verdict="fail", detail=None):
+    """One claim in the region's ledger, as a check's dispatch would leave it."""
+    from equivalent.ledger.records import Predicate
+    from equivalent.ledger.subjects import Subject
+
+    store = LedgerStore(cfg.ledger_dir)
+    return store.record_claim(
+        [Subject(kind="tree", sha256="a" * 64)],
+        predicate_type,
+        Predicate(tool="builder", version="0.1", configHash="cfg", verdict=verdict,
+                  detail=detail if detail is not None else {"reason": "no fault was caught"}),
+        [Subject(kind="manifest", sha256="b" * 64)],
+        "sess-1",
+    )
+
+
+def test_get_claim_reads_one_claim_back_with_its_detail(tmp_path):
+    # A verdict on its own is not something a session can act on: the
+    # reason is in the detail, and this is how it reads it.
+    client, cfg = _client(tmp_path)
+    claim = _file_a_claim(cfg)
+
+    r = client.get(f"/claims/{claim.id}", params={"region": cfg.region_id}, headers=HEADERS)
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["claim_id"] == claim.id
+    assert body["verdict"] == "fail"
+    assert body["predicateType"] == "harness/self_check"
+    assert body["detail"] == {"reason": "no fault was caught"}
+    assert body["subject"] == [{"kind": "tree", "sha256": "a" * 64}]
+    assert body["materials"] == [{"kind": "manifest", "sha256": "b" * 64}]
+
+
+def test_get_claim_of_a_verdict_only_predicate_still_withholds_the_detail(tmp_path):
+    # Reading a claim back must not be a way around the receipt policy.
+    client, cfg = _client(tmp_path)
+    claim = _file_a_claim(
+        cfg, predicate_type="regression/holdout", verdict="pass", detail={"case0000": {"pass": True}},
+    )
+
+    body = client.get(
+        f"/claims/{claim.id}", params={"region": cfg.region_id}, headers=HEADERS,
+    ).json()
+
+    assert body["verdict"] == "pass"
+    assert "detail" not in body
+
+
+def test_get_claim_of_an_unknown_id_is_not_found(tmp_path):
+    client, cfg = _client(tmp_path)
+
+    r = client.get("/claims/c-9999", params={"region": cfg.region_id}, headers=HEADERS)
+
+    assert r.status_code == 404
+    assert "c-9999" in r.json()["detail"]
+
+
+def test_get_claim_needs_a_token(tmp_path):
+    client, cfg = _client(tmp_path)
+    claim = _file_a_claim(cfg)
+
+    r = client.get(
+        f"/claims/{claim.id}", params={"region": cfg.region_id},
+        headers={**HEADERS, "Authorization": "Bearer wrong"},
+    )
+
+    assert r.status_code == 401
+
+
+def test_get_claim_writes_one_request_log_line_naming_the_claim_endpoint(tmp_path):
+    client, cfg = _client(tmp_path)
+    claim = _file_a_claim(cfg)
+    store = LedgerStore(cfg.ledger_dir)
+
+    client.get(f"/claims/{claim.id}", params={"region": cfg.region_id},
+               headers={**HEADERS, "X-Tool-Call-Id": "tool:1:ccc"})
+    client.get("/claims/c-9999", params={"region": cfg.region_id}, headers=HEADERS)
+
+    read, missed = store.all_requests()
+    assert read.endpoint == "claim"
+    assert read.action == "claim"
+    assert read.session == "sess-1"
+    assert read.claim_id == claim.id
+    # A read files nothing, so it is not logged as a claim.
+    assert read.outcome == "read"
+    assert read.tool_call_id == "tool:1:ccc"
+    assert missed.outcome == "error"
+    assert missed.claim_id == "c-9999"

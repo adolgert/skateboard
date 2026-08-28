@@ -372,3 +372,26 @@ def test_a_transcript_renamed_by_hand_is_still_found_by_the_id_it_declares(tmp_p
     assert session.find_session_file(tmp_path, "hand-built") == renamed
     assert session.find_session_file(tmp_path, "some-other-session") is None
     assert session.find_session_file(tmp_path / "not-here", "hand-built") is None
+
+
+def test_a_claim_tool_call_pairs_with_the_claim_endpoints_line():
+    # The claim tool is a gateway call like any other, on an endpoint of
+    # its own name; without that it would read as one of the agent's own
+    # local tools and its request line would go unmatched.
+    from equivalent.cli.session import SessionEvent
+
+    assert "claim" in session.GATEWAY_TOOL_NAMES
+    event = SessionEvent(
+        ts="2026-01-01T00:00:03.000Z", kind="tool_call", tool_call_id="tool:1:ccc",
+        tool_name="claim",
+    )
+    line = RequestLogLine(
+        ts="2026-01-01T00:00:03Z", session="s1", model="m", endpoint="claim", action="claim",
+        region="ch04:step", tree=None, config_hash=None, outcome="read", claim_id="c-0007",
+        tool_call_id="tool:1:ccc",
+    )
+
+    joined = session.join([event], [line])
+
+    assert joined.unmatched_requests == ()
+    assert [(row.who, row.source) for row in joined.rows] == [("claim", "both")]

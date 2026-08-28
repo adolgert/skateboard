@@ -180,7 +180,7 @@ The first run builds the agent image (several minutes on top of the
 container with `/working` as its directory and the extension loaded. The
 extension prints one line when it has connected:
 
-    equivalent: registered 12 tools for region ch04:step
+    equivalent: registered 13 tools for region ch04:step
 
 An argument to `pi.sh` that begins with a dash is added to the session's
 own command line (`./pi.sh --model ollama/devstral-small-2:24b`).

@@ -29,11 +29,12 @@ from equivalent.ledger.store import LedgerStore
 
 # The tool names that reach the gateway. The action names come from the
 # gateway's own table -- an action with no component has nothing to call,
-# so it is not a tool -- plus the two endpoints that are not actions.
+# so it is not a tool -- plus the three endpoints that are not actions.
 # Nothing here is hand-listed, so a new row in the table is a new tool
 # name here on the same day.
 GATEWAY_TOOL_NAMES = frozenset(
-    {row.name for row in ACTION_TABLE if row.component is not None} | {"submit", "status"}
+    {row.name for row in ACTION_TABLE if row.component is not None}
+    | {"submit", "status", "claim"}
 )
 
 # A status call asks the gateway what it already knows and changes
@@ -273,11 +274,12 @@ def claim_verdicts(store: LedgerStore) -> dict:
 def _line_matches_call(line: RequestLogLine, event: SessionEvent) -> bool:
     """Is this request line the one that call would have produced?
 
-    A submit tool calls the submit endpoint; every other tool is an action
-    name on the run endpoint. Nothing else lines up.
+    The submit and claim tools call endpoints of their own name; every
+    other tool is an action name on the run endpoint. Nothing else lines
+    up.
     """
-    if event.tool_name == "submit":
-        return line.endpoint == "submit"
+    if event.tool_name in ("submit", "claim"):
+        return line.endpoint == event.tool_name
     return line.endpoint == "run" and line.action == event.tool_name
 
 
@@ -354,7 +356,7 @@ def join(events, requests, verdicts: dict | None = None) -> JoinResult:
         rows.append(TimelineRow(
             ts=line.ts,
             source="request",
-            who="submit" if line.endpoint == "submit" else line.action,
+            who=line.action,
             request=line,
             verdict=verdicts.get(line.claim_id),
         ))

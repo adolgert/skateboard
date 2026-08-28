@@ -31,6 +31,31 @@ describe("renderStatus", () => {
     expect(text.trim().endsWith("not accepted")).toBe(true);
   });
 
+  it("shows a requirement whose check ran and failed as a fail with its claim id", () => {
+    // The gateway reports this row as "missing" -- it is an unmet
+    // requirement -- but it carries the failing claim. Printing it as
+    // "missing" would say the check never ran, and hide the id that has
+    // the reason in it.
+    const body: StatusBody = {
+      tree: "T4",
+      frozen: "F1",
+      phase: "onboarding",
+      accepted: false,
+      rows: [{
+        predicateType: "harness/self_check",
+        status: "missing",
+        verdict: "fail",
+        claim_id: "c-0007",
+        producing_action: "harness_self_check",
+      }],
+    };
+
+    const line = renderStatus(body).split("\n")[1];
+
+    expect(line).toBe("  harness/self_check  fail  c-0007  (fix and run harness_self_check again)");
+    expect(line).not.toContain("missing");
+  });
+
   it("says ONBOARDED for a region that is bringing a code in, not ACCEPTED", () => {
     const body: StatusBody = {
       tree: "T4",

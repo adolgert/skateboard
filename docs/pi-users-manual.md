@@ -92,22 +92,25 @@ cannot unfreeze anything outside that.
 
 `pi` starts inside the agent container with the extension loaded. The
 extension connects to the gateway, fetches the list of actions, and
-registers one tool for each, plus `submit` and `status`. One line
-confirms it:
+registers one tool for each, plus `submit`, `status`, and `claim`. One
+line confirms it:
 
-    equivalent: registered 12 tools for region ch04:step
+    equivalent: registered 13 tools for region ch04:step
 
 The count is the actions of that region's phase — ten for a region being
-ported, eight for a code being onboarded — plus `submit` and `status`.
+ported, eight for a code being onboarded — plus `submit`, `status`, and
+`claim`.
 If a configuration error is reported instead, the session cannot reach
 the gateway; that is a deployment problem, not something to fix from
 inside the session.
 
-You talk to the model in plain language and it calls the tools. None of
-the tools take arguments: `submit` sends whatever is in the working
-copy, and each check runs against whatever was last submitted. You can
-also type `/status` yourself at any time to see the region's state
-without asking the model.
+You talk to the model in plain language and it calls the tools. Almost
+none of them take arguments: `submit` sends whatever is in the working
+copy, each check runs against whatever was last submitted, and a few
+checks take optional settings described further down. The exception is
+`claim`, which takes the id of the claim to read. You can also type
+`/status` yourself at any time to see the region's state without asking
+the model.
 
 ## A session from start to acceptance
 
@@ -390,16 +393,44 @@ again, and the newest measurement is the one that counts.
 
 ## Reading what comes back
 
-**A pass or fail** is a claim:
+**A pass or fail** is a claim. The first line is the verdict, and under
+it is the claim's detail as the check recorded it:
 
-    build_replay: pass (c-0007)
+    build_replay: fail (c-0007)
+    {
+      "problems": [
+        "src/mod_kernel.f90:41: Error: Symbol 'dh' has no IMPLICIT type"
+      ],
+      "compiles": 3,
+      ...
+    }
 
 The id in parentheses names the record in the ledger. A `fail` is a real
-verdict — the check ran and the code did not meet it — and the tool's
-result carries the detail: the compiler log, the sanitizer's findings,
-the cases that missed tolerance. The fix is to edit, submit, and run the
+verdict — the check ran and the code did not meet it — and **the detail
+is the reason**: the compiler log, the sanitizer's findings, the cases
+that missed tolerance, the input a property failed on. It is what the
+session reads to know what to fix, so the keys that explain a failure
+are printed first and a fail is cut off only at 24000 characters; a pass
+is cut off much sooner, since a passing check rarely needs reading. When
+either is cut off, the last line says so and names the claim, which is
+how to read the whole of it. The fix is to edit, submit, and run the
 check again. Failed claims stay in the ledger; they are history, not
 something to erase.
+
+A few predicates are verdict-only by policy — `regression/holdout` is
+the one that matters, so a port cannot be tuned to the held-out cases —
+and their claims come back as the verdict line alone.
+
+**The `claim` tool** reads any claim of the region back by id:
+
+    claim(claim_id="c-0007")
+
+It answers with the same verdict line and the same detail the check's
+own answer carried, filtered by the same policy, so it can never show
+more than the check did. It is for a verdict the session has been told
+about but has not read: one `status` reports as failing, or one from
+earlier in the session. From outside the session, `ledger show` prints
+the same claim in full, including what the policy withholds here.
 
 **A refusal** means the check's prerequisites are not met. It is a
 normal answer, not an error, and it says what to do:
@@ -407,9 +438,15 @@ normal answer, not an error, and it says what to do:
     refused: 'build_replay' requires:
       - sese/verified is missing; run sese_check to produce it.
 
-If the prerequisite ran and failed, `/status` shows the failing claim's
-id beside the requirement, so "never ran" and "ran and failed" are
-distinguishable.
+If the prerequisite ran and failed, `/status` shows it as a fail with
+the failing claim's id, so "never ran" and "ran and failed" are
+distinguishable:
+
+      harness/self_check  fail  c-0007  (fix and run harness_self_check again)
+      harness/properties  missing  (run harness_property)
+
+The first is a claim to read with `claim`; the second is a check that
+has not run.
 
 **An error** means the check itself could not run — the builder is
 unreachable, or its compiled workspace is gone after a restart. No claim
@@ -542,8 +579,18 @@ see whether a deployment can bring a code in at all.
   file from the spec drops the edits to it — but which files the spec
   lists is the model's choice, and it is visible in the tree.
 - `status` calls leave no line in the request log; every other tool
-  does. The `session` timeline shows them as unlogged, which is
-  expected.
+  does, `claim` included. The `session` timeline shows the status calls
+  as unlogged, which is expected.
+- The gateway's token is in the agent's container, because the extension
+  running there needs it. So a session can call the HTTP API directly
+  with `curl` instead of through its tools, and it can put any session
+  id it likes in the `X-Session-Id` header. Nothing about the claims
+  changes: the gateway still runs every check itself, still refuses what
+  is out of order, and still records what it did. What is affected is
+  the request log's `session` column — that is what the caller said it
+  was, not something the gateway verified — so any evaluation that joins
+  the request log to session transcripts by that column is joining on
+  the agent's own word for it and must treat it that way.
 - The builder keeps compiled work between checks. After a builder
   restart, run `build_replay` again; the code is safe in the gateway's
   repository.

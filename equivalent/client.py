@@ -1,9 +1,9 @@
-"""A thin client for the gateway's four endpoints.
+"""A thin client for the gateway's five endpoints.
 
 Trust role: none. Whatever this module gets wrong shows up as a normal
 request failure, not as a false claim -- the gateway itself still decides
 everything. This exists so the CLI and, later, the pi extension call the
-same four things the same way.
+same five things the same way.
 """
 from __future__ import annotations
 
@@ -48,6 +48,20 @@ class GatewayClient:
         the gateway directly leaves it out.
         """
         r = self._http.post("/submit", json={"region": region}, headers=_call_header(tool_call_id))
+        r.raise_for_status()
+        return r.json()
+
+    def claim(self, region: str, claim_id: str, tool_call_id: str | None = None) -> dict:
+        """One claim of a region, read back by id.
+
+        The gateway filters it by the same receipt policy a check's own
+        answer went through, so this shows no more than the check did --
+        it is how a caller reads the detail behind a verdict it was
+        handed earlier.
+        """
+        r = self._http.get(
+            f"/claims/{claim_id}", params={"region": region}, headers=_call_header(tool_call_id),
+        )
         r.raise_for_status()
         return r.json()
 

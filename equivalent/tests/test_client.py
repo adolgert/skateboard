@@ -75,6 +75,26 @@ def test_client_run_matches_calling_the_endpoint_directly(tmp_path):
     assert result["refused"] is True
 
 
+def test_client_claim_reads_one_claim_back_by_id(tmp_path):
+    from equivalent.ledger.records import Predicate
+    from equivalent.ledger.store import LedgerStore
+    from equivalent.ledger.subjects import Subject
+
+    client, fastapi_client, cfg = _client_pair(tmp_path)
+    claim = LedgerStore(cfg.ledger_dir).record_claim(
+        [Subject(kind="tree", sha256="a" * 64)], "build/replay",
+        Predicate(tool="builder", version="0.1", configHash="cfg", verdict="fail",
+                  detail={"reason": "compile error"}),
+        [], "sess-1",
+    )
+
+    result = client.claim(cfg.region_id, claim.id)
+
+    assert result["claim_id"] == claim.id
+    assert result["verdict"] == "fail"
+    assert result["detail"] == {"reason": "compile error"}
+
+
 def test_client_passes_the_caller_tool_call_id_through_to_the_request_log(tmp_path):
     from equivalent.ledger.store import LedgerStore
 

@@ -3,11 +3,27 @@
 A thin `pi` client for interactive porting sessions against the
 `equivalent` gateway. Everything it knows, it fetched from the gateway:
 on session start it calls `GET /table` and registers one tool per action
-row (plus `submit` and `status`), with each tool's description —
-including its `Requires:` line — and its parameters generated from the
+row (plus `submit`, `status`, and `claim`), with each tool's description
+— including its `Requires:` line — and its parameters generated from the
 row. A refusal from the gateway comes back as the tool's result text, so
 the model reads it as its next steps. The extension decides nothing; the
 gateway remains the reference monitor.
+
+A check's result is the verdict line and then the claim's detail as
+pretty-printed JSON — for a `fail`, the keys that explain the failure
+first and up to 24000 characters of it; for a `pass`, the same rendering
+cut off much sooner. Past either cap the last line names the claim id to
+read the rest by. The gateway's own receipt policy decides whether there
+is a detail at all, so a verdict-only predicate still renders as the
+verdict line alone.
+
+`claim` takes one required `claim_id` and reads that claim back from
+`GET /claims/{claim_id}`, rendered the same way a check's result is. It
+exists because a verdict a session was handed elsewhere — in a status
+row, or earlier in the session — is otherwise unreadable from inside the
+session. `status` prints a requirement whose check ran and failed as
+`<predicate>  fail  <claim id>  (fix and run <action> again)` rather
+than as missing, which is a claim to read rather than a check to run.
 
 A tool's arguments are the settings its row says the action takes, with
 the gateway's own wording: `time_baseline` and `time_port` take
@@ -16,14 +32,16 @@ the gateway's own wording: `time_baseline` and `time_port` take
 optional integers, so a call that names none is the ordinary call and
 gets the gateway's defaults, and only the keys the row declared are sent
 — the gateway hashes the config to spot a repeated request, so nothing
-else belongs in it. Every other tool takes no arguments.
+else belongs in it. `claim` takes the id of the claim to read; every
+other tool takes no arguments.
 `submit` in particular names no path: the gateway reads the working copy
 its own configuration gives the region, so the session edits its files
 and calls `submit` with nothing.
 
-Every `/submit` and `/run` carries three identifying headers —
-`X-Session-Id`, `X-Model-Id`, and `X-Tool-Call-Id`, the last being pi's
-own id for the tool call being executed — so the gateway's request log
+Every `/submit`, `/run`, and `/claims` call carries three identifying
+headers — `X-Session-Id`, `X-Model-Id`, and `X-Tool-Call-Id`, the last
+being pi's own id for the tool call being executed — so the gateway's
+request log
 and the session file can be lined up call by call rather than matched by
 order and second-granularity timestamps.
 

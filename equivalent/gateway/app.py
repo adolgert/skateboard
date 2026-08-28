@@ -5,10 +5,14 @@ session can reach. Everything the agent or the person believes about a
 region's progress comes from what this module reads and returns; a bug
 here can make a bad port look accepted.
 
-The endpoints are GET /table, GET /status, POST /submit, POST /run, and
-an unauthenticated GET /healthz for container healthchecks. Both /table
-and /status name a region, because what a session may do and what it
-must still do are both properties of the region's phase. POST /run
+The endpoints are GET /table, GET /status, GET /claims/{claim_id},
+POST /submit, POST /run, and an unauthenticated GET /healthz for
+container healthchecks. Both /table and /status name a region, because
+what a session may do and what it must still do are both properties of
+the region's phase; so does a claim read, which is a read of that
+region's ledger. GET /claims/{claim_id} answers with the same receipt a
+check's own result carries, so a session told only a verdict can go and
+read why. POST /run
 refuses a request whose required claims are missing, returns an existing
 claim for a repeated deterministic request, and otherwise dispatches to
 the action's component. Every row in
@@ -108,6 +112,22 @@ def _capture_set_materials(detail: dict) -> list:
         for _, entry in sorted(detail.get("datasets", {}).items())
         if entry.get("capture_set")
     ]
+
+
+def _claim_read_response(claim) -> dict:
+    """One claim read back by id, filtered by the same receipt policy.
+
+    A read is the /run receipt plus what the claim is about: the
+    predicate type, the subject it is a verdict on, and the materials it
+    was reached against. Nothing here widens what the agent may see --
+    a verdict-only predicate is still verdict-only when read back.
+    """
+    return {
+        "predicateType": claim.predicateType,
+        "subject": [s.to_dict() for s in claim.subject],
+        "materials": [s.to_dict() for s in claim.materials],
+        **_claim_response(claim),
+    }
 
 
 def _claims_response(claims) -> dict:
@@ -260,6 +280,39 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             tree=Subject(kind="tree", sha256=tree_sha),
             frozen=Subject(kind="frozen", sha256=frozen_sha),
         )
+
+    @app.get("/claims/{claim_id}")
+    def get_claim(
+        claim_id: str,
+        region: str,
+        authorization: str | None = Header(default=None),
+        x_session_id: str = Header(...),
+        x_model_id: str = Header(...),
+        x_tool_call_id: str | None = Header(default=None),
+    ):
+        """One claim of one region, read back by id.
+
+        A verdict on its own is not something a session can act on: the
+        reason a check failed is in the claim's detail. This reads it
+        back through the same receipt policy the check's own answer went
+        through, so reading a claim can never show more than the answer
+        did. The claim is looked up in the named region's ledger, so an
+        id from another region is simply not found here.
+        """
+        _auth(authorization)
+        _region(region)
+        store = _store(region)
+        claim = store.get_claim(claim_id)
+
+        store.append_request(RequestLogLine(
+            ts=_now(), session=x_session_id, model=x_model_id, endpoint="claim", action="claim",
+            region=region, tree=None, config_hash=None,
+            outcome="read" if claim is not None else "error",
+            claim_id=claim_id, tool_call_id=x_tool_call_id,
+        ))
+        if claim is None:
+            raise HTTPException(status_code=404, detail=f"unknown claim: {claim_id}")
+        return _claim_read_response(claim)
 
     @app.post("/submit")
     def post_submit(

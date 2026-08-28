@@ -1,7 +1,7 @@
 /**
  * Trust role: none. Delete this and no claim changes -- the gateway
  * remains the only thing that decides anything. This just registers one
- * tool per gateway action, plus `submit` and `status`, and forwards
+ * tool per gateway action, plus `submit`, `status` and `claim`, and forwards
  * calls with the session id, the model id, and the id of the tool call
  * itself attached, so the gateway's request log can be joined with the
  * session files call by call.
@@ -11,8 +11,16 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { type GatewayConfig, readConfig } from "./config.js";
-import { fetchStatus, fetchTable, postRun, postSubmit } from "./gateway.js";
-import { runResultText, submitResultText, type RunBody, type SubmitBody } from "./format.js";
+import { fetchClaim, fetchStatus, fetchTable, postRun, postSubmit } from "./gateway.js";
+import {
+  claimResultText,
+  runResultText,
+  submitResultText,
+  type ClaimReadBody,
+  type ErrorBody,
+  type RunBody,
+  type SubmitBody,
+} from "./format.js";
 import { renderStatus, type StatusBody } from "./status.js";
 import { callableRows, describeRow, runConfig, toolParameters } from "./table.js";
 
@@ -70,6 +78,28 @@ export default function equivalentExtension(pi: ExtensionAPI) {
     });
 
     pi.registerTool({
+      name: "claim",
+      label: "Claim",
+      description: "Read one claim by id, with its detail, as the receipt policy allows",
+      parameters: Type.Object({
+        claim_id: Type.String({
+          description:
+            "The id of the claim to read, as a verdict line or the status rows give it, e.g. c-0007.",
+        }),
+      }),
+      async execute(toolCallId, params, _signal, _onUpdate, execCtx) {
+        const { claim_id } = params as { claim_id: string };
+        const body = (await fetchClaim(cfg, execCtx, toolCallId, claim_id)) as
+          | ClaimReadBody
+          | ErrorBody;
+        return {
+          content: [{ type: "text", text: claimResultText(body) }],
+          details: body as unknown as Record<string, unknown>,
+        };
+      },
+    });
+
+    pi.registerTool({
       name: "status",
       label: "Status",
       description: "Report the region's current tree, which claims are present, and which are missing and why.",
@@ -83,7 +113,7 @@ export default function equivalentExtension(pi: ExtensionAPI) {
       },
     });
 
-    ctx.ui.notify(`equivalent: registered ${rows.length + 2} tools for region ${cfg.region}`, "info");
+    ctx.ui.notify(`equivalent: registered ${rows.length + 3} tools for region ${cfg.region}`, "info");
   });
 
   pi.registerCommand("status", {

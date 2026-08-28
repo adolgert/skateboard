@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchStatus, fetchTable } from "../src/gateway.js";
+import { fetchClaim, fetchStatus, fetchTable } from "../src/gateway.js";
 import type { GatewayConfig } from "../src/config.js";
 
 const CONFIG: GatewayConfig = {
@@ -35,6 +35,15 @@ describe("the gateway client", () => {
     await fetchTable(CONFIG);
 
     expect(urls).toEqual(["http://gateway.local/table?region=ch04%3Astep"]);
+  });
+
+  it("reads a claim from its own region, escaping both the id and the region", async () => {
+    const urls = recordingFetch({ claim_id: "c-0007", verdict: "fail" });
+    const ctx = { sessionManager: { getSessionId: () => "sess-1" }, model: { id: "m" } };
+
+    await fetchClaim(CONFIG, ctx, "call-1", "c-0007");
+
+    expect(urls).toEqual(["http://gateway.local/claims/c-0007?region=ch04%3Astep"]);
   });
 
   it("escapes the colon in a region id the same way for the table and the status", async () => {
