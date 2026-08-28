@@ -31,3 +31,11 @@ exclude = ["equivalent.tests*"]
 [tool.setuptools.package-data]
 # The strategy files are data the installed gateway reads, not examples.
 "equivalent.strategy" = ["files/*.yaml"]
+
+[tool.pytest.ini_options]
+# `pytest` with no arguments collects these two trees and nothing else.
+# tools/ also holds third-party checkouts -- pFUnit, serialbox, KGen and
+# others -- which carry their own suites and their own dependencies; left
+# to itself, pytest collects those and fails before a single test of this
+# project runs.
+testpaths = ["equivalent", "tools/regionharness"]
