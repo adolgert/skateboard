@@ -1,0 +1,16 @@
+{
+  "inputs": [
+    "Nx",
+    "Ny",
+    "Q",
+    "cfl",
+    "dt_max",
+    "dx",
+    "dy",
+    "ng"
+  ],
+  "outputs": [
+    "Q",
+    "dt"
+  ]
+}

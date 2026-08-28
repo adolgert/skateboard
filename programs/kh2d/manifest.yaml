@@ -1,18 +1,36 @@
-# The minimal form of a manifest: enough to seed a baseline and start an
-# onboarding session, and nothing more. Onboarding writes the rest into
-# the tree as harness/manifest.yaml, and promoting copies it here.
 version: 1
 name: kh2d
 source:
   root: baseline
-  patterns:
-    - "**/*.f90"
-    - "**/*.F90"
-    - "**/*.f08"
-    - "**/*.f03"
-    - "**/*.f"
-    - "**/*.F"
-    - "**/*.for"
-    - "**/*.inc"
-    - "Makefile"
-    - "**/*.mk"
+  patterns: ["**/*.f90", "**/*.F90", "**/*.f08", "**/*.f03", "**/*.f", "**/*.F", "**/*.for", "**/*.inc", "Makefile", "**/*.mk"]
+build:
+  makefile: Makefile
+  targets:
+    replay:  {target: replay,  executable: replay}
+    timing:  {target: timing,  executable: timing}
+    capture: {target: capture, executable: capture}
+interface:
+  module: kh2d_module
+  entry: kh2d_step
+  files: [src/kh2d_module.f90]
+  inputs:
+    - {name: Q, dtype: f64, rank: 3}
+    - {name: Nx, dtype: i32, rank: 0}
+    - {name: Ny, dtype: i32, rank: 0}
+    - {name: ng, dtype: i32, rank: 0}
+    - {name: dx, dtype: f64, rank: 0}
+    - {name: dy, dtype: f64, rank: 0}
+    - {name: cfl, dtype: f64, rank: 0}
+    - {name: dt_max, dtype: f64, rank: 0}
+  outputs:
+    - {name: Q, dtype: f64, rank: 3}
+    - {name: dt, dtype: f64, rank: 0}
+datasets:
+  visible: {args: ["64", "64", "0.1"]}
+  holdout: {args: ["96", "96", "0.1"]}
+timing:
+  args: ["512", "512"]
+  outputs: [kh2d.npy]
+  budget_s: 180
+tolerances: harness/tolerances.json
+properties: harness/properties.py

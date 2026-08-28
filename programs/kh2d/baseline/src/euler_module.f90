@@ -27,6 +27,7 @@ module euler_module
   public :: cons_to_prim, prim_to_cons, phys_flux
   public :: hll_flux, hllc_flux, roe_flux
   public :: exact_riemann_sample
+  public :: kh_init
 
 contains
 
@@ -301,5 +302,19 @@ contains
        fp = 1.0_dp/(rk*ak) * (p/pk)**(-(gam+1.0_dp)/(2.0_dp*gam))
     end if
   end subroutine pressure_fn
+
+  subroutine kh_init(x, y, rho, vx, vy, p)
+    real(dp), intent(in)  :: x, y
+    real(dp), intent(out) :: rho, vx, vy, p
+    real(dp), parameter :: w = 0.025_dp
+    real(dp), parameter :: pi = 3.141592653589793_dp
+    real(dp) :: r1, r2
+    r1 = 0.5_dp*(1.0_dp + tanh((y - 0.25_dp)/w))
+    r2 = 0.5_dp*(1.0_dp + tanh((0.75_dp - y)/w))
+    rho = 1.0_dp + r1*r2                    ! 1 outside layer, 2 inside
+    vx  = -0.5_dp + r1*r2
+    vy  = 0.01_dp*sin(4.0_dp*pi*x)
+    p   = 2.5_dp
+  end subroutine kh_init
 
 end module euler_module
