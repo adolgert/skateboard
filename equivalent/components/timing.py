@@ -2,43 +2,91 @@
 
 time_port times the region's own current tree. It relies on build_replay
 having already built the timing binary in the same builder workspace --
-build_replay sends every file in the tree the manifest counts as source,
-a superset that already includes whatever the builder needs for its
-end-to-end timing target, so there is nothing extra to build here.
+build_replay sends the whole tree and asks make for every target the
+manifest declares, so the program the timing run needs is already there.
 
 time_baseline measures the pristine baseline instead, which the region's
 own build_replay call never touches -- so this component does its own
-build first, using the builder's fixed "cpu_best" profile (a comparison floor,
-not a strategy choice; ACTION_TABLE's time_baseline row has no `requires`
-for a build step, so this bundles one in rather than changing the table).
+build first, with the region's `baseline_strategy`: the comparison floor,
+a strategy file like any other rather than a name inside the builder.
 The resulting claim is filed against the baseline tree, not whatever tree
 happens to be current for the region.
+
+What is timed is the code's own program, at the size its manifest
+declares: the executable, its arguments, its environment, and the files
+it must write are all manifest fields, so changing the problem size is an
+edit to data and not to a source file the agent can reach.
 """
 from __future__ import annotations
 
-from equivalent.gateway.submit import attempt_id_for, source_files_at
+import base64
+import hashlib
+
+from equivalent.gateway.submit import attempt_id_for, tree_payload
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import Manifest
+from equivalent.strategy.schema import Strategy
 
+from .build_replay import build_tree
 from .errors import ComponentError
 
-BASELINE_PROFILE = "cpu_best"
+# The manifest role of the program a timing run measures.
+TIMING_ROLE = "timing"
 
 
-def _time(builder, attempt_id: str, repeats: int, extra_detail: dict | None = None) -> dict:
+def _timing_target(manifest: Manifest):
+    target = manifest.build.targets.get(TIMING_ROLE)
+    if target is None:
+        raise ComponentError(
+            f"code '{manifest.name}' declares no '{TIMING_ROLE}' build target, so there "
+            f"is no program to time"
+        )
+    return target
+
+
+def _collected(outputs: dict) -> dict:
+    """What the run wrote, named and hashed rather than carried.
+
+    The files themselves can be large and are the program's output, not
+    evidence about it; their names and digests are what a reader needs to
+    see that two runs produced the same thing.
+    """
+    return {
+        name: hashlib.sha256(base64.b64decode(encoded)).hexdigest()
+        for name, encoded in sorted(outputs.items())
+    }
+
+
+def _time(builder, attempt_id: str, manifest: Manifest, repeats: int,
+          extra_detail: dict | None = None) -> dict:
+    target = _timing_target(manifest)
+    timing = manifest.timing
     try:
-        resp = builder.time(attempt_id, repeats)
+        resp = builder.time(
+            attempt_id, target.executable, list(timing.args), dict(timing.env),
+            list(timing.outputs), repeats, timing.budget_s,
+        )
     except Exception as exc:
         raise ComponentError(f"builder /v1/time call failed: {exc}") from exc
     if not resp.get("ok"):
         return {"verdict": "fail", "detail": {"log_tail": resp.get("log_tail", "")}}
-    detail = {"runs_s": resp["runs_s"], "gpu_exclusive": resp.get("gpu_exclusive")}
+    detail = {
+        "runs_s": resp["runs_s"],
+        "gpu_exclusive": resp.get("gpu_exclusive"),
+        # What was run, so a later reader can tell two timing claims apart
+        # without going back to the manifest of the day.
+        "executable": target.executable,
+        "args": list(timing.args),
+        "env": dict(timing.env),
+        "outputs": _collected(resp.get("outputs", {})),
+    }
     detail.update(extra_detail or {})
     return {"verdict": "pass", "detail": detail}
 
 
-def check_port(store: LedgerStore, tree: Subject, region_id: str, tree_sha: str, builder, repeats: int = 5) -> dict:
+def check_port(store: LedgerStore, tree: Subject, region_id: str, tree_sha: str,
+               manifest: Manifest, builder, repeats: int = 5) -> dict:
     """Time the port and record the flags it was actually built with.
 
     The flags come from the tree's own build/replay claim -- the builder's
@@ -51,28 +99,29 @@ def check_port(store: LedgerStore, tree: Subject, region_id: str, tree_sha: str,
     if build_claim is None or build_claim.predicate.verdict != "pass":
         raise ComponentError("no passing build/replay claim for this tree")
     flags = build_claim.predicate.detail.get("flags")
-    return _time(builder, attempt_id_for(region_id, tree_sha), repeats, extra_detail={"flags": flags})
+    return _time(
+        builder, attempt_id_for(region_id, tree_sha), manifest, repeats,
+        extra_detail={"flags": flags},
+    )
 
 
 def check_baseline(
     repo_dir, region_id: str, baseline_tree_sha: str,
-    manifest: Manifest, builder, repeats: int = 5,
+    manifest: Manifest, baseline_strategy: Strategy, builder, repeats: int = 5,
 ) -> dict:
     attempt_id = attempt_id_for(f"{region_id}-baseline", baseline_tree_sha)
-    try:
-        files = source_files_at(repo_dir, "main", manifest)
-    except ValueError as exc:
-        raise ComponentError(str(exc)) from exc
-    if not files:
-        raise ComponentError(
-            f"no file in the baseline tree {baseline_tree_sha} matches the source "
-            f"patterns of code '{manifest.name}'"
-        )
-    payload = [{"path": f["path"], "content": f["content"]} for f in files]
-    try:
-        build_resp = builder.build(attempt_id, payload, BASELINE_PROFILE)
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/build call failed: {exc}") from exc
+    build_resp = build_tree(
+        builder, attempt_id, tree_payload(repo_dir, "main"), baseline_strategy, manifest,
+    )
     if not build_resp.get("ok"):
-        return {"verdict": "fail", "detail": {"stage": "build", "log_tail": build_resp.get("log_tail", "")}}
-    return _time(builder, attempt_id, repeats)
+        return {
+            "verdict": "fail",
+            "detail": {
+                "stage": "build", "strategy": baseline_strategy.name,
+                "log_tail": build_resp.get("log_tail", ""),
+            },
+        }
+    return _time(
+        builder, attempt_id, manifest, repeats,
+        extra_detail={"strategy": baseline_strategy.name, "flags": build_resp.get("flags")},
+    )

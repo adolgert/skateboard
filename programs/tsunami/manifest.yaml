@@ -32,8 +32,14 @@ datasets:
   visible: {args: ["100", "5000", "25", "0.02"]}
   holdout: {args: ["100", "5000", "60", "0.01"]}
 timing:
-  args: []
-  outputs: []
+  args: []                  # the program takes its size from its own source today
+  outputs: []               # files the run writes, compared against the baseline's
   budget_s: 300
+  env:
+    # The pristine kernel returns difference arrays by value, so the CPU
+    # baseline allocates temporaries every step; keep the arena so the
+    # stencil is timed, not page faults.
+    MALLOC_TRIM_THRESHOLD_: "-1"
+    MALLOC_MMAP_THRESHOLD_: "1073741824"
 tolerances: tolerances.json
 properties: null            # or a path to a pytest module

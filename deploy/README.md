@@ -7,9 +7,13 @@ stack. The only code here is `seed.py`, which writes the baseline, and
 anything.
 
 What is deployed comes from two directories above this one: `programs/`,
-one directory per code, holding that code's manifest, baseline sources,
+one directory per code, holding that code's manifest, baseline sources
+(including its own makefile, replay driver, and capture program),
 datasets, captures, and tolerance policy; and `services/`, holding the
-builder and the oracle. Both image builds take the repository root as
+builder and the oracle. The builder knows no code: it builds a submitted
+tree by running that tree's own makefile, with the compiler and flags
+the strategy names, and reports back what the compiler was actually
+asked to do. Both image builds take the repository root as
 their context, and the oracle takes the code as a build argument
 (`EQUIVALENT_CODE`) because it bakes that code's answers in: its
 `captures/`, its `tolerances.json`, and its `manifest.yaml`, which is how
@@ -126,6 +130,13 @@ the login and the baseline seed.
   that disk goes away with the container. After restarting the builder, re-run
   `build_replay` for the tree you are working on; it rebuilds under the same
   key and the later gates find their workspace again.
+- **The builder runs a makefile that came in with the submission.** That is
+  what lets any code be built without teaching the builder about it, and it
+  is why the compiler it hands that makefile is a shim that writes down every
+  invocation. The `build/replay` claim carries that log, and a build that
+  compiled without the strategy's flags, or compiled a file that is not the
+  tree's own source, is a failed claim rather than a passed one. The builder
+  has no route off the host either way.
 - **The walkthrough runs in a container, not on this machine.** The gateway is
   on internal networks only, so nothing outside them can reach it — including
   this terminal. `walkthrough.sh` runs the same script on the agent's network,

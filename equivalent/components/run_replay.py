@@ -59,9 +59,13 @@ def check(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
     if not visible_cases:
         raise ComponentError("no visible dataset configured for this region")
 
+    replay = manifest.build.targets["replay"]
     attempt_id = attempt_id_for(region_id, tree_sha)
     try:
-        resp = builder.run(attempt_id, strategy.name, visible_cases, mandatory=strategy.device_proof.mandatory)
+        resp = builder.run(
+            attempt_id, replay.executable, visible_cases,
+            notify=strategy.device_proof.notify, mandatory=strategy.device_proof.mandatory,
+        )
     except Exception as exc:
         raise ComponentError(f"builder /v1/run call failed: {exc}") from exc
 

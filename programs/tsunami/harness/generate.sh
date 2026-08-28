@@ -13,21 +13,21 @@
 # Also runs a self-test: replaying the visible inputs through the SAME pristine
 # kernel must reproduce the reference outputs bit-for-bit.
 #
-# This script still drives the compiler by hand. A later change turns it into
-# the capture target of this code's own Makefile, which is what the manifest's
-# build section already names, so that the builder runs it under the same
-# contract as every other target. Do not run it casually: it regenerates the
-# reference data, and a different compiler than the one that made the tracked
-# captures would move every expected answer.
+# The two programs come from this code's own Makefile -- the same `capture` and
+# `replay` targets the builder asks for -- so what runs here is what the gates
+# run. Do not run this script casually: it regenerates the reference data, and a
+# different compiler than the one that made the tracked captures would move
+# every expected answer.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CODE="$(cd "$HERE/.." && pwd)"
-WORK="$CODE/baseline/src"
-CAPTURE="$(cd "$HERE/../../../services/builder/harness" && pwd)"
+TREE="$CODE/baseline"
 BUILD="$HERE/.build"
 FC="${FC:-gfortran}"
 FFLAGS="-O2 -ffree-line-length-none"
+# gfortran spells the module output directory -J; nvfortran spells it -module.
+MODFLAG="${MODFLAG:--J}"
 
 GRID=100
 STEPS=5000
@@ -35,10 +35,10 @@ STEPS=5000
 rm -rf "$BUILD"; mkdir -p "$BUILD"
 cd "$BUILD"
 
-echo "=== compiling gen_reference and replay (pristine kernel, $FC) ==="
-KMODS="$WORK/mod_params.f90 $WORK/mod_diff.f90 $WORK/mod_initial.f90 $WORK/mod_kernel.f90"
-$FC $FFLAGS -o gen_reference "$CAPTURE/npy_io.f90" $KMODS "$HERE/gen_reference.f90"
-$FC $FFLAGS -o replay        "$CAPTURE/npy_io.f90" $KMODS "$CAPTURE/replay.f90"
+echo "=== building the capture and replay targets (pristine kernel, $FC) ==="
+make -C "$TREE" FC="$FC" FFLAGS="$FFLAGS" MODFLAG="$MODFLAG" capture replay
+cp "$TREE/gen_reference" "$TREE/replay" "$BUILD/"
+make -C "$TREE" clean   # leave the tracked tree as the baseline, not a build directory
 
 echo "=== generating VISIBLE dataset (icenter=25 decay=0.02) ==="
 ./gen_reference $GRID $STEPS 25 0.02 "$BUILD/visible"

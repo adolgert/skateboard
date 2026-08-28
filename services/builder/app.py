@@ -1,6 +1,11 @@
-"""Builder service. Thin HTTP shim over stages.py. Compiles with nvfortran and
-runs the GPU gates. All command lines live in stages.py (baked into the image);
-this file only routes requests. Bearer token required.
+"""Builder service. Thin HTTP shim over stages.py.
+
+Trust role: routing only. Every command line lives in stages.py; this
+file turns a request body into a call and the answer into JSON. What it
+must get right is that nothing it invents reaches stages.py -- the tree,
+the makefile, the targets, the compiler, the flags, and the executables
+all come from the gateway, which read them from the code's hashed
+manifest and the hashed strategy file. Bearer token required.
 """
 import os
 import shutil
@@ -16,7 +21,7 @@ TOKEN = os.environ.get("SKATEBOARD_TOKEN", "")
 # present or absent, never installed on demand: the image is what it is,
 # and the gateway refuses to start against a builder that is missing
 # something a strategy needs.
-TOOLS = ("nvfortran", "compute-sanitizer", "nsys", "make", "cmake", "gfortran")
+TOOLS = ("nvfortran", "compute-sanitizer", "nsys", "make", "cmake", "fpm", "gfortran")
 app = FastAPI(title="skateboard-builder")
 
 
@@ -25,30 +30,48 @@ def _auth(authorization):
         raise HTTPException(status_code=401, detail="bad or missing token")
 
 
+class TreeFile(BaseModel):
+    path: str    # relative to the tree root, directories included
+    b64: str     # the file's bytes; a tree holds namelists and data, not only text
+
+
+class BuildTarget(BaseModel):
+    role: str        # what the manifest calls this target: replay, timing, capture
+    target: str      # what `make` is asked for
+    executable: str  # what that target must leave in the tree, relative to its root
+
+
 class BuildReq(BaseModel):
     attempt_id: str
-    source: dict            # {"files": [{"path","content"}]}
-    profile: str
-    # Optional explicit compile/link flags from the gateway's strategy file.
-    # When present they replace the profile's baked flag list for this
-    # build; the profile still names the workspace/notify behavior.
-    # Absent (the demo orchestrator's case), the profile table applies.
-    flags: list | None = None
-    link_flags: list | None = None
+    # The WHOLE tracked tree, not a filtered source list: a code's build
+    # reads include files, namelists, and small data files that no
+    # extension test would recognize.
+    tree: list[TreeFile]
+    makefile: str
+    targets: list[BuildTarget]
+    compiler: str
+    flags: list[str] = []
+    link_flags: list[str] = []
+    # What the code calls its own source, used to say whether the build
+    # compiled anything the manifest never described.
+    source_patterns: list[str] = []
 
 
 class RunReq(BaseModel):
     attempt_id: str
-    profile: str
+    executable: str  # the manifest's replay target
     # {name: {variable: base64 of that variable's .npy file}}. The file
     # says what type and shape the array is; nothing else has to.
     cases: dict
+    # The strategy's device proof: which offload runtime should be asked
+    # to announce its kernel launches, or none at all.
+    notify: str | None = None
     mandatory: bool = False
 
 
 class SanitizeReq(BaseModel):
     attempt_id: str
-    profile: str
+    executable: str
     # One entry per case to sanitize, shaped like RunReq.cases. How many
     # cases that is comes from the gateway's hashed strategy file; the
     # builder runs whatever it is sent.
@@ -58,34 +81,46 @@ class SanitizeReq(BaseModel):
 
 class TimeReq(BaseModel):
     attempt_id: str
+    executable: str  # the manifest's timing target
+    args: list[str] = []
+    env: dict = {}
+    outputs: list[str] = []  # files the run must write, collected and returned
     repeats: int = 5
+    budget_s: int = 300
 
 
 @app.post("/v1/build")
 def build(req: BuildReq, authorization: str | None = Header(default=None)):
     _auth(authorization)
-    if req.profile not in stages.PROFILES:
-        raise HTTPException(status_code=400, detail="unknown profile")
-    return stages.build(req.attempt_id, req.source.get("files", []), req.profile,
-                        flags=req.flags, link_flags=req.link_flags)
+    return stages.build(
+        req.attempt_id, [f.model_dump() for f in req.tree], req.makefile,
+        [t.model_dump() for t in req.targets], req.compiler,
+        req.flags, req.link_flags, req.source_patterns,
+    )
 
 
 @app.post("/v1/run")
 def run(req: RunReq, authorization: str | None = Header(default=None)):
     _auth(authorization)
-    return stages.run(req.attempt_id, req.profile, req.cases, mandatory=req.mandatory)
+    return stages.run(
+        req.attempt_id, req.executable, req.cases,
+        notify=req.notify, mandatory=req.mandatory,
+    )
 
 
 @app.post("/v1/sanitize")
 def sanitize(req: SanitizeReq, authorization: str | None = Header(default=None)):
     _auth(authorization)
-    return stages.sanitize(req.attempt_id, req.profile, req.cases, req.tools)
+    return stages.sanitize(req.attempt_id, req.executable, req.cases, req.tools)
 
 
 @app.post("/v1/time")
 def time_run(req: TimeReq, authorization: str | None = Header(default=None)):
     _auth(authorization)
-    return stages.time_run(req.attempt_id, req.repeats)
+    return stages.time_run(
+        req.attempt_id, req.executable, args=req.args, env=req.env,
+        outputs=req.outputs, repeats=req.repeats, budget_s=req.budget_s,
+    )
 
 
 @app.get("/healthz")
@@ -96,8 +131,4 @@ def healthz():
     `required_tools` spells them, so the gateway can compare the two
     without translating between two vocabularies.
     """
-    return {
-        "ok": True,
-        "tools": {name: shutil.which(name) is not None for name in TOOLS},
-        "profiles": list(stages.PROFILES),
-    }
+    return {"ok": True, "tools": {name: shutil.which(name) is not None for name in TOOLS}}

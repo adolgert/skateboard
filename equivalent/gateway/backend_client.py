@@ -34,31 +34,56 @@ class BuilderClient:
         r.raise_for_status()
         return r.json()
 
-    def build(self, attempt_id: str, files: list[dict], profile: str,
-              flags: list[str] | None = None, link_flags: list[str] | None = None) -> dict:
+    def build(self, attempt_id: str, tree: list[dict], makefile: str, targets: list[dict],
+              compiler: str, flags: list[str], link_flags: list[str],
+              source_patterns: list[str]) -> dict:
+        """Build one tree with its own makefile.
+
+        `tree` is the whole tracked tree as [{"path", "b64"}]; `targets`
+        is [{"role", "target", "executable"}] from the code's manifest.
+        The compiler and the flags come from the strategy file, and
+        `source_patterns` is what the code calls its own source, which is
+        how the builder can say whether anything else was compiled.
+        """
         r = self._http.post("/v1/build", json={
-            "attempt_id": attempt_id, "source": {"files": files}, "profile": profile,
-            "flags": flags, "link_flags": link_flags,
+            "attempt_id": attempt_id, "tree": tree, "makefile": makefile,
+            "targets": targets, "compiler": compiler, "flags": flags,
+            "link_flags": link_flags, "source_patterns": source_patterns,
         })
         r.raise_for_status()
         return r.json()
 
-    def run(self, attempt_id: str, profile: str, cases: dict, mandatory: bool = False) -> dict:
-        """Replay every case. `cases` is {name: {variable: base64 of its .npy file}},
-        and the outputs come back in the same shape. The .npy file says what
-        type and shape each array is, so nothing on the wire repeats it."""
-        r = self._http.post("/v1/run", json={"attempt_id": attempt_id, "profile": profile, "cases": cases, "mandatory": mandatory})
+    def run(self, attempt_id: str, executable: str, cases: dict,
+            notify: str | None = None, mandatory: bool = False) -> dict:
+        """Replay every case through the manifest's replay executable.
+
+        `cases` is {name: {variable: base64 of its .npy file}}, and the
+        outputs come back in the same shape. The .npy file says what type
+        and shape each array is, so nothing on the wire repeats it.
+        `notify` is the strategy's device proof.
+        """
+        r = self._http.post("/v1/run", json={
+            "attempt_id": attempt_id, "executable": executable, "cases": cases,
+            "notify": notify, "mandatory": mandatory,
+        })
         r.raise_for_status()
         return r.json()
 
-    def sanitize(self, attempt_id: str, profile: str, cases: dict, tools: list[str]) -> dict:
+    def sanitize(self, attempt_id: str, executable: str, cases: dict, tools: list[str]) -> dict:
         """Run each sanitizer over each case. `cases` is shaped as for run()."""
-        r = self._http.post("/v1/sanitize", json={"attempt_id": attempt_id, "profile": profile, "cases": cases, "tools": tools})
+        r = self._http.post("/v1/sanitize", json={
+            "attempt_id": attempt_id, "executable": executable, "cases": cases, "tools": tools,
+        })
         r.raise_for_status()
         return r.json()
 
-    def time(self, attempt_id: str, repeats: int = 5) -> dict:
-        r = self._http.post("/v1/time", json={"attempt_id": attempt_id, "repeats": repeats})
+    def time(self, attempt_id: str, executable: str, args: list[str], env: dict,
+             outputs: list[str], repeats: int = 5, budget_s: int = 300) -> dict:
+        """Time the manifest's timing executable and collect the files it declares."""
+        r = self._http.post("/v1/time", json={
+            "attempt_id": attempt_id, "executable": executable, "args": args, "env": env,
+            "outputs": outputs, "repeats": repeats, "budget_s": budget_s,
+        })
         r.raise_for_status()
         return r.json()
 

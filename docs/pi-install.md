@@ -247,16 +247,23 @@ on the host.
 
 `programs/` holds one directory per code: its `manifest.yaml`, the
 baseline sources, the datasets, the reference captures, the tolerance
-policy, and the region specs. `deploy/gateway.yaml` names each code in
+policy, and the region specs. The baseline sources include the code's
+own makefile, its replay driver, and its capture program -- the builder
+builds a code by running that makefile, so nothing about how a code is
+built lives in the harness. `deploy/gateway.yaml` names each code in
 its `codes:` section and each region in its `regions:` section, where a
-region gives its code, its spec file path, its strategy, and its visible
-dataset. `equivalent/strategy/files/` holds the strategies
-(`stdpar_managed`, `omp_target`).
+region gives its code, its spec file path, its strategy, the baseline
+strategy its speedup is measured against, and its visible dataset.
+`equivalent/strategy/files/` holds the strategies (`stdpar_managed`,
+`omp_target`, and `cpu_reference`, which is the usual comparison floor).
 
 A new region is a new entry in `gateway.yaml` and `EQUIVALENT_REGION` in
 `.env`; a new strategy is a new YAML file; a new code is a new directory
-under `programs/`, a new `codes:` entry, and `EQUIVALENT_CODE` in
-`.env`. Changing the code also means rebuilding the oracle image, which
+under `programs/` holding a tree that builds itself, a new `codes:`
+entry, and `EQUIVALENT_CODE` in `.env`. The manifest's `build:` section
+names the makefile and, per role, the `make` target and the executable
+it must leave: `replay` is required, `timing` and `capture` are built
+when they are declared. Changing the code also means rebuilding the oracle image, which
 bakes in that code's captures, tolerance policy, and manifest.
 
 A dataset directory holds a `cases.json` naming its cases and one

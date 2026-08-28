@@ -9,40 +9,63 @@ FILES_DIR = Path(__file__).resolve().parents[2] / "strategy" / "files"
 STRATEGY_FILES = {
     "stdpar_managed": FILES_DIR / "stdpar_managed.yaml",
     "omp_target": FILES_DIR / "omp_target.yaml",
+    "cpu_reference": FILES_DIR / "cpu_reference.yaml",
 }
 
-# The exact flags services/builder/stages.py's PROFILES pass to nvfortran today.
-DEMO_FLAGS = {
+# The strategy file is the only place these flags are written down: the
+# builder is handed them and passes them through, so there is nothing left
+# to compare them against. Spelling them out again here is what makes a
+# change to any of them a deliberate edit in two places rather than a
+# quiet one -- these are the flags every accepted port was compiled with.
+EXPECTED_FLAGS = {
     "stdpar_managed": ("-O2", "-stdpar=gpu", "-gpu=cc89,mem:managed", "-Minfo=accel"),
     "omp_target": ("-O2", "-mp=gpu", "-gpu=cc89,mem:managed", "-Minfo=accel"),
+    "cpu_reference": ("-O2", "-stdpar=multicore"),
 }
 
-# services/builder/stages.py's per-profile "notify" value and OMP_TARGET_OFFLOAD use.
-DEMO_DEVICE_PROOF = {
+# Which offload runtime is asked to announce its kernel launches, and
+# whether a host fallback is a runtime error.
+EXPECTED_DEVICE_PROOF = {
     "stdpar_managed": {"notify": "acc", "mandatory": False},
     "omp_target": {"notify": "omp", "mandatory": True},
+    "cpu_reference": {"notify": None, "mandatory": False},
 }
 
 
 @pytest.mark.parametrize("name", sorted(STRATEGY_FILES))
-def test_flags_match_demo_builder_exactly(name):
+def test_the_flags_are_the_ones_the_compiler_will_be_given(name):
     strategy = load_strategy(STRATEGY_FILES[name])
-    assert strategy.languages["fortran"].flags == DEMO_FLAGS[name]
+    assert strategy.languages["fortran"].flags == EXPECTED_FLAGS[name]
 
 
 @pytest.mark.parametrize("name", sorted(STRATEGY_FILES))
-def test_device_proof_matches_demo_builder(name):
+def test_the_device_proof_matches_what_the_strategy_offloads(name):
     strategy = load_strategy(STRATEGY_FILES[name])
-    expected = DEMO_DEVICE_PROOF[name]
+    expected = EXPECTED_DEVICE_PROOF[name]
     assert strategy.device_proof.notify == expected["notify"]
     assert strategy.device_proof.mandatory == expected["mandatory"]
 
 
 @pytest.mark.parametrize("name", sorted(STRATEGY_FILES))
-def test_required_tools_include_compiler_and_sanitizer(name):
+def test_every_strategy_requires_its_own_compiler(name):
     strategy = load_strategy(STRATEGY_FILES[name])
-    assert "nvfortran" in strategy.required_tools
-    assert "compute-sanitizer" in strategy.required_tools
+    assert strategy.languages["fortran"].compiler in strategy.required_tools
+
+
+@pytest.mark.parametrize("name", sorted(STRATEGY_FILES))
+def test_a_strategy_that_runs_sanitizers_requires_the_sanitizer(name):
+    strategy = load_strategy(STRATEGY_FILES[name])
+    if strategy.sanitizers:
+        assert "compute-sanitizer" in strategy.required_tools
+
+
+def test_the_baseline_strategy_offloads_nothing_and_sanitizes_nothing():
+    # It exists to build the pristine tree for a speedup comparison, so
+    # there is no kernel to count and no GPU memory for a tool to watch.
+    strategy = load_strategy(STRATEGY_FILES["cpu_reference"])
+
+    assert strategy.device_proof.notify is None
+    assert strategy.sanitizers == ()
 
 
 def _base_dict():
@@ -100,11 +123,10 @@ def test_identical_content_hashes_identically(tmp_path):
     assert load_strategy(a).sha256 == load_strategy(b).sha256
 
 
-def test_the_two_strategy_files_hash_differently():
-    assert (
-        load_strategy(STRATEGY_FILES["stdpar_managed"]).sha256
-        != load_strategy(STRATEGY_FILES["omp_target"]).sha256
-    )
+def test_every_strategy_file_hashes_differently():
+    hashes = {name: load_strategy(path).sha256 for name, path in STRATEGY_FILES.items()}
+
+    assert len(set(hashes.values())) == len(STRATEGY_FILES)
 
 
 @pytest.mark.parametrize("name", sorted(STRATEGY_FILES))
@@ -153,7 +175,7 @@ def test_ignoring_case_does_not_let_an_unrelated_path_through(name):
 
 
 @pytest.mark.parametrize("name", sorted(STRATEGY_FILES))
-def test_both_strategy_files_sanitize_the_first_case_only(name):
+def test_every_strategy_file_sanitizes_the_first_case_only(name):
     strategy = load_strategy(STRATEGY_FILES[name])
     assert strategy.sanitize_cases == "first"
 

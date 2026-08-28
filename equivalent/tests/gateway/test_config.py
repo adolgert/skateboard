@@ -15,6 +15,7 @@ CONFIG = {
             "code": "tsunami",
             "spec_path": "notes/regions/ch04-step.sese.yaml",
             "strategy": "stdpar_managed",
+            "baseline_strategy": "cpu_reference",
             "visible_dataset": "visible",
         },
     },
@@ -32,6 +33,7 @@ def _tree(tmp_path, config: dict):
     strategies = tmp_path / "strategies"
     strategies.mkdir()
     (strategies / "stdpar_managed.yaml").write_text("name: stdpar_managed\n")
+    (strategies / "cpu_reference.yaml").write_text("name: cpu_reference\n")
     (tmp_path / "working").mkdir()
     programs = write_program(tmp_path).parent
 
@@ -59,6 +61,9 @@ def test_one_region_becomes_one_region_config_with_every_path_joined(tmp_path):
     assert cfg.repo_dir == tmp_path / "repo"
     assert cfg.spec_path == "notes/regions/ch04-step.sese.yaml"
     assert cfg.strategy_path == tmp_path / "strategies" / "stdpar_managed.yaml"
+    # What the pristine baseline is built with when a port's speedup is
+    # measured -- a strategy file like any other, not a name in the builder.
+    assert cfg.baseline_strategy_path == tmp_path / "strategies" / "cpu_reference.yaml"
     assert cfg.working_copy_dir == tmp_path / "working"
     # The dataset lives under the code that owns it, not in a directory
     # shared by every code the deployment holds.
@@ -113,6 +118,7 @@ def test_two_regions_become_two_region_configs(tmp_path):
             "code": "tsunami",
             "spec_path": "notes/regions/ch04-diff.sese.yaml",
             "strategy": "stdpar_managed",
+            "baseline_strategy": "cpu_reference",
         },
     }}
     path, baseline = _tree(tmp_path, config)
@@ -128,6 +134,7 @@ def test_two_regions_become_two_region_configs(tmp_path):
 def test_a_region_missing_a_required_field_names_the_field_and_the_region(tmp_path):
     config = {**CONFIG, "regions": {"ch04:step": {
         "code": "tsunami", "spec_path": "notes/regions/ch04-step.sese.yaml",
+        "baseline_strategy": "cpu_reference",
     }}}
     path, _ = _tree(tmp_path, config)
 
@@ -223,3 +230,16 @@ def test_a_sessions_directory_that_is_not_on_this_machine_is_not_an_error(tmp_pa
     path.write_text(yaml.safe_dump(raw))
 
     assert load_gateway_config(path).paths.sessions == tmp_path / "nowhere"
+
+
+def test_a_baseline_strategy_whose_file_is_not_there_fails_at_startup(tmp_path):
+    config = {**CONFIG, "regions": {"ch04:step": {
+        **CONFIG["regions"]["ch04:step"], "baseline_strategy": "cpu_absent",
+    }}}
+    path, _ = _tree(tmp_path, config)
+
+    with pytest.raises(ValueError) as excinfo:
+        load_gateway_config(path)
+
+    assert "cpu_absent" in str(excinfo.value)
+    assert "ch04:step" in str(excinfo.value)

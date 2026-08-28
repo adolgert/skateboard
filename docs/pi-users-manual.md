@@ -59,7 +59,16 @@ is ever changed or deleted. You can read it at any time with the
 session, that fixes the porting approach: which files may change at
 most, which compiler and flags are used, how GPU execution is proven,
 and which sanitizers run. The model cannot change it. Every claim
-records which strategy was in effect.
+records which strategy was in effect. A region names a second one, the
+baseline strategy, which is what the unmodified code is compiled with
+when a speedup is measured.
+
+**The manifest.** A configuration file per code, also fixed before the
+session, saying what the code is: which tree, which makefile and build
+targets, which variables the region reads and writes, which datasets,
+and what the timing run is. It is why the harness needs to be taught
+nothing about a code in order to build and run it. Every claim records
+it too.
 
 **The spec.** A short YAML file, `notes/regions/ch04-step.sese.yaml` in
 the working copy, that names the region: which source file, which
@@ -164,10 +173,20 @@ commit.
 
 In order, each depending on the one before:
 
-**`build_replay`** — The builder compiles the submitted tree with the
-strategy's flags and links it with a replay harness. The claim records
-the flags. A compile error is a `fail` claim carrying the compiler's
-messages.
+**`build_replay`** — The builder builds the submitted tree by running
+the tree's own makefile, with the strategy's compiler and flags. It
+knows nothing else about the code: which makefile, which targets, and
+which programs those targets must leave behind all come from the code's
+manifest.
+
+The compiler the makefile is handed is a shim that writes down every
+invocation before running the real one, so the claim can say more than
+"it compiled". It records every compiler command line, and two checks
+come out of that log: the strategy's flags reached every compile, and
+every file compiled was the tree's own source. A build that succeeded
+while ignoring the flags, or that reached outside the tree, is a `fail`
+naming the command line or the file. A compile error is a `fail`
+carrying the compiler's messages.
 
 **`run_replay`** — The built program runs on recorded inputs, on the
 GPU, with the driver's kernel-launch notifications turned on. The
@@ -195,13 +214,17 @@ the session never sees. The answer is pass or fail only, so a port
 cannot be tuned to the held-out set. The full comparison stays in the
 ledger for a person.
 
-**`time_port`** — The full-size program is timed, five runs by default.
-This is the last requirement for acceptance. The claim records the
-flags, the run times, and whether the GPU was otherwise idle, which on a
-shared workstation it usually is not.
+**`time_port`** — The code's own program is timed, five runs by default,
+with the arguments and environment the manifest declares and a budget it
+declares too. This is the last requirement for acceptance. The claim
+records the flags, the run times, what the program was given, which
+files it wrote and their digests, and whether the GPU was otherwise
+idle, which on a shared workstation it usually is not.
 
 **`time_baseline`** — The unmodified program is timed the same way, for
-comparison. It has no prerequisites, runs against the baseline tree
+comparison, built with the region's baseline strategy: a strategy file
+like any other, naming the compiler and flags the comparison floor is
+compiled with. It has no prerequisites, runs against the baseline tree
 rather than the submission, and is not required for acceptance; once
 per region is enough.
 

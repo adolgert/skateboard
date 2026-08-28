@@ -18,6 +18,7 @@ from __future__ import annotations
 from equivalent.gateway.submit import attempt_id_for
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
+from equivalent.manifest.schema import Manifest
 from equivalent.strategy.schema import Strategy
 
 from .errors import ComponentError
@@ -39,11 +40,16 @@ def check_visible(store: LedgerStore, tree: Subject, oracle) -> dict:
     }
 
 
-def check_holdout(region_id: str, tree_sha: str, strategy: Strategy, oracle, builder) -> dict:
+def check_holdout(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
+                  oracle, builder) -> dict:
     attempt_id = attempt_id_for(region_id, tree_sha)
+    replay = manifest.build.targets["replay"]
     try:
         holdout = oracle.holdout_inputs()["cases"]
-        run_resp = builder.run(attempt_id, strategy.name, holdout)
+        run_resp = builder.run(
+            attempt_id, replay.executable, holdout,
+            notify=strategy.device_proof.notify, mandatory=strategy.device_proof.mandatory,
+        )
     except Exception as exc:
         raise ComponentError(f"could not execute the held-out cases: {exc}") from exc
     if not run_resp.get("ok"):

@@ -344,7 +344,9 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             if req.action == "sanitize":
                 if builder is None:
                     raise ComponentError("builder not configured")
-                results = sanitize.check(cfg.region_id, tree_sha, strategy, _visible_cases(cfg), builder)
+                results = sanitize.check(
+                    cfg.region_id, tree_sha, strategy, cfg.manifest, _visible_cases(cfg), builder,
+                )
                 claims = [
                     record(f"sanitize/{tool}", subjects_by_kind["tree"], "compute-sanitizer", result)
                     for tool, result in results.items()
@@ -366,7 +368,9 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             if req.action == "regression_holdout":
                 if builder is None or oracle is None:
                     raise ComponentError("builder or oracle not configured")
-                result = regression.check_holdout(cfg.region_id, tree_sha, strategy, oracle, builder)
+                result = regression.check_holdout(
+                    cfg.region_id, tree_sha, strategy, cfg.manifest, oracle, builder,
+                )
                 policy = Subject(kind="policy", sha256=result["detail"]["policy_sha256"])
                 claim = record("regression/holdout", subjects_by_kind["tree"], "oracle", result, materials=[policy])
                 log("claim", claim_id=claim.id)
@@ -376,8 +380,8 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 if builder is None:
                     raise ComponentError("builder not configured")
                 result = timing.check_port(
-                    store, subjects_by_kind["tree"], cfg.region_id, tree_sha, builder,
-                    repeats=int(req.config.get("repeats", 5)),
+                    store, subjects_by_kind["tree"], cfg.region_id, tree_sha, cfg.manifest,
+                    builder, repeats=int(req.config.get("repeats", 5)),
                 )
                 claim = record("timing/port", subjects_by_kind["tree"], "builder", result)
                 log("claim", claim_id=claim.id)
@@ -387,8 +391,12 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 if builder is None:
                     raise ComponentError("builder not configured")
                 base_tree = baseline_tree_sha(cfg.repo_dir)
+                # The floor a speedup is measured against is a strategy
+                # file of the region's own choosing, loaded here so the
+                # claim says which one it was.
                 result = timing.check_baseline(
-                    cfg.repo_dir, cfg.region_id, base_tree, cfg.manifest, builder,
+                    cfg.repo_dir, cfg.region_id, base_tree, cfg.manifest,
+                    load_strategy(cfg.baseline_strategy_path), builder,
                     repeats=int(req.config.get("repeats", 5)),
                 )
                 claim = record("timing/baseline", Subject(kind="tree", sha256=base_tree), "builder", result)

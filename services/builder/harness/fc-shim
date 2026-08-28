@@ -1,0 +1,30 @@
+#!/bin/bash
+# The compiler a submitted Makefile is handed as FC.
+#
+# Trust role: this is the only witness to what a build actually did. The
+# Makefile came in with the submission, so the builder cannot know its
+# command lines in advance; instead every compiler invocation passes
+# through here and is written down before it runs. contract.py reads that
+# log to say whether the strategy's flags reached every compile and
+# whether anything outside the submitted tree was compiled. A shim that
+# missed an invocation, or wrote it inaccurately, would let a build that
+# ignored the strategy look like one that obeyed it.
+#
+# It logs and then hands over: nothing here alters the arguments, so what
+# the log records is exactly what the compiler received.
+#
+#   FC_REAL  the compiler the strategy names (required)
+#   FC_LOG   the file to append one JSON line per invocation to
+set -euo pipefail
+
+if [ -n "${FC_LOG:-}" ]; then
+  # python3 rather than printf: the arguments hold commas, equals signs,
+  # and quotes, and this has to be JSON a reader can trust exactly.
+  FC_SHIM_LOG="$FC_LOG" python3 -c '
+import json, os, sys
+with open(os.environ["FC_SHIM_LOG"], "a") as log:
+    log.write(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd()}) + "\n")
+' "$@"
+fi
+
+exec "${FC_REAL:?FC_REAL is not set; the builder must name the compiler to run}" "$@"

@@ -19,6 +19,10 @@ class RegionConfig:
     spec_path: str
     ledger_dir: Path
     strategy_path: Path
+    # The strategy the pristine baseline is built with, so a speedup
+    # compares this port against a stated floor rather than against
+    # whatever the builder happened to default to.
+    baseline_strategy_path: Path
     # The directory the gateway reads a submit from. It is named here,
     # not in the submit request, so that nothing the agent sends can
     # choose which gateway-side path gets read.

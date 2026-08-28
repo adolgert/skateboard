@@ -74,14 +74,18 @@ def check_required_tools(regions, builder) -> None:
     present = report.get("tools", {})
 
     for region_id in sorted(regions):
-        strategy = load_strategy(regions[region_id].strategy_path)
-        missing = [tool for tool in strategy.required_tools if not present.get(tool)]
-        if missing:
-            raise ValueError(
-                f"strategy '{strategy.name}' (region '{region_id}') requires {missing}, "
-                f"which the builder does not have; it reports "
-                f"{sorted(name for name, have in present.items() if have)}"
-            )
+        region = regions[region_id]
+        # Both strategies a region names get run on this builder: the one
+        # its port is compiled with, and the one its baseline is.
+        for path in (region.strategy_path, region.baseline_strategy_path):
+            strategy = load_strategy(path)
+            missing = [tool for tool in strategy.required_tools if not present.get(tool)]
+            if missing:
+                raise ValueError(
+                    f"strategy '{strategy.name}' (region '{region_id}') requires {missing}, "
+                    f"which the builder does not have; it reports "
+                    f"{sorted(name for name, have in present.items() if have)}"
+                )
 
 
 def build_app_from_env(env=None, *, builder=None, oracle=None) -> FastAPI:

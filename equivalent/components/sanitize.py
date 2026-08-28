@@ -16,6 +16,7 @@ every one of them.
 from __future__ import annotations
 
 from equivalent.gateway.submit import attempt_id_for
+from equivalent.manifest.schema import Manifest
 from equivalent.strategy.schema import Strategy
 
 from .errors import ComponentError
@@ -33,7 +34,8 @@ def _chosen_cases(strategy: Strategy, visible_cases: dict) -> dict:
     return {first: visible_cases[first]}
 
 
-def check(region_id: str, tree_sha: str, strategy: Strategy, visible_cases: dict, builder) -> dict:
+def check(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
+          visible_cases: dict, builder) -> dict:
     """Returns {tool_name: {"verdict": "pass"|"fail", "detail": {...}}, ...}."""
     if not visible_cases:
         raise ComponentError("no visible dataset configured for this region")
@@ -42,7 +44,7 @@ def check(region_id: str, tree_sha: str, strategy: Strategy, visible_cases: dict
     cases = _chosen_cases(strategy, visible_cases)
     tools = list(strategy.sanitizers)
     try:
-        resp = builder.sanitize(attempt_id, strategy.name, cases, tools)
+        resp = builder.sanitize(attempt_id, manifest.build.targets["replay"].executable, cases, tools)
     except Exception as exc:
         raise ComponentError(f"builder /v1/sanitize call failed: {exc}") from exc
 

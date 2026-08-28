@@ -130,6 +130,14 @@ class FakeBuilder:
         self.sanitize_calls = []
         self.time_calls = []
         self.build_ok = True
+        # The two statements the real builder reads out of its compiler
+        # log. A test that wants a makefile which ignored the flags, or
+        # one which compiled something from outside the tree, turns the
+        # matching one off.
+        self.flags_reached = True
+        self.only_tree_source = True
+        self.outside_file = "../elsewhere/sneak.f90"
+        self.compiled_file = "src/mod_kernel.f90"
         self.run_ok = True
         self.run_kernels = 4
         self.run_launches = [["src/mod_kernel.f90", "step", "42"]]
@@ -143,43 +151,79 @@ class FakeBuilder:
         # A test that wants a builder missing something drops a key here.
         self.tools = {
             name: True for name in
-            ("nvfortran", "compute-sanitizer", "nsys", "make", "cmake", "gfortran")
+            ("nvfortran", "compute-sanitizer", "nsys", "make", "cmake", "fpm", "gfortran")
         }
 
     def healthz(self):
         return {"ok": True, "tools": dict(self.tools)}
 
-    def build(self, attempt_id, files, profile, flags=None, link_flags=None):
+    def build(self, attempt_id, tree, makefile, targets, compiler, flags, link_flags,
+              source_patterns):
         self.build_calls.append({
-            "attempt_id": attempt_id, "files": files, "profile": profile,
-            "flags": flags, "link_flags": link_flags,
+            "attempt_id": attempt_id, "tree": tree, "makefile": makefile,
+            "targets": targets, "compiler": compiler, "flags": flags,
+            "link_flags": link_flags, "source_patterns": source_patterns,
         })
-        # Like the real builder: echo back what would have reached the
-        # compiler (explicit flags when given, else the profile's).
-        used_flags = list(flags or ["-O2", "-profile-default"]) + list(link_flags or [])
+        # One compiler command line, shaped the way the real shim log
+        # reads once contract.py has been through it.
+        record = {
+            "argv": [*flags, "-o", targets[0]["executable"], self.compiled_file],
+            "cwd": ".",
+            "inputs": [self.compiled_file],
+            "output": targets[0]["executable"],
+            "has_flags": self.flags_reached,
+            "outside": [] if self.only_tree_source else [self.outside_file],
+        }
+        result = {
+            "stage": "build",
+            "targets": {
+                t["role"]: {"executable": t["executable"], "built": self.build_ok}
+                for t in targets
+            },
+            "compiles": [record],
+            "flags": list(flags),
+            "link_flags": list(link_flags),
+            "flags_reached_every_compile": self.flags_reached,
+            "compiled_only_tree_source": self.only_tree_source,
+            "minfo_excerpt": "Generating Tesla code",
+        }
         if not self.build_ok:
-            return {"ok": False, "stage": "build", "target": "replay", "flags": used_flags, "log_tail": "compile error"}
-        return {"ok": True, "stage": "build", "profile": profile, "flags": used_flags,
-                "minfo_excerpt": "Generating Tesla code", "log_tail": ""}
+            return {**result, "ok": False, "log_tail": "compile error"}
+        return {**result, "ok": True, "log_tail": ""}
 
-    def run(self, attempt_id, profile, cases, mandatory=False):
-        self.run_calls.append({"attempt_id": attempt_id, "profile": profile, "cases": cases, "mandatory": mandatory})
+    def run(self, attempt_id, executable, cases, notify=None, mandatory=False):
+        self.run_calls.append({
+            "attempt_id": attempt_id, "executable": executable, "cases": cases,
+            "notify": notify, "mandatory": mandatory,
+        })
         if not self.run_ok:
             return {"ok": False, "stage": "run", "log_tail": "runtime crash"}
         outputs = {name: dict(self.run_outputs) for name in cases}
         return {"ok": True, "stage": "run", "outputs": outputs, "kernels_launched": self.run_kernels,
                 "launches": self.run_launches, "log_tail": ""}
 
-    def sanitize(self, attempt_id, profile, cases, tools):
-        self.sanitize_calls.append({"attempt_id": attempt_id, "profile": profile, "cases": cases, "tools": tools})
+    def sanitize(self, attempt_id, executable, cases, tools):
+        self.sanitize_calls.append({
+            "attempt_id": attempt_id, "executable": executable, "cases": cases, "tools": tools,
+        })
         per_tool = {t: {"ok": self.sanitize_ok, "errors": 0 if self.sanitize_ok else 3, "log_tail": ""} for t in tools}
         return {"ok": self.sanitize_ok, "stage": "sanitize", "per_tool": per_tool}
 
-    def time(self, attempt_id, repeats=5):
-        self.time_calls.append({"attempt_id": attempt_id, "repeats": repeats})
+    def time(self, attempt_id, executable, args, env, outputs, repeats=5, budget_s=300):
+        self.time_calls.append({
+            "attempt_id": attempt_id, "executable": executable, "args": args, "env": env,
+            "outputs": outputs, "repeats": repeats, "budget_s": budget_s,
+        })
         if not self.time_ok:
             return {"ok": False, "stage": "time", "log_tail": "timing binary not built"}
-        return {"ok": True, "stage": "time", "runs_s": self.runs_s, "gpu_exclusive": True, "diagnostic": ""}
+        return {
+            "ok": True, "stage": "time", "runs_s": self.runs_s, "gpu_exclusive": True,
+            "outputs": {
+                name: base64.b64encode(f"{name} from the timing run".encode()).decode()
+                for name in outputs
+            },
+            "stdout_tail": "",
+        }
 
 
 class FakeOracle:

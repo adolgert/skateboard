@@ -38,6 +38,9 @@ REQUIRED_INTERFACE_FIELDS = ("module", "entry", "inputs", "outputs")
 REQUIRED_VARIABLE_FIELDS = ("name", "dtype", "rank")
 REQUIRED_DATASET_FIELDS = ("args",)
 REQUIRED_TIMING_FIELDS = ("args", "outputs", "budget_s")
+# The timing run may need a few environment variables set to be a fair
+# measurement. They are values, not code: strings in, strings out.
+OPTIONAL_TIMING_FIELDS = ("env",)
 
 # The build target every code must offer: the replay driver is what every
 # regression check runs. `timing` and `capture` are named the same way but
@@ -97,6 +100,7 @@ class Timing:
     args: tuple
     outputs: tuple  # files the timing run writes, compared per port
     budget_s: int
+    env: dict  # {name: value} added to the timing run's environment
 
 
 @dataclass(frozen=True)
@@ -116,7 +120,7 @@ class Manifest:
         return Subject(kind="manifest", sha256=self.sha256)
 
 
-def _check_keys(given, required, where: str, *, allow_extra: bool = False) -> None:
+def _check_keys(given, required, where: str, *, optional=(), allow_extra: bool = False) -> None:
     if not isinstance(given, dict):
         raise ValueError(f"{where} is not a mapping")
     missing = [field for field in required if field not in given]
@@ -124,9 +128,11 @@ def _check_keys(given, required, where: str, *, allow_extra: bool = False) -> No
         raise ValueError(f"{where} missing field(s): {missing}")
     if allow_extra:
         return
-    unknown = sorted(set(given) - set(required))
+    unknown = sorted(set(given) - set(required) - set(optional))
     if unknown:
-        raise ValueError(f"{where} has unknown key(s): {unknown}; allowed: {sorted(required)}")
+        raise ValueError(
+            f"{where} has unknown key(s): {unknown}; allowed: {sorted((*required, *optional))}"
+        )
 
 
 def _name(value, where: str) -> str:
@@ -214,7 +220,7 @@ def _load_datasets(raw: dict, where: str) -> dict:
 
 
 def _load_timing(raw: dict, where: str) -> Timing:
-    _check_keys(raw, REQUIRED_TIMING_FIELDS, f"{where} timing")
+    _check_keys(raw, REQUIRED_TIMING_FIELDS, f"{where} timing", optional=OPTIONAL_TIMING_FIELDS)
     budget = raw["budget_s"]
     if not isinstance(budget, (int, float)) or isinstance(budget, bool) or budget <= 0:
         raise ValueError(f"{where} timing budget_s is {budget!r}; it must be a positive number")
@@ -222,7 +228,29 @@ def _load_timing(raw: dict, where: str) -> Timing:
         args=tuple(str(a) for a in raw["args"]),
         outputs=tuple(_name(o, f"{where} timing output") for o in raw["outputs"]),
         budget_s=budget,
+        env=_load_timing_env(raw.get("env"), f"{where} timing env"),
     )
+
+
+def _load_timing_env(raw, where: str) -> dict:
+    """The variables the timing run is given, defaulting to none.
+
+    Values are required to be written as strings rather than quietly
+    converted, because the ones that matter here look like numbers and
+    are not: a YAML `-1` would arrive as an integer and a `1073741824`
+    would round-trip through a float on some readers, and what reaches
+    the program has to be exactly what the file says.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{where} is not a mapping of names to values")
+    env = {}
+    for name, value in raw.items():
+        env[_name(name, f"{where} name")] = _name(
+            value, f"{where} value for '{name}' (write it in quotes)"
+        )
+    return env
 
 
 def load_manifest(path) -> Manifest:

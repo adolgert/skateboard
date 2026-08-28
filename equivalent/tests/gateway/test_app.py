@@ -13,6 +13,7 @@ from equivalent.tests.fakes import write_program
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
 STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
+BASELINE_STRATEGY_PATH = STRATEGY_PATH.parent / "cpu_reference.yaml"
 
 
 def _seed(root):
@@ -32,6 +33,7 @@ def _region(tmp_path, region_id="ch04:step"):
         spec_path="notes/regions/ch04-step.sese.yaml",
         ledger_dir=tmp_path / "ledger",
         strategy_path=STRATEGY_PATH,
+        baseline_strategy_path=BASELINE_STRATEGY_PATH,
         working_copy_dir=working,
         manifest=load_manifest(write_program(tmp_path) / "manifest.yaml"),
     )

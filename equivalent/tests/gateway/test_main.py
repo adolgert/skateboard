@@ -1,4 +1,5 @@
 """Starting the gateway the way a deployment starts it: from the environment."""
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -41,6 +42,7 @@ def _strategies_requiring(tmp_path, extra_tool):
     directory = tmp_path / "strategies"
     directory.mkdir()
     (directory / "stdpar_managed.yaml").write_text(yaml.safe_dump(d))
+    shutil.copy(STRATEGIES_DIR / "cpu_reference.yaml", directory / "cpu_reference.yaml")
     return directory
 
 
@@ -71,6 +73,7 @@ def _deployment(tmp_path, monkeypatch, token=TOKEN, strategies=STRATEGIES_DIR, *
         "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
         "regions": {"ch04:step": {
             "code": "tsunami", "spec_path": SPEC_PATH, "strategy": "stdpar_managed",
+            "baseline_strategy": "cpu_reference",
         }},
     }))
 

@@ -8,10 +8,11 @@ program replay
   ! Usage: replay <case_dir>   (default '.')
   !
   ! This driver names one code's kernel and one code's variables, which is
-  ! unavoidable -- a driver has to call something. It is baked into the builder
-  ! image for now; a later change moves the driver into each code's own tree,
-  ! written once during that code's onboarding and frozen for the port, so that
-  ! the image holds no code-specific file at all.
+  ! unavoidable -- a driver has to call something. So it lives in this code's
+  ! own tree, beside the source it calls, and is built by this code's own
+  ! makefile. It is written once, when the code is brought into the harness,
+  ! and is frozen while a region of it is being ported: the region's strategy
+  ! does not allow this file to be edited.
   !
   ! The builder runs this once per case, in a scratch directory holding only the
   ! inputs it was given -- so replay never sees, and cannot overwrite, the

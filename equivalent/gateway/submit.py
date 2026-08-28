@@ -17,6 +17,7 @@ directory.
 """
 from __future__ import annotations
 
+import base64
 import fnmatch
 import os
 import re
@@ -27,7 +28,6 @@ from pathlib import Path
 
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import frozen_subject, tree_subject
-from equivalent.manifest.schema import source_files
 
 
 @dataclass(frozen=True)
@@ -261,31 +261,23 @@ def attempt_id_for(region_id: str, tree_sha: str) -> str:
     return f"{safe_region}-{tree_sha[:16]}"
 
 
-def source_files_at(repo_dir, ref: str, manifest) -> list[dict]:
-    """Every file the code counts as source at `ref`, sorted by path, `content` as str.
+def tree_payload(repo_dir, ref: str) -> list[dict]:
+    """Every file tracked at `ref`, as {"path", "b64"} pairs sorted by path.
 
-    Which paths count is the manifest's own `source.patterns`, so a code
-    whose build needs .inc files or a Makefile is not silently sent a
-    partial tree. Sent as-is to the builder, which picks out what its
-    build needs and ignores the rest; sending this superset is simpler
-    than deriving a precise per-region dependency closure.
+    The builder is sent the whole tree, not a filtered list of source
+    files. Its build is the tree's own makefile, which reads include
+    files, namelists, and small data files that no extension test would
+    recognize -- and which the code's manifest is under no obligation to
+    call source. Filtering here would produce a tree that does not build
+    for reasons nobody could see.
 
-    The builder's request body is JSON, which carries text and not bytes,
-    so this is where the tree's bytes become source. A source file that
-    is not UTF-8 raises ValueError naming it; the callers turn that into
-    a ComponentError, because it is a fact about the tree and not a
-    verdict about the port.
+    Content is base64 rather than text because the request body is JSON
+    and a real code's tree is not all UTF-8.
     """
-    tracked = {f["path"]: f["content"] for f in tracked_files(repo_dir, ref)}
-    files = []
-    for path in source_files(manifest, sorted(tracked)):
-        try:
-            files.append({"path": path, "content": tracked[path].decode("utf-8")})
-        except UnicodeDecodeError as exc:
-            raise ValueError(
-                f"{path} is not UTF-8, so it cannot be sent to the builder as source"
-            ) from exc
-    return files
+    return [
+        {"path": f["path"], "b64": base64.b64encode(f["content"]).decode("ascii")}
+        for f in sorted(tracked_files(repo_dir, ref), key=lambda f: f["path"])
+    ]
 
 
 def baseline_commit(repo_dir) -> str | None:

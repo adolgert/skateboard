@@ -13,9 +13,9 @@ the GPU's FMA/reduction reordering exceeds the CPU spread (a real finding).
 
 Writes: the code's tolerances.json, beside its manifest.
 
-This script still drives the compiler by hand. A later change turns the
-capture and replay builds into targets of this code's own Makefile, which is
-what the manifest's build section already names.
+The two builds go through this code's own Makefile -- the same `replay`
+target the builder asks for -- so what is measured is the binary the gates
+run, compiled two ways.
 """
 import json
 import os
@@ -34,16 +34,10 @@ sys.path.insert(0, REPO)
 from equivalent.capture import npy  # noqa: E402  (found through the path added above)
 from equivalent.manifest.schema import load_manifest  # noqa: E402
 
-WORK = os.path.join(CODE, "baseline", "src")
-CAPTURE = os.path.join(REPO, "services", "builder", "harness")
+TREE = os.path.join(CODE, "baseline")
 VIS_IN = os.path.join(CODE, "datasets", "visible")
 MANIFEST = os.path.join(CODE, "manifest.yaml")
 OUT = os.path.join(CODE, "tolerances.json")
-
-KMODS = [f"{WORK}/mod_params.f90", f"{WORK}/mod_diff.f90",
-         f"{WORK}/mod_initial.f90", f"{WORK}/mod_kernel.f90"]
-NPY_IO = f"{CAPTURE}/npy_io.f90"
-REPLAY = f"{CAPTURE}/replay.f90"
 
 PROFILES = {
     "plain":    ["-O2", "-ffree-line-length-none"],
@@ -51,9 +45,18 @@ PROFILES = {
 }
 
 
-def build(profile_flags, outbin, tmp):
-    cmd = ["gfortran", *profile_flags, "-J", tmp, "-o", outbin, NPY_IO, *KMODS, REPLAY]
-    subprocess.run(cmd, check=True, cwd=tmp)
+def build(profile_flags, outbin):
+    """One replay binary, built the way the harness builds it.
+
+    `make clean` first because make would otherwise keep the binary the
+    previous profile left: the sources have not changed, only the flags,
+    and make cannot see that.
+    """
+    make = ["make", "-C", TREE, "FC=gfortran", f"FFLAGS={' '.join(profile_flags)}", "MODFLAG=-J"]
+    subprocess.run([*make, "clean"], check=True)
+    subprocess.run([*make, "replay"], check=True)
+    shutil.copy(os.path.join(TREE, "replay"), outbin)
+    subprocess.run([*make, "clean"], check=True)
 
 
 def ulp_diff(a, b):
@@ -79,7 +82,7 @@ def main():
         bins = {}
         for name, flags in PROFILES.items():
             b = os.path.join(tmp, f"replay_{name}")
-            build(flags, b, tmp)
+            build(flags, b)
             bins[name] = b
 
         obs = {v: {"abs": 0.0, "rel": 0.0, "ulp": 0} for v in variables}

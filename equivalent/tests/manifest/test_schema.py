@@ -205,3 +205,52 @@ def test_source_files_keeps_the_paths_that_count_as_source(tmp_path):
     ])
 
     assert kept == ["src/a.F90", "Makefile", "x/y/z.f"]
+
+
+def test_a_timing_run_declares_no_environment_by_default(tmp_path):
+    manifest = load_manifest(_write(tmp_path, MANIFEST))
+
+    assert manifest.timing.env == {}
+
+
+def test_the_timing_environment_is_carried_as_written(tmp_path):
+    raw = copy.deepcopy(MANIFEST)
+    raw["timing"]["env"] = {"MALLOC_TRIM_THRESHOLD_": "-1"}
+
+    manifest = load_manifest(_write(tmp_path, raw))
+
+    assert manifest.timing.env == {"MALLOC_TRIM_THRESHOLD_": "-1"}
+
+
+def test_a_timing_environment_value_that_is_not_a_string_is_rejected_by_name(tmp_path):
+    # A bare -1 in YAML is an integer, and what reaches the program has to
+    # be exactly the text the file shows.
+    raw = copy.deepcopy(MANIFEST)
+    raw["timing"]["env"] = {"MALLOC_TRIM_THRESHOLD_": -1}
+
+    with pytest.raises(ValueError) as excinfo:
+        load_manifest(_write(tmp_path, raw))
+
+    assert "MALLOC_TRIM_THRESHOLD_" in str(excinfo.value)
+
+
+def test_an_unknown_timing_key_is_still_rejected(tmp_path):
+    raw = copy.deepcopy(MANIFEST)
+    raw["timing"]["environment"] = {}
+
+    with pytest.raises(ValueError) as excinfo:
+        load_manifest(_write(tmp_path, raw))
+
+    assert "environment" in str(excinfo.value)
+
+
+def test_the_tsunami_timing_run_keeps_the_allocator_arena():
+    # The pristine kernel returns difference arrays by value, so the CPU
+    # baseline allocates temporaries every step; keeping the arena is what
+    # makes the timing measure the stencil rather than page faults.
+    manifest = load_manifest(TSUNAMI)
+
+    assert manifest.timing.env == {
+        "MALLOC_TRIM_THRESHOLD_": "-1",
+        "MALLOC_MMAP_THRESHOLD_": "1073741824",
+    }

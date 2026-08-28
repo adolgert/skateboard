@@ -102,7 +102,8 @@ def _deployment(tmp_path, with_sessions=True):
         "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
         "regions": {"ch04:step": {"code": "tsunami",
                                   "spec_path": "notes/regions/ch04-step.sese.yaml",
-                                  "strategy": "stdpar_managed"}},
+                                  "strategy": "stdpar_managed",
+                                  "baseline_strategy": "cpu_reference"}},
     }))
     store = LedgerStore(tmp_path / "ledger" / baseline / "ch04-step")
     return config_path, store, sessions_dir

@@ -1,3 +1,4 @@
+import base64
 from pathlib import Path
 
 import pytest
@@ -6,15 +7,13 @@ from equivalent.gateway.submit import (
     init_baseline_repo,
     materialize_tree,
     resolve_allow_globs,
-    source_files_at,
     submit,
     tracked_files,
+    tree_payload,
 )
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import tree_subject
-from equivalent.manifest.schema import load_manifest
-from equivalent.tests.fakes import write_program
 
 
 def _write(root, path, content):
@@ -32,11 +31,6 @@ def _seed(root):
     _write(root, "src/mod_kernel.f90", "subroutine step\nend subroutine\n")
     _write(root, "Makefile", "all:\n\techo build\n")
     return root
-
-
-def _manifest(tmp_path):
-    """The code's own description of which files count as source."""
-    return load_manifest(write_program(tmp_path) / "manifest.yaml")
 
 
 # The hash of that two-file baseline, taken while submit still read every
@@ -149,42 +143,43 @@ def test_an_all_text_baseline_hashes_exactly_as_it_did_before(tmp_path):
     assert tree_subject(tracked_files(repo_dir, "main")).sha256 == TEXT_BASELINE_TREE
 
 
-def test_source_files_are_handed_to_the_builder_as_text(tmp_path):
-    # The builder writes what it is sent straight into a source file for
-    # the compiler, so that payload stays str even though the tree is
-    # bytes. Which files count is the code's own manifest.
+def test_the_whole_tree_is_handed_to_the_builder_as_bytes(tmp_path):
+    # The builder builds the tree with the tree's own makefile, which may
+    # read a namelist or a data file no extension test would recognize --
+    # so everything tracked goes, base64 because the request is JSON and
+    # a real code's tree is not all UTF-8.
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
 
-    files = source_files_at(repo_dir, "main", _manifest(tmp_path))
+    files = tree_payload(repo_dir, "main")
 
-    # The Makefile counts as source too: the builder is told how to build
-    # the tree by the tree itself.
     assert [f["path"] for f in files] == ["Makefile", "src/mod_kernel.f90"]
-    assert files[1]["content"] == "subroutine step\nend subroutine\n"
+    assert base64.b64decode(files[1]["b64"]) == b"subroutine step\nend subroutine\n"
 
 
-def test_a_file_the_manifest_does_not_call_source_is_not_sent(tmp_path):
+def test_a_file_the_manifest_does_not_call_source_is_sent_anyway(tmp_path):
+    # Which files the code calls source decides what the builder may
+    # compile, not what it is given: a README costs nothing to carry, and
+    # guessing wrong about a build input costs a build.
     seed = _seed(tmp_path / "seed")
     _write(seed, "README.md", "how to build this\n")
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, seed)
 
-    files = source_files_at(repo_dir, "main", _manifest(tmp_path))
+    files = tree_payload(repo_dir, "main")
 
-    assert "README.md" not in [f["path"] for f in files]
+    assert "README.md" in [f["path"] for f in files]
 
 
-def test_a_source_file_that_is_not_utf8_is_an_error_naming_the_path(tmp_path):
+def test_a_file_that_is_not_utf8_travels_unchanged(tmp_path):
     seed = _seed(tmp_path / "seed")
     _write(seed, "src/legacy.f90", LATIN1_BYTES)
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, seed)
 
-    with pytest.raises(ValueError) as excinfo:
-        source_files_at(repo_dir, "main", _manifest(tmp_path))
+    files = {f["path"]: base64.b64decode(f["b64"]) for f in tree_payload(repo_dir, "main")}
 
-    assert "src/legacy.f90" in str(excinfo.value)
+    assert files["src/legacy.f90"] == LATIN1_BYTES
 
 
 def test_submitting_the_same_contents_twice_creates_no_second_commit(tmp_path):

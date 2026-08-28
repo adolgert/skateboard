@@ -28,11 +28,13 @@ The file has three sections::
         code: tsunami
         spec_path: notes/regions/ch04-step.sese.yaml
         strategy: stdpar_managed
+        baseline_strategy: cpu_reference
         visible_dataset: visible
 
 Each region's directories are built by joining them: the ledger lives at
 `<ledger_root>/<baseline commit>/<region id with ':' replaced by '-'>`,
-the strategy at `<strategies>/<strategy>.yaml`, a code's manifest at
+the strategy at `<strategies>/<strategy>.yaml` (and the baseline
+strategy the same way), a code's manifest at
 `<programs>/<manifest>`, and the visible dataset at
 `<programs>/<code>/datasets/<visible_dataset>`. Nothing spells those
 layouts a second time.
@@ -64,7 +66,7 @@ TOP_LEVEL_KEYS = ("version", "paths", "codes", "regions")
 REQUIRED_PATH_KEYS = ("repo", "ledger_root", "working_copy", "programs", "strategies")
 OPTIONAL_PATH_KEYS = ("seed", "sessions")
 REQUIRED_CODE_KEYS = ("manifest",)
-REQUIRED_REGION_KEYS = ("code", "spec_path", "strategy")
+REQUIRED_REGION_KEYS = ("code", "spec_path", "strategy", "baseline_strategy")
 OPTIONAL_REGION_KEYS = ("visible_dataset",)
 # Where a code keeps the datasets a region may name, under its own
 # directory. One spelling, so the deployment and this reader agree.
@@ -159,6 +161,15 @@ def _load_code(name: str, raw: dict, paths: Paths, where: str) -> CodeConfig:
     return CodeConfig(name=name, manifest_path=manifest_path, manifest=load_manifest(manifest_path))
 
 
+def _strategy_path(name, field: str, paths: Paths, region_where: str) -> Path:
+    path = paths.strategies / f"{name}.yaml"
+    if not path.is_file():
+        raise ValueError(
+            f"{region_where} names {field} '{name}', but {path} does not exist"
+        )
+    return path
+
+
 def _load_region(
     region_id: str, raw: dict, paths: Paths, codes: dict, commit: str, where: str
 ) -> RegionConfig:
@@ -172,11 +183,14 @@ def _load_region(
             f"not describe; it has {sorted(codes)}"
         )
 
-    strategy_path = paths.strategies / f"{raw['strategy']}.yaml"
-    if not strategy_path.is_file():
-        raise ValueError(
-            f"{region_where} names strategy '{raw['strategy']}', but {strategy_path} does not exist"
-        )
+    strategy_path = _strategy_path(raw["strategy"], "strategy", paths, region_where)
+    # The baseline is built with a strategy of its own -- the comparison
+    # floor a speedup is measured against. It is named per region rather
+    # than fixed here, because what counts as a fair floor is a property
+    # of the code and the machine, not of this reader.
+    baseline_strategy_path = _strategy_path(
+        raw["baseline_strategy"], "baseline_strategy", paths, region_where,
+    )
 
     visible_dataset_dir = None
     if raw.get("visible_dataset") is not None:
@@ -193,6 +207,7 @@ def _load_region(
         spec_path=raw["spec_path"],
         ledger_dir=paths.ledger_root / commit / region_slug(region_id),
         strategy_path=strategy_path,
+        baseline_strategy_path=baseline_strategy_path,
         working_copy_dir=paths.working_copy,
         manifest=code.manifest,
         visible_dataset_dir=visible_dataset_dir,

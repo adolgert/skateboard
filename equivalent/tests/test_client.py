@@ -11,6 +11,7 @@ from equivalent.tests.fakes import write_program
 
 TOKEN = "test-token"
 STRATEGY_PATH = Path(__file__).resolve().parent.parent / "strategy" / "files" / "stdpar_managed.yaml"
+BASELINE_STRATEGY_PATH = STRATEGY_PATH.parent / "cpu_reference.yaml"
 
 
 def _client_pair(tmp_path):
@@ -23,7 +24,8 @@ def _client_pair(tmp_path):
     cfg = RegionConfig(
         region_id="ch04:step", repo_dir=repo_dir,
         spec_path="notes/regions/ch04-step.sese.yaml", ledger_dir=tmp_path / "ledger",
-        strategy_path=STRATEGY_PATH, working_copy_dir=working,
+        strategy_path=STRATEGY_PATH, baseline_strategy_path=BASELINE_STRATEGY_PATH,
+        working_copy_dir=working,
         manifest=load_manifest(write_program(tmp_path) / "manifest.yaml"),
     )
     app = create_app({cfg.region_id: cfg}, TOKEN)

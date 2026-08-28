@@ -1,0 +1,52 @@
+name: cpu_reference
+version: 1
+
+# The comparison floor. This strategy is not something a region is ported
+# under: it is how the pristine baseline is built when a port's speedup has
+# to be measured against something. A region names it as its
+# `baseline_strategy`, and the gateway builds the untouched baseline tree
+# with these flags before timing it.
+
+# Files a region under this strategy may legally submit. Kept the same as the
+# porting strategies so that this file is a drop-in comparison: nothing about
+# what may be edited changes when the baseline is built.
+# Matching ignores case, so "src/*.f90" covers src/PESs/N4_UMN_PES_Class.F90
+# as well as src/mod_kernel.f90. "*" also matches across "/" (it has no
+# directory-boundary meaning here), so a pattern under src/ reaches any depth
+# below it -- no "**" needed or supported.
+allow_globs:
+  - "src/*.f90"
+  - "notes/regions/*.yaml"
+
+languages:
+  fortran:
+    compiler: nvfortran
+    # The same compiler as every porting strategy, so a speedup is a
+    # statement about the code and not about two vendors' optimizers.
+    # -stdpar=multicore is the CPU half of the same switch the GPU
+    # strategies use, which is what makes this the honest floor rather
+    # than a single-threaded straw man.
+    flags:
+      - "-O2"
+      - "-stdpar=multicore"
+
+link_flags: []
+
+required_tools:
+  - nvfortran
+
+# Nothing is offloaded here, so there is no kernel launch to count and a
+# host fallback is the whole point rather than an error.
+device_proof:
+  notify: null
+  mandatory: false
+
+# The sanitizers are GPU tools. A CPU baseline has nothing for them to
+# look at, so none are run.
+sanitizers: []
+
+# Unused while `sanitizers` is empty, but the field is required of every
+# strategy and this is the value the porting strategies use.
+sanitize_cases: first
+
+analyzer_command: "python3 tools/regionharness/check_sese.py"

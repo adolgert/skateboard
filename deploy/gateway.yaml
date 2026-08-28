@@ -18,4 +18,5 @@ regions:
     code: tsunami                   # -> the codes entry above
     spec_path: notes/regions/ch04-step.sese.yaml
     strategy: stdpar_managed        # -> <strategies>/stdpar_managed.yaml
+    baseline_strategy: cpu_reference # what the pristine baseline is timed against
     visible_dataset: visible        # -> <programs>/tsunami/datasets/visible ; optional
