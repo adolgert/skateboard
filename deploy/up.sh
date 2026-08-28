@@ -66,25 +66,17 @@ baseline="$(git -C state/repo rev-parse main)"
 
 # The same configuration the gateway reads, with the paths of this machine
 # rather than the container's mount points, so the ledger command line and the
-# gateway describe one deployment and not two.
-cat > state/gateway.host.yaml <<YAML
-# Written by up.sh. The gateway reads deploy/gateway.yaml, in the container's
-# terms; this is the same deployment seen from this machine. Edit gateway.yaml
-# and re-run up.sh rather than editing this file.
-version: 1
-paths:
-  repo: ${here}/state/repo
-  ledger_root: ${here}/state/ledger
-  working_copy: ${here}/state/working
-  datasets_root: ${repo_root}/demo/orchestrator/datasets
-  strategies: ${repo_root}/equivalent/strategy/files
-  sessions: ${here}/state/sessions
-regions:
-  "${region}":
-    spec_path: notes/regions/ch04-step.sese.yaml
-    strategy: stdpar_managed
-    visible_dataset: visible
-YAML
+# gateway describe one deployment and not two. The regions come from
+# gateway.yaml as they are written there; only the paths are rewritten, from
+# the mounts in docker-compose.yml.
+python3 "${here}/hostconfig.py" "${here}/gateway.yaml" state/gateway.host.yaml \
+    --mount "/repo=${here}/state/repo" \
+    --mount "/ledger=${here}/state/ledger" \
+    --mount "/working=${here}/state/working" \
+    --mount "/seed=${here}/state/seed" \
+    --mount "/datasets=${repo_root}/demo/orchestrator/datasets" \
+    --mount "/strategies=${repo_root}/equivalent/strategy/files" \
+    --sessions "${here}/state/sessions" >/dev/null
 
 echo
 echo "baseline commit ${baseline}"

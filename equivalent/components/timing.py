@@ -54,7 +54,10 @@ def check_port(store: LedgerStore, tree: Subject, region_id: str, tree_sha: str,
 
 def check_baseline(repo_dir, region_id: str, baseline_tree_sha: str, builder, repeats: int = 5) -> dict:
     attempt_id = attempt_id_for(f"{region_id}-baseline", baseline_tree_sha)
-    files = fortran_files_at(repo_dir, "main")
+    try:
+        files = fortran_files_at(repo_dir, "main")
+    except ValueError as exc:
+        raise ComponentError(str(exc)) from exc
     if not files:
         raise ComponentError(f"no .f90 files found in the baseline tree {baseline_tree_sha}")
     payload = [{"path": f["path"], "content": f["content"]} for f in files]

@@ -28,6 +28,12 @@ class BuilderClient:
     def __init__(self, http: httpx.Client):
         self._http = http
 
+    def healthz(self) -> dict:
+        """{"ok": bool, "tools": {name: present}, ...} -- what this builder can run."""
+        r = self._http.get("/healthz")
+        r.raise_for_status()
+        return r.json()
+
     def build(self, attempt_id: str, files: list[dict], profile: str,
               flags: list[str] | None = None, link_flags: list[str] | None = None) -> dict:
         r = self._http.post("/v1/build", json={
@@ -42,8 +48,8 @@ class BuilderClient:
         r.raise_for_status()
         return r.json()
 
-    def sanitize(self, attempt_id: str, profile: str, case: dict, tools: list[str]) -> dict:
-        r = self._http.post("/v1/sanitize", json={"attempt_id": attempt_id, "profile": profile, "case": case, "tools": tools})
+    def sanitize(self, attempt_id: str, profile: str, cases: dict, tools: list[str]) -> dict:
+        r = self._http.post("/v1/sanitize", json={"attempt_id": attempt_id, "profile": profile, "cases": cases, "tools": tools})
         r.raise_for_status()
         return r.json()
 

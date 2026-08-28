@@ -40,4 +40,14 @@ def check(region_id: str, tree_sha: str, strategy: Strategy, visible_cases: dict
                 "hint": "code compiled but no GPU kernel launched; loops must be do concurrent / omp target for nvfortran to offload them",
             },
         }
-    return {"verdict": "pass", "detail": {"kernels_launched": kernels, "outputs": resp["outputs"]}}
+    return {
+        "verdict": "pass",
+        "detail": {
+            "kernels_launched": kernels,
+            # Where the builder's runtime said the launches came from --
+            # file, function, and line, one entry per distinct source
+            # line. A reviewer reads this against the region's own code.
+            "launches": resp.get("launches", []),
+            "outputs": resp["outputs"],
+        },
+    }

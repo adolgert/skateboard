@@ -20,9 +20,19 @@ class FakeBuilder:
         self.build_ok = True
         self.run_ok = True
         self.run_kernels = 4
+        self.run_launches = [["src/mod_kernel.f90", "step", "42"]]
         self.sanitize_ok = True
         self.time_ok = True
         self.runs_s = [0.21, 0.20, 0.22]
+        # The executable names the real builder reports on, all present.
+        # A test that wants a builder missing something drops a key here.
+        self.tools = {
+            name: True for name in
+            ("nvfortran", "compute-sanitizer", "nsys", "make", "cmake", "gfortran")
+        }
+
+    def healthz(self):
+        return {"ok": True, "tools": dict(self.tools)}
 
     def build(self, attempt_id, files, profile, flags=None, link_flags=None):
         self.build_calls.append({
@@ -42,10 +52,11 @@ class FakeBuilder:
         if not self.run_ok:
             return {"ok": False, "stage": "run", "log_tail": "runtime crash"}
         outputs = {name: {"h": "aGVsbG8=", "u": "d29ybGQ="} for name in cases}
-        return {"ok": True, "stage": "run", "outputs": outputs, "kernels_launched": self.run_kernels, "log_tail": ""}
+        return {"ok": True, "stage": "run", "outputs": outputs, "kernels_launched": self.run_kernels,
+                "launches": self.run_launches, "log_tail": ""}
 
-    def sanitize(self, attempt_id, profile, case, tools):
-        self.sanitize_calls.append({"attempt_id": attempt_id, "profile": profile, "case": case, "tools": tools})
+    def sanitize(self, attempt_id, profile, cases, tools):
+        self.sanitize_calls.append({"attempt_id": attempt_id, "profile": profile, "cases": cases, "tools": tools})
         per_tool = {t: {"ok": self.sanitize_ok, "errors": 0 if self.sanitize_ok else 3, "log_tail": ""} for t in tools}
         return {"ok": self.sanitize_ok, "stage": "sanitize", "per_tool": per_tool}
 

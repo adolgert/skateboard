@@ -3,6 +3,7 @@ runs the GPU gates. All command lines live in stages.py (baked into the image);
 this file only routes requests. Bearer token required.
 """
 import os
+import shutil
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
@@ -10,6 +11,12 @@ from pydantic import BaseModel
 import stages
 
 TOKEN = os.environ.get("SKATEBOARD_TOKEN", "")
+
+# The executables a strategy may name in its `required_tools`. Reported
+# present or absent, never installed on demand: the image is what it is,
+# and the gateway refuses to start against a builder that is missing
+# something a strategy needs.
+TOOLS = ("nvfortran", "compute-sanitizer", "nsys", "make", "cmake", "gfortran")
 app = FastAPI(title="skateboard-builder")
 
 
@@ -40,7 +47,10 @@ class RunReq(BaseModel):
 class SanitizeReq(BaseModel):
     attempt_id: str
     profile: str
-    case: dict              # {name: {"h_in","u_in"}}  (one case)
+    # {name: {"h_in","u_in"}} for every case to sanitize. How many cases
+    # that is comes from the gateway's hashed strategy file; the builder
+    # runs whatever it is sent.
+    cases: dict
     tools: list = ["memcheck", "racecheck"]
 
 
@@ -67,7 +77,7 @@ def run(req: RunReq, authorization: str | None = Header(default=None)):
 @app.post("/v1/sanitize")
 def sanitize(req: SanitizeReq, authorization: str | None = Header(default=None)):
     _auth(authorization)
-    return stages.sanitize(req.attempt_id, req.profile, req.case, req.tools)
+    return stages.sanitize(req.attempt_id, req.profile, req.cases, req.tools)
 
 
 @app.post("/v1/time")
@@ -78,10 +88,14 @@ def time_run(req: TimeReq, authorization: str | None = Header(default=None)):
 
 @app.get("/healthz")
 def healthz():
-    import shutil
+    """Liveness, plus which of the known executables this image actually has.
+
+    The keys are the executable names exactly as a strategy's
+    `required_tools` spells them, so the gateway can compare the two
+    without translating between two vocabularies.
+    """
     return {
         "ok": True,
-        "nvfortran": shutil.which("nvfortran") is not None,
-        "compute_sanitizer": shutil.which("compute-sanitizer") is not None,
+        "tools": {name: shutil.which(name) is not None for name in TOOLS},
         "profiles": list(stages.PROFILES),
     }

@@ -72,6 +72,7 @@ MUTATIONS = {
     "device_proof": lambda d: d["device_proof"].__setitem__("mandatory", not d["device_proof"]["mandatory"]),
     "sanitizers": lambda d: d["sanitizers"].append("extracheck"),
     "analyzer_command": lambda d: d.__setitem__("analyzer_command", "a different command"),
+    "sanitize_cases": lambda d: d.__setitem__("sanitize_cases", "all"),
 }
 
 
@@ -119,3 +120,62 @@ def test_a_path_outside_allow_globs_is_rejected(name):
     strategy = load_strategy(STRATEGY_FILES[name])
     rejected = strategy.rejected_paths(["src/mod_kernel.f90", "Makefile"])
     assert rejected == ["Makefile"]
+
+
+@pytest.mark.parametrize("name", sorted(STRATEGY_FILES))
+def test_an_uppercase_extension_is_allowed_by_a_lowercase_pattern(name):
+    # The submit path and the builder payload have to agree on which files
+    # belong to a region: a tree holding src/PESs/N4_UMN_PES_Class.F90 is
+    # sent to the compiler, so "src/*.f90" has to accept it too.
+    strategy = load_strategy(STRATEGY_FILES[name])
+    assert strategy.rejected_paths([
+        "src/PESs/N4_UMN_PES_Class.F90",
+        "src/MOD_KERNEL.F90",
+        "src/mod_kernel.f90",
+    ]) == []
+
+
+def test_an_uppercase_pattern_matches_a_lowercase_path(tmp_path):
+    d = _base_dict()
+    d["allow_globs"] = ["SRC/*.F90"]
+    upper = tmp_path / "upper.yaml"
+    upper.write_text(yaml.safe_dump(d))
+
+    assert load_strategy(upper).rejected_paths(["src/mod_kernel.f90"]) == []
+
+
+@pytest.mark.parametrize("name", sorted(STRATEGY_FILES))
+def test_ignoring_case_does_not_let_an_unrelated_path_through(name):
+    strategy = load_strategy(STRATEGY_FILES[name])
+    assert strategy.rejected_paths(["MAKEFILE", "src/mod_kernel.c"]) == [
+        "MAKEFILE", "src/mod_kernel.c",
+    ]
+
+
+@pytest.mark.parametrize("name", sorted(STRATEGY_FILES))
+def test_both_strategy_files_sanitize_the_first_case_only(name):
+    strategy = load_strategy(STRATEGY_FILES[name])
+    assert strategy.sanitize_cases == "first"
+
+
+@pytest.mark.parametrize("value", ["all", "first"])
+def test_both_case_selections_load(tmp_path, value):
+    d = _base_dict()
+    d["sanitize_cases"] = value
+    path = tmp_path / "strategy.yaml"
+    path.write_text(yaml.safe_dump(d))
+
+    assert load_strategy(path).sanitize_cases == value
+
+
+def test_any_other_case_selection_is_rejected_by_name(tmp_path):
+    d = _base_dict()
+    d["sanitize_cases"] = "some"
+    path = tmp_path / "strategy.yaml"
+    path.write_text(yaml.safe_dump(d))
+
+    with pytest.raises(ValueError) as excinfo:
+        load_strategy(path)
+
+    assert "sanitize_cases" in str(excinfo.value)
+    assert "some" in str(excinfo.value)

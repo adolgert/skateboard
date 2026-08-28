@@ -111,10 +111,34 @@ def _notify_env(base, notify, mandatory):
     return env
 
 
-def _count_kernels(stderr, notify):
-    if notify in ("acc", "omp"):
-        return len(re.findall(r"launch ", stderr))
-    return 0
+# One kernel launch as NVCOMPILER_ACC_NOTIFY=1 writes it. Both offload
+# flavors print the same first four fields, differing only in what follows
+# and in whether one or two spaces sit after "kernel":
+#
+#   launch CUDA kernel  file=... function=p line=5 device=0 threadid=1 num_gangs=...
+#   launch CUDA kernel file=... function=q line=5 device=0 host-threadid=0 num_teams=...
+#
+# Requiring those four fields is what makes the count proof: a program can
+# print the words "launch CUDA kernel" itself, but not the runtime's own
+# file/function/line/device fields for a kernel it never launched.
+LAUNCH_LINE = re.compile(r"^launch CUDA kernel\s+file=(\S+) function=(\S+) line=(\d+) device=(\d+)")
+
+
+def kernel_launches(stderr, notify):
+    """(how many kernels launched, [(file, function, line), ...]) from one run's stderr.
+
+    Returns nothing counted for a strategy that asked for no notify
+    output: without NVCOMPILER_ACC_NOTIFY set there are no lines to read,
+    so any that appear were written by the program itself.
+    """
+    if notify not in ("acc", "omp"):
+        return 0, []
+    found = [
+        (m.group(1), m.group(2), m.group(3))
+        for m in (LAUNCH_LINE.match(line) for line in stderr.splitlines())
+        if m
+    ]
+    return len(found), found
 
 
 # net_jail (unshare -n) is defense-in-depth. It needs CAP_SYS_ADMIN, which the
@@ -132,6 +156,7 @@ def run(attempt_id, profile, cases, mandatory=False, net_jail=False):
     env = _notify_env(os.environ, prof["notify"], mandatory)
     outputs = {}
     total_kernels = 0
+    launched_at = set()
     log_tail = ""
     for name, arrs in cases.items():
         cdir = os.path.join(ws, "cases", name)
@@ -148,7 +173,9 @@ def run(attempt_id, profile, cases, mandatory=False, net_jail=False):
             rc, out, err = _run([replay, cdir], cwd=ws, env=env, timeout=120)  # unshare not permitted
         if rc != 0:
             return {"ok": False, "stage": "run", "case": name, "log_tail": (out + err)[-2000:]}
-        total_kernels += _count_kernels(err, prof["notify"])
+        kernels, launches = kernel_launches(err, prof["notify"])
+        total_kernels += kernels
+        launched_at.update(launches)
         log_tail = err[-1500:]
         with open(os.path.join(cdir, "h_out.bin"), "rb") as f:
             h_b = f.read()
@@ -156,30 +183,66 @@ def run(attempt_id, profile, cases, mandatory=False, net_jail=False):
             u_b = f.read()
         outputs[name] = {"h": base64.b64encode(h_b).decode(), "u": base64.b64encode(u_b).decode()}
 
-    return {"ok": True, "stage": "run", "outputs": outputs, "kernels_launched": total_kernels, "log_tail": log_tail}
+    return {
+        "ok": True, "stage": "run", "outputs": outputs,
+        "kernels_launched": total_kernels,
+        # Where the launches came from, one entry per distinct source line
+        # across every case, so the claim says what ran and not only how
+        # much of it ran.
+        "launches": [list(where) for where in sorted(launched_at)],
+        "log_tail": log_tail,
+    }
 
 
-def sanitize(attempt_id, profile, one_case, tools):
-    prof = PROFILES[profile]
-    ws = _ws(attempt_id)
-    replay = os.path.join(ws, "replay")
-    name, arrs = next(iter(one_case.items()))
+def _write_case(ws, name, arrs):
     cdir = os.path.join(ws, "san", name)
     shutil.rmtree(cdir, ignore_errors=True)
     os.makedirs(cdir, exist_ok=True)
     for k in ("h_in", "u_in"):
         with open(os.path.join(cdir, f"{k}.bin"), "wb") as f:
             f.write(base64.b64decode(arrs[k]))
+    return cdir
+
+
+def sanitize(attempt_id, profile, cases, tools):
+    """cases: {name: {h_in: b64, u_in: b64}} -> run every tool over every case.
+
+    The caller chooses how many cases to send; whether that is one or all
+    of them is the strategy's decision, not this file's. There is still
+    one entry per tool in the response: the error counts are summed over
+    the cases and a tool fails if it failed on any of them, so a caller
+    that asks for more cases gets a stricter verdict, not more verdicts.
+    """
+    prof = PROFILES[profile]
+    ws = _ws(attempt_id)
+    replay = os.path.join(ws, "replay")
 
     per_tool = {}
     for tool in tools:
-        cmd = ["compute-sanitizer", "--tool", tool, "--error-exitcode", "1", replay, cdir]
-        try:
-            rc, out, err = _run(cmd, cwd=ws, timeout=600)
-            errs = len(re.findall(r"========= ERROR|Invalid|race", out + err))
-            per_tool[tool] = {"ok": rc == 0, "errors": errs, "log_tail": (out + err)[-1500:]}
-        except FileNotFoundError:
-            per_tool[tool] = {"ok": None, "error": "compute-sanitizer not found"}
+        errors = 0
+        failed = False
+        failing_log = ""
+        last_log = ""
+        unavailable = None
+        for name, arrs in cases.items():
+            cdir = _write_case(ws, name, arrs)
+            cmd = ["compute-sanitizer", "--tool", tool, "--error-exitcode", "1", replay, cdir]
+            try:
+                rc, out, err = _run(cmd, cwd=ws, timeout=600)
+            except FileNotFoundError:
+                unavailable = "compute-sanitizer not found"
+                break
+            errors += len(re.findall(r"========= ERROR|Invalid|race", out + err))
+            last_log = (out + err)[-1500:]
+            if rc != 0 and not failed:
+                failed = True
+                failing_log = last_log
+        if unavailable is not None:
+            per_tool[tool] = {"ok": None, "error": unavailable}
+        else:
+            # The log of the first case that failed, so the reader sees the
+            # failure rather than whatever the last case happened to print.
+            per_tool[tool] = {"ok": not failed, "errors": errors, "log_tail": failing_log or last_log}
     return {"ok": all(t.get("ok") in (True, None) for t in per_tool.values()), "stage": "sanitize", "per_tool": per_tool}
 
 

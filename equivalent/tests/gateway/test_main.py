@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from equivalent.gateway.main import build_app_from_env
 from equivalent.gateway.submit import baseline_commit
+from equivalent.tests.fakes import FakeBuilder
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
@@ -33,7 +34,17 @@ SPEC = (
 )
 
 
-def _deployment(tmp_path, monkeypatch, token=TOKEN, **extra_env):
+def _strategies_requiring(tmp_path, extra_tool):
+    """A strategies directory whose one strategy also requires `extra_tool`."""
+    d = yaml.safe_load((STRATEGIES_DIR / "stdpar_managed.yaml").read_text())
+    d["required_tools"].append(extra_tool)
+    directory = tmp_path / "strategies"
+    directory.mkdir()
+    (directory / "stdpar_managed.yaml").write_text(yaml.safe_dump(d))
+    return directory
+
+
+def _deployment(tmp_path, monkeypatch, token=TOKEN, strategies=STRATEGIES_DIR, **extra_env):
     """Directories and a configuration file, named by the environment, with nothing seeded yet."""
     seed = tmp_path / "seed"
     (seed / "src").mkdir(parents=True)
@@ -52,7 +63,7 @@ def _deployment(tmp_path, monkeypatch, token=TOKEN, **extra_env):
             "repo": str(tmp_path / "repo"),
             "ledger_root": str(tmp_path / "ledger"),
             "working_copy": str(working),
-            "strategies": str(STRATEGIES_DIR),
+            "strategies": str(strategies),
             "seed": str(seed),
         },
         "regions": {"ch04:step": {"spec_path": SPEC_PATH, "strategy": "stdpar_managed"}},
@@ -148,3 +159,36 @@ def test_a_missing_config_variable_names_the_variable(tmp_path, monkeypatch):
         build_app_from_env()
 
     assert "EQUIVALENT_CONFIG" in str(excinfo.value)
+
+
+def test_startup_accepts_a_builder_that_has_every_required_tool(tmp_path, monkeypatch):
+    _deployment(tmp_path, monkeypatch)
+
+    app = build_app_from_env(builder=FakeBuilder())
+
+    assert TestClient(app).get("/table", headers=HEADERS).status_code == 200
+
+
+def test_a_required_tool_the_builder_lacks_stops_startup_and_names_it(tmp_path, monkeypatch):
+    # The strategy says which tools the build needs. The builder is the
+    # thing that would run them, so it is asked before the first request
+    # rather than after an action fails in a way nobody can read.
+    _deployment(tmp_path, monkeypatch, strategies=_strategies_requiring(tmp_path, "flang"))
+    builder = FakeBuilder()
+
+    with pytest.raises(ValueError) as excinfo:
+        build_app_from_env(builder=builder)
+
+    message = str(excinfo.value)
+    assert "flang" in message
+    assert "stdpar_managed" in message
+
+
+def test_a_builder_that_does_not_answer_stops_startup(tmp_path, monkeypatch):
+    # Nothing on this port, so the client's connection is refused at once.
+    _deployment(tmp_path, monkeypatch, EQUIVALENT_BUILDER_URL="http://127.0.0.1:1")
+
+    with pytest.raises(ValueError) as excinfo:
+        build_app_from_env()
+
+    assert "/healthz" in str(excinfo.value)

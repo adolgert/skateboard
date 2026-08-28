@@ -25,7 +25,13 @@ def check(repo_dir, ref: str, region_id: str, tree_sha: str, strategy: Strategy,
     ComponentError if the builder call itself couldn't be completed (not a
     verdict about the code).
     """
-    files = fortran_files_at(repo_dir, ref)
+    try:
+        files = fortran_files_at(repo_dir, ref)
+    except ValueError as exc:
+        # A source file in the tree that is not UTF-8: the builder is sent
+        # JSON, so there is nothing to compile. A fact about the tree, not
+        # a verdict about the port, so no claim is recorded.
+        raise ComponentError(str(exc)) from exc
     if not files:
         raise ComponentError(f"no .f90 files found in tree {tree_sha} at ref {ref}")
 

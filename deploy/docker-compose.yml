@@ -64,7 +64,14 @@ services:
       context: ..
       dockerfile: deploy/gateway/Dockerfile
     networks: [agent_net, build_net, oracle_net]
-    depends_on: [builder, oracle]
+    # The gateway compares every strategy's required_tools against the
+    # builder's /healthz before it serves anything, so it waits for the
+    # builder to be answering rather than merely started.
+    depends_on:
+      builder:
+        condition: service_healthy
+      oracle:
+        condition: service_started
     # Runs as the account that started the deployment, not root. The
     # repository and the ledger are bind mounts owned by that account, and
     # git refuses to work in a repository owned by someone other than the
@@ -103,6 +110,15 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     # /work is a normal writable dir in the (ephemeral) container. NOT a tmpfs:
     # Docker mounts tmpfs noexec, which blocks executing the compiled binary.
+    # The image has python3 for the service shim but no curl, so the check is
+    # written in python3. /healthz needs no token.
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:9090/healthz').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
 
   oracle:                       # trusted, sealed; read-only rootfs
     build:

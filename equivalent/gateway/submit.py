@@ -1,5 +1,12 @@
 """Turns an agent's working copy into a git tree.
 
+Trust role: the tree this builds is the subject of every claim about a
+submission, so what it holds has to be exactly what the agent wrote.
+File content is carried as bytes from the moment it is read to the
+moment it is written back out -- a code's tree holds namelists and small
+data files that are not UTF-8, and re-encoding one of them would make the
+tree hash describe something nobody submitted.
+
 The gateway keeps one git repository per baseline. Each region gets its
 own branch inside it, `region/<id>` (`:` is not legal in a git branch
 name, so it is replaced with `-`). Commits are built with git's plumbing
@@ -26,7 +33,10 @@ from equivalent.ledger.subjects import frozen_subject, tree_subject
 class SubmitReceipt:
     tree: str
     frozen: str
-    rejected: tuple  # ({"path": ..., "reason": "not_allowed" | "binary"}, ...)
+    # ({"path": ..., "reason": "not_allowed"}, ...). Being outside the
+    # allow-list is the only reason a file is turned away; what is in it
+    # never is.
+    rejected: tuple
     not_sent: tuple  # allowed baseline paths absent from the working copy, named as a warning
     committed: bool
 
@@ -34,6 +44,14 @@ class SubmitReceipt:
 def _git(repo_dir, *args, input=None, env=None) -> str:
     return subprocess.run(
         ["git", *args], cwd=repo_dir, capture_output=True, text=True,
+        input=input, env=env, check=True,
+    ).stdout
+
+
+def _git_bytes(repo_dir, *args, input=None, env=None) -> bytes:
+    """The same, without decoding: for file content, which is not always text."""
+    return subprocess.run(
+        ["git", *args], cwd=repo_dir, capture_output=True,
         input=input, env=env, check=True,
     ).stdout
 
@@ -68,13 +86,19 @@ def init_baseline_repo(repo_dir, seed_dir) -> str:
 
 
 def tracked_files(repo_dir, ref: str = "main") -> list[dict]:
-    """Every file tracked at `ref`, as {"path": ..., "content": ...} pairs."""
-    listing = _git(repo_dir, "ls-tree", "-r", "--name-only", ref)
+    """Every file tracked at `ref`, as {"path": str, "content": bytes} pairs.
+
+    The listing is asked for NUL-separated (`-z`) so that a path git would
+    otherwise quote comes back as the bytes it really is, and the content
+    is read without decoding.
+    """
+    listing = _git_bytes(repo_dir, "ls-tree", "-r", "--name-only", "-z", ref)
     files = []
-    for path in listing.splitlines():
-        if path:
+    for raw in listing.split(b"\0"):
+        if raw:
+            path = raw.decode("utf-8")
             files.append(
-                {"path": path, "content": _git(repo_dir, "show", f"{ref}:{path}")}
+                {"path": path, "content": _git_bytes(repo_dir, "show", f"{ref}:{path}")}
                 )
     return files
 
@@ -114,21 +138,23 @@ def resolve_allow_globs(store: LedgerStore, spec_path: str) -> list[str]:
     return max(passing, key=lambda c: c.ts).predicate.detail["allow_globs"]
 
 
-def _build_tree(repo_dir, files: dict[str, str]) -> str:
+def _build_tree(repo_dir, files: dict[str, bytes]) -> str:
     """Write `files` as a git tree object without touching the working directory or HEAD."""
     repo_dir = Path(repo_dir)
     index_file = repo_dir / ".git" / f"tmp-index-{uuid.uuid4().hex}"
     env = {**os.environ, "GIT_INDEX_FILE": str(index_file)}
     try:
         for path in sorted(files):
-            blob = _git(repo_dir, "hash-object", "-w", "--stdin", input=files[path], env=env).strip()
+            blob = _git_bytes(
+                repo_dir, "hash-object", "-w", "--stdin", input=files[path], env=env,
+            ).decode("ascii").strip()
             _git(repo_dir, "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", env=env)
         return _git(repo_dir, "write-tree", env=env).strip()
     finally:
         index_file.unlink(missing_ok=True)
 
 
-def _commit_tree_if_changed(repo_dir, branch: str, files: dict[str, str], message: str) -> bool:
+def _commit_tree_if_changed(repo_dir, branch: str, files: dict[str, bytes], message: str) -> bool:
     git_tree = _build_tree(repo_dir, files)
     parent = _rev_parse(repo_dir, branch) or _rev_parse(repo_dir, "main")
     parent_tree = _git(repo_dir, "rev-parse", f"{parent}^{{tree}}").strip()
@@ -156,10 +182,7 @@ def submit(repo_dir, region_id: str, working_copy_dir, allow_globs: list[str], s
         if not _matches_any(path, allow_globs):
             rejected.append({"path": path, "reason": "not_allowed"})
             continue
-        try:
-            applied[path] = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            rejected.append({"path": path, "reason": "binary"})
+        applied[path] = raw
 
     constructed = {**baseline, **applied}
     frozen_files = [{"path": p, "content": c} for p, c in baseline.items() if not _matches_any(p, allow_globs)]
@@ -220,7 +243,7 @@ def materialize_tree(repo_dir, ref: str, dest_dir) -> None:
     for f in tracked_files(repo_dir, ref):
         path = dest_dir / f["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f["content"])
+        path.write_bytes(f["content"])
 
 
 def attempt_id_for(region_id: str, tree_sha: str) -> str:
@@ -239,7 +262,7 @@ def attempt_id_for(region_id: str, tree_sha: str) -> str:
 
 
 def fortran_files_at(repo_dir, ref: str) -> list[dict]:
-    """Every .f90/.F90 file tracked at `ref`, sorted by path.
+    """Every .f90/.F90 file tracked at `ref`, sorted by path, with `content` as str.
 
     Sent as-is to the builder: demo/builder/stages.py picks its own fixed
     basenames out of whatever it's given and compiles them in its own
@@ -247,8 +270,23 @@ def fortran_files_at(repo_dir, ref: str) -> list[dict]:
     -- only that everything the builder might want is present. Sending
     this superset is simpler than deriving a precise per-region
     dependency closure, and the builder ignores what it doesn't use.
+
+    The builder's request body is JSON, which carries text and not bytes,
+    so this is where the tree's bytes become source. A Fortran file that
+    is not UTF-8 raises ValueError naming it; the callers turn that into
+    a ComponentError, because it is a fact about the tree and not a
+    verdict about the port.
     """
-    files = [f for f in tracked_files(repo_dir, ref) if f["path"].lower().endswith(".f90")]
+    files = []
+    for f in tracked_files(repo_dir, ref):
+        if not f["path"].lower().endswith(".f90"):
+            continue
+        try:
+            files.append({"path": f["path"], "content": f["content"].decode("utf-8")})
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                f"{f['path']} is not UTF-8, so it cannot be sent to the builder as source"
+            ) from exc
     return sorted(files, key=lambda f: f["path"])
 
 

@@ -4,9 +4,10 @@ version: 1
 # Files a region under this strategy may legally submit. A specific region's
 # own allow-list must stay within this list; it can only narrow it, never add
 # a path outside it.
-# fnmatch's "*" already matches across "/" (it has no directory-boundary
-# meaning here), so "src/*.f90" covers both src/mod_kernel.f90 and something
-# like src/PESs/N4_UMN_PES_Class.F90 -- no "**" needed or supported.
+# Matching ignores case, so "src/*.f90" covers src/PESs/N4_UMN_PES_Class.F90
+# as well as src/mod_kernel.f90. "*" also matches across "/" (it has no
+# directory-boundary meaning here), so a pattern under src/ reaches any depth
+# below it -- no "**" needed or supported.
 allow_globs:
   - "src/*.f90"
   - "notes/regions/*.yaml"
@@ -40,5 +41,10 @@ sanitizers:
   - memcheck
   - racecheck
   - initcheck
+
+# Which visible cases the sanitizers see. "first" here because a sanitizer run
+# is far slower than a plain replay and the visible cases differ only in their
+# input data; "all" is the other choice.
+sanitize_cases: first
 
 analyzer_command: "python3 tools/regionharness/check_sese.py"

@@ -40,7 +40,6 @@ RUN userdel --remove ubuntu 2>/dev/null || true \
 USER agent
 ENV HOME=/home/agent
 ENV EQUIVALENT_GATEWAY_URL=http://gateway:8000
-ENV EQUIVALENT_REGION=ch04:step
 WORKDIR /working
 
 # The session files land on the mounted directory so they can be read back

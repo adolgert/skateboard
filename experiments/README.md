@@ -35,8 +35,10 @@ Three findings, each a load-bearing point of the design:
    sanitizer, visible AND held-out comparison all pass) that runs **8× slower than
    the CPU** (86.9 s vs 10.9 s). The cause: its kernel keeps extra whole-array
    copies (`h_old = h`, `u = u_new`) that execute on the host, so 2M-element
-   managed-memory arrays migrate host⇄device every step. Sonnet/Opus updated in
-   place and kept the data resident on the device.
+   managed-memory arrays migrate host⇄device every step. Sonnet, the only other
+   accepted run in this campaign, updated in place and kept the data resident on
+   the device. No Opus run exists: the four backends in the table above are the
+   ones that ran, and no ledger here holds an `opus` row.
 
 The speedup spectrum (including Haiku's 0.13×) is kept deliberately: the harness
 records every port, effective or not, rather than gating acceptance on speed.

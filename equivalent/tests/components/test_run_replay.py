@@ -2,6 +2,10 @@ from pathlib import Path
 
 import pytest
 
+# kernel_launches comes straight from the file the builder image runs, so
+# this test fails if the two drift apart. It reads a string and needs no
+# GPU, no compiler, and no container.
+from demo.builder.stages import kernel_launches
 from equivalent.components import run_replay
 from equivalent.components.errors import ComponentError
 from equivalent.strategy.schema import load_strategy
@@ -49,3 +53,52 @@ def test_raises_component_error_with_no_visible_dataset():
 
     with pytest.raises(ComponentError):
         run_replay.check("ch04:step", "tree123", strategy, {}, builder)
+
+
+# Two real lines the NVIDIA runtime prints under NVCOMPILER_ACC_NOTIFY=1:
+# the first from a -stdpar/OpenACC build, the second from -mp=gpu. They
+# differ in their later fields and in the run of spaces after "kernel".
+ACC_LINE = (
+    "launch CUDA kernel  file=/tmp/probe/p.f90 function=p line=5 device=0 "
+    "threadid=1 num_gangs=782 num_workers=1 vector_length=128 grid=782 block=128"
+)
+OMP_LINE = (
+    "launch CUDA kernel file=/tmp/probe/q.f90 function=q line=5 device=0 "
+    "host-threadid=0 num_teams=0 thread_limit=0 kernelname=nvkernel_MAIN__F1L5_2_ "
+    "grid=<<<782,1,1>>> block=<<<128,1,1>>> shmem=0b"
+)
+
+
+def test_both_real_notify_lines_are_counted_and_located():
+    count, launches = kernel_launches(f"{ACC_LINE}\n{OMP_LINE}\n", "acc")
+
+    assert count == 2
+    assert launches == [
+        ("/tmp/probe/p.f90", "p", "5"),
+        ("/tmp/probe/q.f90", "q", "5"),
+    ]
+
+
+def test_a_line_the_program_printed_itself_is_not_a_launch():
+    # The device proof is only worth anything if a program cannot pass it
+    # by printing the words. Without the runtime's own file/function/line/
+    # device fields, nothing is counted.
+    forged = "launch CUDA kernel  forged line\nlaunch CUDA kernel\nlaunching kernels now\n"
+
+    assert kernel_launches(forged, "acc") == (0, [])
+
+
+def test_nothing_is_counted_for_a_strategy_that_asks_for_no_notify_output():
+    assert kernel_launches(ACC_LINE, None) == (0, [])
+
+
+def test_the_lines_that_matched_are_recorded_in_the_claim():
+    # The claim says which source lines launched kernels, not just how
+    # many launches there were, so a reviewer can check the count against
+    # the region's own code.
+    strategy = load_strategy(STRATEGY_PATH)
+    builder = FakeBuilder()
+
+    result = run_replay.check("ch04:step", "tree123", strategy, CASES, builder)
+
+    assert result["detail"]["launches"] == builder.run_launches
