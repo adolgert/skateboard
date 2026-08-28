@@ -68,9 +68,9 @@ baseline="$(git -C state/repo rev-parse main)"
 # The same configuration the gateway reads, with the paths of this machine
 # rather than the container's mount points, so the ledger command line and the
 # gateway describe one deployment and not two. The regions come from
-# gateway.yaml as they are written there; only the paths are rewritten, from
+# the code's gateway.<code>.yaml as they are written there; only the paths are rewritten, from
 # the mounts in docker-compose.yml.
-python3 "${here}/hostconfig.py" "${here}/gateway.yaml" state/gateway.host.yaml \
+python3 "${here}/hostconfig.py" "${here}/gateway.${EQUIVALENT_CODE:-tsunami}.yaml" state/gateway.host.yaml \
     --mount "/repo=${here}/state/repo" \
     --mount "/ledger=${here}/state/ledger" \
     --mount "/working=${here}/state/working" \

@@ -261,7 +261,7 @@ def _next_steps(code_dir: Path, code: str) -> list[str]:
         "",
         "next, by hand:",
         f"  git add {code_dir} && git commit -m 'onboard {code}'",
-        f"  add a region for '{code}' to deploy/gateway.yaml with phase: porting, a",
+        f"  add a region for '{code}' to deploy/gateway.<code>.yaml with phase: porting, a",
         "    spec_path, a strategy, a baseline_strategy, and visible_dataset: visible",
         f"  set EQUIVALENT_CODE={code} in deploy/.env",
         "  cd deploy && ./down.sh && ./up.sh",

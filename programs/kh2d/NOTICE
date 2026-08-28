@@ -1,0 +1,10 @@
+The files under baseline/src/ are copied unmodified from
+
+    https://github.com/nktkt/fusion-physics-suite
+    commit df035b7293630f384ba1e074de2ecfe9ef093edc (2026-04-16)
+    hydro/kh2d.f90, hydro/euler_module.f90
+
+on 2026-08-28. That repository carries no LICENSE file and its README
+says nothing about licensing; the copy is here as the subject of a
+porting exercise, not as a redistribution. Everything else under this
+directory is written for this harness.

@@ -9,7 +9,7 @@ from equivalent.gateway.submit import init_baseline_repo, region_slug
 from equivalent.tests.fakes import write_program
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEPLOYMENT_CONFIG = REPO_ROOT / "deploy" / "gateway.yaml"
+DEPLOYMENT_CONFIG = REPO_ROOT / "deploy" / "gateway.tsunami.yaml"
 
 CONFIG = {
     "version": 1,

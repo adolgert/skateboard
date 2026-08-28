@@ -101,7 +101,7 @@ def test_the_written_file_says_where_it_came_from(tmp_path):
 
     written = out.read_text()
     assert written.startswith(HEADER)
-    assert "Edit gateway.yaml" in written
+    assert "Edit that file" in written
     assert yaml.safe_load(written)["paths"]["repo"] == "/srv/deploy/state/repo"
 
 

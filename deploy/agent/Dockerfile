@@ -32,6 +32,18 @@ COPY pi-extension/src ./src
 COPY deploy/isolation_check.sh /opt/isolation_check.sh
 RUN chmod +x /opt/isolation_check.sh
 
+# The harness's own Fortran and Python that a code's tree builds against:
+# the NPY module a replay driver and a capture program use, and the library
+# a property module imports. The same files the builder bakes, so a hand
+# build in a session compiles against what the builder will compile
+# against. pytest, hypothesis, and numpy let a session run its own property
+# module before submitting it.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-pip make \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip3 install --break-system-packages --no-cache-dir "pytest==8.*" "hypothesis==6.*" "numpy==2.*"
+COPY services/builder/harness/npy_io.f90 services/builder/harness/harness_properties.py /opt/harness/
+
 RUN userdel --remove ubuntu 2>/dev/null || true \
  && useradd --create-home --uid "${AGENT_UID}" --shell /bin/bash agent \
  && mkdir -p /working /sessions /home/agent/.pi \

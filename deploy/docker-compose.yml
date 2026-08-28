@@ -56,6 +56,8 @@ services:
       - ./state/working:/working
       - ./state/sessions:/sessions
       - ./state/pi-home:/home/agent/.pi     # holds the login the person does once
+      # What a session bringing a new code in reads to know what to write.
+      - ../docs/onboarding.md:/docs/onboarding.md:ro
     stdin_open: true
     tty: true
 
@@ -89,7 +91,8 @@ services:
       - ./state/ledger:/ledger
       - ./state/working:/working:ro
       - ./state/seed:/seed:ro
-      - ./gateway.yaml:/etc/equivalent/gateway.yaml:ro
+      # One deployment holds one code; its configuration file is chosen by name.
+      - ./gateway.${EQUIVALENT_CODE:-tsunami}.yaml:/etc/equivalent/gateway.yaml:ro
       - ../programs:/programs:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]

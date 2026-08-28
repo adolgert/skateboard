@@ -1,0 +1,18 @@
+# The minimal form of a manifest: enough to seed a baseline and start an
+# onboarding session, and nothing more. Onboarding writes the rest into
+# the tree as harness/manifest.yaml, and promoting copies it here.
+version: 1
+name: kh2d
+source:
+  root: baseline
+  patterns:
+    - "**/*.f90"
+    - "**/*.F90"
+    - "**/*.f08"
+    - "**/*.f03"
+    - "**/*.f"
+    - "**/*.F"
+    - "**/*.for"
+    - "**/*.inc"
+    - "Makefile"
+    - "**/*.mk"

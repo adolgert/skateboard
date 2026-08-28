@@ -27,8 +27,8 @@ from pathlib import Path
 import yaml
 
 HEADER = (
-    "# Written by up.sh. The gateway reads deploy/gateway.yaml, in the container's\n"
-    "# terms; this is the same deployment seen from this machine. Edit gateway.yaml\n"
+    "# Written by up.sh. The gateway reads deploy/gateway.<code>.yaml, in the container's\n"
+    "# terms; this is the same deployment seen from this machine. Edit that file\n"
     "# and re-run up.sh rather than editing this file.\n"
 )
 

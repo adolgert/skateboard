@@ -460,7 +460,7 @@ already holds something is refused unless you pass `--replace`, and
 `--programs` writes the whole thing somewhere else if you would rather
 compare before committing. It ends by printing the steps that stay
 yours: `git add`, a commit, a `phase: porting` region for the code in
-`deploy/gateway.yaml`, `EQUIVALENT_CODE`, and `down.sh`/`up.sh` so the
+`deploy/gateway.<code>.yaml`, `EQUIVALENT_CODE`, and `down.sh`/`up.sh` so the
 oracle image is built again around the new captures.
 
 `deploy/onboard_walkthrough.sh` drives the whole of this against a

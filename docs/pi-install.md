@@ -105,7 +105,7 @@ holding more than one is checked a region at a time:
 
     EQUIVALENT_REGION=ch04:step-stencil ./walkthrough.sh
 
-The two regions in the shipped `gateway.yaml` share one working copy, so
+The regions in the shipped `gateway.tsunami.yaml` share one working copy, so
 run them one after the other rather than at the same time.
 
 Read what it left behind:
@@ -258,14 +258,14 @@ baseline sources, the datasets, the reference captures, the tolerance
 policy, and the region specs. The baseline sources include the code's
 own makefile, its replay driver, and its capture program -- the builder
 builds a code by running that makefile, so nothing about how a code is
-built lives in the harness. `deploy/gateway.yaml` names each code in
+built lives in the harness. `deploy/gateway.<code>.yaml` names the code in
 its `codes:` section and each region in its `regions:` section, where a
 region gives its code, its spec file path, its strategy, the baseline
 strategy its speedup is measured against, and its visible dataset.
 `equivalent/strategy/files/` holds the strategies (`stdpar_managed`,
 `omp_target`, and `cpu_reference`, which is the usual comparison floor).
 
-A new region is a new entry in `gateway.yaml` -- naming its `phase`,
+A new region is a new entry in that file -- naming its `phase`,
 `porting` for a region of a code that has been brought in -- a spec file
 checked in at
 `programs/<code>/regions/<region id with the colon as a dash>.sese.yaml`,
@@ -288,7 +288,7 @@ file carries its own element type, shape, and element order, so a
 variable's name is the only thing written down anywhere; the code's
 manifest is what says which names the region has and what type and rank
 each one is. Restart the gateway after editing
-`gateway.yaml`, and re-run `up.sh` so the host copy is regenerated.
+the file, and re-run `up.sh` so the host copy is regenerated.
 
 ## When something is wrong
 

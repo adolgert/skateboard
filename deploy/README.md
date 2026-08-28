@@ -26,7 +26,7 @@ answering every comparison with the name of what is missing.
 | file | what it is |
 | --- | --- |
 | `docker-compose.yml` | the four services and the four networks |
-| `gateway.yaml` | the gateway's configuration, in the container's paths |
+| `gateway.<code>.yaml` | the gateway's configuration for a deployment built around that code, in the container's paths; `EQUIVALENT_CODE` picks it |
 | `gateway/Dockerfile` | the gateway image: the package, which holds the analyzer |
 | `agent/Dockerfile` | the session image: compilers, a GPU, and the session tool |
 | `seed.py` | writes the baseline the gateway's repository starts from, reading which tree from the code's manifest |
@@ -98,7 +98,7 @@ ledger promote --config deploy/state/gateway.host.yaml --region-id tsunami:onboa
 
 That writes `programs/<code>/` — the manifest, the baseline, the visible
 dataset, and the captures — and prints the steps that stay yours: the
-commit, a `phase: porting` region in `gateway.yaml`, and `down.sh` /
+commit, a `phase: porting` region in `gateway.<code>.yaml`, and `down.sh` /
 `up.sh`, because the oracle bakes the captures into its image. It
 refuses rather than writing over what is already there; `--replace`
 empties the destinations first and `--programs` writes somewhere else
@@ -108,7 +108,7 @@ in.
 `up.sh` writes `state/gateway.host.yaml`: the same deployment as `gateway.yaml`,
 with the paths of this machine rather than the container's mount points. Both
 are read by the one configuration loader, so there is no second description of
-where a region's files live. Edit `gateway.yaml` and re-run `up.sh` rather than
+where a region's files live. Edit `gateway.<code>.yaml` and re-run `up.sh` rather than
 editing the generated copy.
 
 ## Logging in, once
