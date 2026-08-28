@@ -19,6 +19,7 @@ come from the tree and the manifest.
 """
 import base64
 import glob
+import json
 import os
 import re
 import shutil
@@ -45,6 +46,15 @@ LOG_NAME = "fc.jsonl"
 BUILD_TIMEOUT_S = 1800
 REPLAY_TIMEOUT_S = 120
 SANITIZE_TIMEOUT_S = 600
+# A capture program runs the code's real setup at whatever size the
+# dataset's arguments ask for, which is longer than a replay and shorter
+# than a build.
+CAPTURE_TIMEOUT_S = 600
+
+# What a case directory says it holds. The builder reads this file for the
+# variable names and nothing else -- no name and no element type is
+# written down in this service.
+CASE_FILE = "case.json"
 
 
 def _workspace(attempt_id, work_root):
@@ -310,6 +320,97 @@ def run(attempt_id, executable, cases, notify=None, mandatory=False,
     }
 
 
+def _plain_name(name) -> bool:
+    """Is this a variable name and not a way out of the case directory."""
+    return (
+        isinstance(name, str) and name not in ("", ".", "..")
+        and "/" not in name and "\\" not in name
+    )
+
+
+def _read_captured_case(case_dir):
+    """One captured case: the files `case.json` lists, base64 as they are on disk.
+
+    A name the listing gives but the program never wrote is left out
+    rather than invented, so the gateway sees a case that is missing a
+    variable and can say which one. It is the gateway, holding the code's
+    manifest, that knows what the case should have held.
+    """
+    with open(os.path.join(case_dir, CASE_FILE)) as f:
+        listed = json.load(f)
+    case = {}
+    for section, suffix in (("inputs", INPUT_SUFFIX), ("outputs", OUTPUT_SUFFIX)):
+        arrays = {}
+        for name in listed.get(section, []):
+            if not _plain_name(name):
+                raise ValueError(f"{CASE_FILE} lists {name!r}, which is not a variable name")
+            path = os.path.join(case_dir, f"{name}{suffix}")
+            if os.path.exists(path):
+                with open(path, "rb") as f:
+                    arrays[name] = base64.b64encode(f.read()).decode()
+        case[section] = arrays
+    return case
+
+
+def capture(attempt_id, executable, args=(), run_name="capture", *, work_root=WORK_ROOT,
+            timeout=CAPTURE_TIMEOUT_S) -> dict:
+    """Run the code's own capture program and return the dataset it wrote.
+
+    The contract is one line: `<executable> <args...> <outdir>`, where the
+    arguments are the dataset's own, from the manifest, and the output
+    directory is this service's to name. It is made empty first, so what
+    comes back is what this run wrote and not what an earlier one left.
+
+    A case is a directory holding `case.json`; anything else the program
+    writes beside them is ignored. A run that leaves none is not a
+    crash -- the program ran and produced no dataset -- so it comes back
+    as `ok: false` saying that, for the gateway to turn into a verdict.
+    """
+    tree_dir, program = _executable(attempt_id, executable, work_root)
+    if program is None:
+        return {
+            "ok": False, "stage": "capture", "cases": {},
+            "stdout_tail": f"the tree holds no executable '{executable}'; build it first",
+        }
+
+    safe_run = re.sub(r"[^A-Za-z0-9._-]", "_", run_name)
+    outdir = os.path.join(_workspace(attempt_id, work_root), "captures", safe_run)
+    shutil.rmtree(outdir, ignore_errors=True)
+    os.makedirs(outdir, exist_ok=True)
+
+    try:
+        rc, out, err = _run([program, *args, outdir], cwd=tree_dir, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False, "stage": "capture", "cases": {},
+            "stdout_tail": f"the capture run did not finish within {timeout} seconds",
+        }
+    tail = (out + err)[-2000:]
+    if rc != 0:
+        return {"ok": False, "stage": "capture", "cases": {}, "stdout_tail": tail}
+
+    cases = {}
+    for name in sorted(os.listdir(outdir)):
+        case_dir = os.path.join(outdir, name)
+        if not os.path.isdir(case_dir) or not os.path.exists(os.path.join(case_dir, CASE_FILE)):
+            continue
+        try:
+            cases[name] = _read_captured_case(case_dir)
+        except (OSError, ValueError) as exc:
+            return {
+                "ok": False, "stage": "capture", "cases": {},
+                "stdout_tail": f"case '{name}': {exc}\n{tail}",
+            }
+
+    if not cases:
+        return {
+            "ok": False, "stage": "capture", "cases": {},
+            "stdout_tail": f"the capture run wrote no case directory (a directory holding "
+                           f"{CASE_FILE}) into the output directory it was given\n{tail}",
+        }
+    return {"ok": True, "stage": "capture", "cases": cases, "stdout_tail": tail}
+
+
 def sanitize(attempt_id, executable, cases, tools, *, work_root=WORK_ROOT,
              timeout=SANITIZE_TIMEOUT_S) -> dict:
     """Run every tool over every case, against the manifest's replay executable.
@@ -365,6 +466,11 @@ def time_run(attempt_id, executable, args=(), env=None, outputs=(), repeats=5,
     problem size is data rather than something compiled into a source
     file. The declared output files come back with the timings: they are
     what says the fast run was also a correct one.
+
+    They are collected once per run, not once at the end, and the
+    declared files are cleared before each run -- so a caller can ask
+    whether the program wrote the same thing every time, which is a
+    question a single collection at the end cannot answer.
     """
     tree_dir, program = _executable(attempt_id, executable, work_root)
     if program is None:
@@ -373,42 +479,48 @@ def time_run(attempt_id, executable, args=(), env=None, outputs=(), repeats=5,
             "log_tail": f"the tree holds no executable '{executable}'; build it first",
         }
 
-    # A file left by an earlier attempt would otherwise be collected as if
-    # this run had written it.
-    for relative in outputs:
-        path = os.path.join(tree_dir, relative)
-        if os.path.exists(path):
-            os.remove(path)
-
     run_env = {**os.environ, **{str(k): str(v) for k, v in (env or {}).items()}}
     # honest timing wants exclusive GPU
     gpu_excl = _gpu_exclusive()
     runs = []
+    collected = []
     last = ""
     for _ in range(repeats):
+        # A file left by an earlier run, or by an earlier attempt, would
+        # otherwise be collected as if this run had written it.
+        for relative in outputs:
+            path = os.path.join(tree_dir, relative)
+            if os.path.exists(path):
+                os.remove(path)
+
         t0 = time.monotonic()
         try:
             rc, out, err = _run([program, *args], cwd=tree_dir, env=run_env, timeout=budget_s)
         except subprocess.TimeoutExpired:
             return {
-                "ok": False, "stage": "time", "runs_s": runs,
+                "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
                 "log_tail": f"a timing run exceeded the declared budget of {budget_s} seconds",
             }
         runs.append(time.monotonic() - t0)
         last = (out + err)[-1500:]
         if rc != 0:
-            return {"ok": False, "stage": "time", "runs_s": runs, "log_tail": last}
-
-    collected = {}
-    for relative in outputs:
-        path = os.path.join(tree_dir, relative)
-        if not os.path.exists(path):
             return {
-                "ok": False, "stage": "time", "runs_s": runs,
-                "log_tail": f"the timing run wrote no '{relative}', which the manifest declares",
+                "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
+                "log_tail": last,
             }
-        with open(path, "rb") as f:
-            collected[relative] = base64.b64encode(f.read()).decode()
+
+        this_run = {}
+        for relative in outputs:
+            path = os.path.join(tree_dir, relative)
+            if not os.path.exists(path):
+                return {
+                    "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
+                    "log_tail": f"run {len(runs)} wrote no '{relative}', which the "
+                                f"manifest declares",
+                }
+            with open(path, "rb") as f:
+                this_run[relative] = base64.b64encode(f.read()).decode()
+        collected.append(this_run)
 
     return {
         "ok": True, "stage": "time", "runs_s": runs, "gpu_exclusive": gpu_excl,

@@ -111,14 +111,25 @@ def read_case(directory) -> dict:
     }
 
 
+def _write_array(path: Path, array) -> None:
+    """One array's file, with the directories its name asks for.
+
+    A variable name may read as a path -- the timing run's outputs are
+    named by the files the program wrote, and a program may write into a
+    subdirectory of its own -- so the parent is made rather than assumed.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(encode(array))
+
+
 def write_case(directory, inputs: dict, outputs: dict) -> None:
     """Write one case directory: its arrays and the `case.json` listing them."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     for name, array in inputs.items():
-        input_path(directory, name).write_bytes(encode(array))
+        _write_array(input_path(directory, name), array)
     for name, array in outputs.items():
-        output_path(directory, name).write_bytes(encode(array))
+        _write_array(output_path(directory, name), array)
     (directory / CASE_FILE).write_text(
         json.dumps({"inputs": sorted(inputs), "outputs": sorted(outputs)}, indent=2) + "\n"
     )

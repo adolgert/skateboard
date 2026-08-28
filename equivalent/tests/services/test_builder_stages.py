@@ -262,7 +262,41 @@ def test_time_run_repeats_the_program_and_returns_the_files_it_declared(tmp_path
 
     assert result["ok"] is True
     assert len(result["runs_s"]) == 2
-    assert b"done" in base64.b64decode(result["outputs"]["result.dat"])
+    # One set of collected files per run, so a caller can ask whether the
+    # program wrote the same thing both times.
+    assert len(result["outputs"]) == 2
+    assert b"done" in base64.b64decode(result["outputs"][-1]["result.dat"])
+
+
+DRIFTING_TIMER = """program drifting
+  integer :: c
+  call system_clock(c)
+  open(unit=10, file='result.dat')
+  write(10, *) c
+  close(10)
+end program drifting
+"""
+
+
+@needs_gfortran
+def test_time_run_collects_each_runs_own_files_so_a_drifting_output_is_visible(tmp_path):
+    # A program whose declared output changes from run to run is the thing
+    # a caller most wants to know about, and it is invisible if the files
+    # are only collected once at the end.
+    build(
+        tmp_path,
+        {"Makefile": TIMER_MAKEFILE.replace("src/timer.f90", "src/drifting.f90"),
+         "src/drifting.f90": DRIFTING_TIMER},
+        targets=[{"role": "timing", "target": "timing", "executable": "whole_program"}],
+    )
+
+    result = stages.time_run(
+        "attempt-1", "whole_program", args=[], env={}, outputs=["result.dat"],
+        repeats=2, budget_s=60, work_root=tmp_path,
+    )
+
+    assert result["ok"] is True
+    assert result["outputs"][0]["result.dat"] != result["outputs"][1]["result.dat"]
 
 
 @needs_gfortran
@@ -293,3 +327,101 @@ def test_time_run_clears_a_declared_output_left_by_an_earlier_run(tmp_path):
 
     assert result["ok"] is False
     assert not stale.exists()
+
+
+# A capture program small enough to read: it takes a number of cases and,
+# as every capture program does, the directory to write them into as its
+# last argument. It writes real NPY files, because the capture format is
+# the contract and a test that wrote its own bytes would not be checking
+# it. A shell script rather than Fortran, so this runs where no compiler
+# is installed.
+CAPTURE_PROGRAM = """#!/bin/sh
+set -e
+"PYTHON" - "$1" "$2" <<'PYEOF'
+import json, sys
+import numpy as np
+from pathlib import Path
+count, outdir = int(sys.argv[1]), Path(sys.argv[2])
+for i in range(count):
+    case = outdir / ("case%04d" % i)
+    case.mkdir(parents=True)
+    np.save(case / "h.npy", np.asarray([i, i + 1], dtype="<f4"))
+    np.save(case / "h.out.npy", np.asarray([i + 2, i + 3], dtype="<f4"))
+    (case / "case.json").write_text(json.dumps({"inputs": ["h"], "outputs": ["h"]}))
+print("wrote", count, "cases")
+PYEOF
+"""
+
+
+def _capture_tree(tmp_path, program=None):
+    """A workspace holding one executable capture program and nothing else."""
+    import os
+    import sys
+    source = CAPTURE_PROGRAM.replace("PYTHON", sys.executable) if program is None else program
+    tree_dir = stages.write_tree(
+        tmp_path / "attempt-1" / "tree", tree_of({"gen_reference": source}),
+    )
+    os.chmod(Path(tree_dir) / "gen_reference", 0o755)
+    return tree_dir
+
+
+def test_capture_returns_every_case_directory_the_program_wrote(tmp_path):
+    _capture_tree(tmp_path)
+
+    result = stages.capture(
+        "attempt-1", "gen_reference", ["2"], "visible", work_root=tmp_path,
+    )
+
+    assert result["ok"] is True
+    assert sorted(result["cases"]) == ["case0000", "case0001"]
+    case = result["cases"]["case0000"]
+    assert sorted(case["inputs"]) == ["h"] and sorted(case["outputs"]) == ["h"]
+    assert base64.b64decode(case["inputs"]["h"]).startswith(b"\x93NUMPY")
+    assert "wrote 2 cases" in result["stdout_tail"]
+
+
+def test_capture_writes_into_a_directory_named_for_the_run(tmp_path):
+    _capture_tree(tmp_path)
+
+    stages.capture("attempt-1", "gen_reference", ["1"], "holdout", work_root=tmp_path)
+
+    assert (tmp_path / "attempt-1" / "captures" / "holdout" / "case0000").is_dir()
+
+
+def test_capture_starts_from_an_empty_directory_each_time(tmp_path):
+    # Otherwise a run that captured fewer cases than the last one would
+    # come back holding cases the program did not write this time.
+    _capture_tree(tmp_path)
+
+    stages.capture("attempt-1", "gen_reference", ["3"], "visible", work_root=tmp_path)
+    result = stages.capture("attempt-1", "gen_reference", ["1"], "visible", work_root=tmp_path)
+
+    assert sorted(result["cases"]) == ["case0000"]
+
+
+def test_capture_that_leaves_no_case_directory_says_so(tmp_path):
+    _capture_tree(tmp_path, program='#!/bin/sh\necho "nothing to capture"\n')
+
+    result = stages.capture("attempt-1", "gen_reference", [], "visible", work_root=tmp_path)
+
+    assert result["ok"] is False
+    assert "no case" in result["stdout_tail"]
+    assert result["cases"] == {}
+
+
+def test_capture_reports_a_program_that_failed(tmp_path):
+    _capture_tree(tmp_path, program='#!/bin/sh\necho "bad grid size" >&2\nexit 2\n')
+
+    result = stages.capture("attempt-1", "gen_reference", [], "visible", work_root=tmp_path)
+
+    assert result["ok"] is False
+    assert "bad grid size" in result["stdout_tail"]
+
+
+def test_capture_reports_the_executable_the_manifest_named_when_it_is_missing(tmp_path):
+    _capture_tree(tmp_path)
+
+    result = stages.capture("attempt-1", "no_such_program", [], "visible", work_root=tmp_path)
+
+    assert result["ok"] is False
+    assert "no_such_program" in result["stdout_tail"]

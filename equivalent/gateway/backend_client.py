@@ -69,6 +69,22 @@ class BuilderClient:
         r.raise_for_status()
         return r.json()
 
+    def capture(self, attempt_id: str, executable: str, args: list[str],
+                run_name: str) -> dict:
+        """Run the code's capture program once and bring back the dataset it wrote.
+
+        `args` are the dataset's own, from the manifest; the directory the
+        program writes into is the builder's to name, and `run_name` is
+        what it calls it. The cases come back as
+        {case: {"inputs": {variable: b64 npy}, "outputs": {...}}}.
+        """
+        r = self._http.post("/v1/capture", json={
+            "attempt_id": attempt_id, "executable": executable, "args": args,
+            "run_name": run_name,
+        })
+        r.raise_for_status()
+        return r.json()
+
     def sanitize(self, attempt_id: str, executable: str, cases: dict, tools: list[str]) -> dict:
         """Run each sanitizer over each case. `cases` is shaped as for run()."""
         r = self._http.post("/v1/sanitize", json={
@@ -79,7 +95,11 @@ class BuilderClient:
 
     def time(self, attempt_id: str, executable: str, args: list[str], env: dict,
              outputs: list[str], repeats: int = 5, budget_s: int = 300) -> dict:
-        """Time the manifest's timing executable and collect the files it declares."""
+        """Time the manifest's timing executable and collect the files it declares.
+
+        The declared files come back as one set per run, in run order, so
+        a caller can ask whether every run wrote the same thing.
+        """
         r = self._http.post("/v1/time", json={
             "attempt_id": attempt_id, "executable": executable, "args": args, "env": env,
             "outputs": outputs, "repeats": repeats, "budget_s": budget_s,

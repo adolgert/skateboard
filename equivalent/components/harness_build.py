@@ -16,32 +16,10 @@ copy of the same reasoning here.
 """
 from __future__ import annotations
 
-import tempfile
-
-from equivalent.gateway.submit import attempt_id_for_strategy, materialize_tree, tree_payload
-from equivalent.manifest.schema import IN_TREE_MANIFEST, load_tree_manifest
+from equivalent.gateway.submit import attempt_id_for_strategy, tree_payload
 from equivalent.strategy.schema import Strategy
 
-from . import build_replay
-from .errors import ComponentError
-
-
-def _manifest_of(repo_dir, ref: str):
-    """The manifest the tree carries.
-
-    A tree reaching this check has a passing manifest claim against the
-    same tree hash, so a manifest that will not load now is not the
-    agent's mistake but something wrong on this side.
-    """
-    with tempfile.TemporaryDirectory() as scratch:
-        materialize_tree(repo_dir, ref, scratch)
-        try:
-            return load_tree_manifest(scratch)
-        except (OSError, ValueError) as exc:
-            raise ComponentError(
-                f"the tree's own manifest at {IN_TREE_MANIFEST} did not load, although a "
-                f"passing manifest claim for this tree says it did: {exc}"
-            ) from exc
+from . import build_replay, tree_manifest
 
 
 def check(
@@ -59,7 +37,7 @@ def check(
     command lines it ran, and, on a failure, which of the three statements
     did not hold.
     """
-    manifest = _manifest_of(repo_dir, ref)
+    manifest = tree_manifest.manifest_of(repo_dir, ref)
     tree = tree_payload(repo_dir, ref)
 
     per_strategy = {}

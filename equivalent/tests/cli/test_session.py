@@ -11,7 +11,12 @@ import yaml
 from equivalent.cli import render, session
 from equivalent.cli.main import main
 from equivalent.gateway.submit import init_baseline_repo
-from equivalent.ledger.acceptance import ACCEPTANCE_REQUIREMENTS
+from equivalent.ledger.acceptance import (
+    ACCEPTANCE_REQUIREMENTS,
+    ONBOARDING,
+    ONBOARDING_REQUIREMENTS,
+    PORTING,
+)
 from equivalent.ledger.records import Claim, Predicate, RequestLogLine
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
@@ -313,6 +318,32 @@ def test_a_session_that_never_finishes_a_tree_says_it_is_not_accepted(tmp_path):
 
     assert summary.time_to_acceptance == "not accepted"
     assert summary.fail_verdicts == 1
+
+
+def test_an_onboarding_session_is_measured_against_the_onboarding_requirements(tmp_path):
+    # The same claims are a finished onboarding and not a finished port,
+    # so which list a session is read against comes from its region.
+    store = LedgerStore(tmp_path / "region")
+    tree = "a" * 64
+    requests = [RequestLogLine(
+        ts="2026-01-01T00:00:00Z", session="sess-1", model="m", endpoint="submit", action="submit",
+        region="tsunami:onboarding", tree=tree, config_hash=None, outcome="submitted",
+    )]
+    for i, req in enumerate(ONBOARDING_REQUIREMENTS, start=1):
+        store.append_claim(_claim(
+            f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", req.predicate_type, req.subject_kind,
+            tree, "pass", "sess-1",
+        ))
+
+    onboarding = session.summarize(
+        store, "sess-1", requests, [], session.join([], requests), phase=ONBOARDING,
+    )
+    porting = session.summarize(
+        store, "sess-1", requests, [], session.join([], requests), phase=PORTING,
+    )
+
+    assert onboarding.time_to_acceptance == "6s"
+    assert porting.time_to_acceptance == "not accepted"
 
 
 def test_the_summary_for_the_sample_session_matches_the_golden_file(tmp_path):

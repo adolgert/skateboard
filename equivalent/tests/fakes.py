@@ -21,6 +21,7 @@ fail here.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from pathlib import Path
 
@@ -56,6 +57,7 @@ PROGRAM_MANIFEST = {
         "targets": {
             "replay": {"target": "replay", "executable": "replay"},
             "timing": {"target": "timing", "executable": "whole_program"},
+            "capture": {"target": "capture", "executable": "gen_reference"},
         },
     },
     "interface": {
@@ -68,7 +70,10 @@ PROGRAM_MANIFEST = {
         "visible": {"args": ["100", "5000", "25", "0.02"]},
         "holdout": {"args": ["100", "5000", "60", "0.01"]},
     },
-    "timing": {"args": [], "outputs": [], "budget_s": 300},
+    # The timing run writes two arrays, one of them in a directory of its
+    # own, because a program is free to write wherever it likes and the
+    # files it writes become the names of a capture set's variables.
+    "timing": {"args": [], "outputs": ["field.npy", "results/flux.npy"], "budget_s": 300},
     "tolerances": TOLERANCES_IN_TREE,
     "properties": None,
 }
@@ -81,6 +86,9 @@ PROGRAM_TOLERANCES = {
 }
 
 VISIBLE_CASE = "case0000"
+
+# How many cases one run of the fixture's capture program writes.
+CAPTURED_CASES = 2
 
 
 def fixture_arrays(offset: int = 0) -> dict:
@@ -103,6 +111,51 @@ def fixture_case(offset: int = 0) -> dict:
         name: base64.b64encode(npy.encode(array)).decode()
         for name, array in fixture_arrays(offset).items()
     }
+
+
+def stepped(arrays: dict) -> dict:
+    """What the fixture's region does to its inputs: one step on each array.
+
+    The fixture's capture program and its replay driver both do this, so a
+    replay of a captured case reproduces the captured outputs exactly --
+    which is what the replay check is asking about.
+    """
+    return {name: array + 1 for name, array in arrays.items()}
+
+
+def encode_case(arrays: dict) -> dict:
+    """One case's arrays as they travel: {variable: base64 of its .npy file}."""
+    return {
+        name: base64.b64encode(npy.encode(array)).decode() for name, array in arrays.items()
+    }
+
+
+def decode_case(encoded: dict) -> dict:
+    return {name: npy.decode(base64.b64decode(data)) for name, data in encoded.items()}
+
+
+def captured_cases(args) -> dict:
+    """The dataset the fixture's capture program writes for one set of arguments.
+
+    Different arguments make a different run, the way a real capture
+    program's do, so a visible and a held-out dataset differ; the same
+    arguments make the same bytes, so capturing twice is capturing the
+    same set.
+    """
+    seed = int(hashlib.sha256(" ".join(args).encode()).hexdigest()[:6], 16) % 1000
+    cases = {}
+    for i in range(CAPTURED_CASES):
+        inputs = fixture_arrays(seed + i)
+        cases[f"case{i:04d}"] = {
+            "inputs": encode_case(inputs), "outputs": encode_case(stepped(inputs)),
+        }
+    return cases
+
+
+def timing_array(name: str):
+    """The array the fixture's timing program writes into one declared file."""
+    seed = int(hashlib.sha256(name.encode()).hexdigest()[:6], 16) % 1000
+    return np.asarray([seed, seed + 1, seed + 2], dtype="<f8")
 
 
 def program_tolerances(directory) -> Path:
@@ -197,12 +250,23 @@ class FakeBuilder:
         self.only_tree_source = True
         self.outside_file = "../elsewhere/sneak.f90"
         self.compiled_file = "src/mod_kernel.f90"
+        self.capture_calls = []
         self.run_ok = True
         self.run_kernels = 4
         self.run_launches = [["src/mod_kernel.f90", "step", "42"]]
         # What one replay writes back. A test that wants an output missing
         # or of the wrong type replaces this.
         self.run_outputs = fixture_case()
+        # With this on, a replay reproduces what the capture program
+        # recorded for the case it is given, which is what a correct
+        # replay driver does. A test that wants a driver which does not
+        # leaves it off and sets `run_outputs` instead.
+        self.replays_capture = False
+        self.capture_ok = True
+        # The dataset each set of arguments captures, for a test that
+        # wants particular cases. Arguments that are not in it capture the
+        # fixture program's own dataset for those arguments.
+        self.capture_cases = {}
         self.sanitize_ok = True
         self.time_ok = True
         self.runs_s = [0.21, 0.20, 0.22]
@@ -257,9 +321,28 @@ class FakeBuilder:
         })
         if not self.run_ok:
             return {"ok": False, "stage": "run", "log_tail": "runtime crash"}
-        outputs = {name: dict(self.run_outputs) for name in cases}
+        if self.replays_capture:
+            outputs = {
+                name: encode_case(stepped(decode_case(arrays)))
+                for name, arrays in cases.items()
+            }
+        else:
+            outputs = {name: dict(self.run_outputs) for name in cases}
         return {"ok": True, "stage": "run", "outputs": outputs, "kernels_launched": self.run_kernels,
                 "launches": self.run_launches, "log_tail": ""}
+
+    def capture(self, attempt_id, executable, args, run_name):
+        self.capture_calls.append({
+            "attempt_id": attempt_id, "executable": executable, "args": list(args),
+            "run_name": run_name,
+        })
+        if not self.capture_ok:
+            return {
+                "ok": False, "stage": "capture", "cases": {},
+                "stdout_tail": "the capture run wrote no case directory",
+            }
+        cases = self.capture_cases.get(tuple(args), captured_cases(list(args)))
+        return {"ok": True, "stage": "capture", "cases": cases, "stdout_tail": ""}
 
     def sanitize(self, attempt_id, executable, cases, tools):
         self.sanitize_calls.append({
@@ -277,11 +360,19 @@ class FakeBuilder:
             return {"ok": False, "stage": "time", "log_tail": "timing binary not built"}
         return {
             "ok": True, "stage": "time", "runs_s": self.runs_s, "gpu_exclusive": True,
-            "outputs": {
-                name: base64.b64encode(f"{name} from the timing run".encode()).decode()
-                for name in outputs
-            },
+            # One set of files per run, in run order, as the builder
+            # collects them. The program writes the same arrays every
+            # time; a test that wants a program which does not overrides
+            # this method.
+            "outputs": [self.timing_outputs(outputs, run) for run in range(repeats)],
             "stdout_tail": "",
+        }
+
+    def timing_outputs(self, outputs, run: int) -> dict:
+        """The declared files one timing run wrote: real arrays, as the program writes."""
+        return {
+            name: base64.b64encode(npy.encode(timing_array(name))).decode()
+            for name in outputs
         }
 
 

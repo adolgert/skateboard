@@ -12,9 +12,9 @@ must still do are both properties of the region's phase. POST /run
 refuses a request whose required claims are missing, returns an existing
 claim for a repeated deterministic request, and otherwise dispatches to
 the action's component. Every row in
-equivalent.gateway.table.ACTION_TABLE has real dispatch; an action whose
-builder or oracle client isn't configured for this gateway instance
-still falls back to the "not implemented" response rather than crashing.
+equivalent.gateway.table.ACTION_TABLE that names a component has real
+dispatch; an action whose builder or oracle client isn't configured for
+this gateway instance answers that it isn't, rather than crashing.
 """
 from __future__ import annotations
 
@@ -29,6 +29,10 @@ from pydantic import BaseModel, ConfigDict
 from equivalent.components import (
     build_replay,
     harness_build,
+    harness_capture,
+    harness_determinism,
+    harness_replay,
+    harness_timing,
     manifest_check,
     regression,
     run_replay,
@@ -86,6 +90,21 @@ def _claim_response(claim) -> dict:
     return {"claim_id": claim.id, **agent_receipt(claim.predicateType, claim.predicate)}
 
 
+def _capture_set_materials(detail: dict) -> list:
+    """The capture sets an onboarding claim rests on, as materials.
+
+    Each of the four harness checks that reads or writes a dataset names
+    it the same way in its detail, so this reads all four. A verdict
+    reached against one set of captured arrays must not read as a verdict
+    against another, which is what putting them in materials says.
+    """
+    return [
+        Subject(kind="capture_set", sha256=entry["capture_set"])
+        for _, entry in sorted(detail.get("datasets", {}).items())
+        if entry.get("capture_set")
+    ]
+
+
 def _claims_response(claims) -> dict:
     return {"claims": [
         {"predicateType": c.predicateType, **_claim_response(c)} for c in claims
@@ -129,10 +148,10 @@ def _validation_detail(exc: RequestValidationError) -> str:
 def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, oracle=None) -> FastAPI:
     """`builder` and `oracle` are BuilderClient/OracleClient-shaped objects
     (equivalent.gateway.backend_client), or None. An action whose
-    component needs one that isn't configured falls through to the same
-    "not implemented yet" response as an action with no component wiring
-    at all -- a gateway can be brought up with the ledger/analyzer side
-    working before the builder or oracle are reachable.
+    component needs one that isn't configured answers with an error
+    saying so, and files no claim -- a gateway can be brought up with the
+    ledger and analyzer side working before the builder or the oracle are
+    reachable.
     """
     app = FastAPI(title="equivalent-gateway")
     stores: dict[str, LedgerStore] = {}
@@ -444,9 +463,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 log("claim", claim_id=claim.id)
                 return _claim_response(claim)
 
-            # The onboarding actions. The rest of that phase's rows fall
-            # through to the "not implemented yet" answer below, which is
-            # what a session asking for one of them is told today.
+            # The onboarding actions.
             if req.action == "manifest_check":
                 # No builder: the manifest is read on this side, where the
                 # gateway already has the tree and the loader that knows
@@ -464,6 +481,65 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                     load_strategy(cfg.baseline_strategy_path), builder,
                 )
                 claim = record("harness/builds", subjects_by_kind["tree"], "builder", result)
+                log("claim", claim_id=claim.id)
+                return _claim_response(claim)
+
+            if req.action == "harness_capture":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                result = harness_capture.check(
+                    store, cfg.repo_dir, ref, cfg.region_id, tree_sha,
+                    load_strategy(cfg.baseline_strategy_path), builder,
+                )
+                # The sets this check stored are what every later claim
+                # about this tree compares against, so they are formal
+                # materials rather than a note in the detail.
+                claim = record(
+                    "harness/captured", subjects_by_kind["tree"], "builder", result,
+                    materials=_capture_set_materials(result["detail"]),
+                )
+                log("claim", claim_id=claim.id)
+                return _claim_response(claim)
+
+            if req.action == "harness_replay":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                result = harness_replay.check(
+                    store, subjects_by_kind["tree"], cfg.repo_dir, ref, cfg.region_id, tree_sha,
+                    load_strategy(cfg.baseline_strategy_path), builder,
+                )
+                claim = record(
+                    "harness/replays", subjects_by_kind["tree"], "builder", result,
+                    materials=_capture_set_materials(result["detail"]),
+                )
+                log("claim", claim_id=claim.id)
+                return _claim_response(claim)
+
+            if req.action == "harness_determinism":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                result = harness_determinism.check(
+                    store, subjects_by_kind["tree"], cfg.repo_dir, ref, cfg.region_id, tree_sha,
+                    load_strategy(cfg.baseline_strategy_path), builder,
+                )
+                claim = record(
+                    "harness/deterministic", subjects_by_kind["tree"], "builder", result,
+                    materials=_capture_set_materials(result["detail"]),
+                )
+                log("claim", claim_id=claim.id)
+                return _claim_response(claim)
+
+            if req.action == "harness_timing":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                result = harness_timing.check(
+                    store, cfg.repo_dir, ref, cfg.region_id, tree_sha,
+                    load_strategy(cfg.baseline_strategy_path), builder,
+                )
+                claim = record(
+                    "harness/times", subjects_by_kind["tree"], "builder", result,
+                    materials=_capture_set_materials(result["detail"]),
+                )
                 log("claim", claim_id=claim.id)
                 return _claim_response(claim)
         except ComponentError as exc:

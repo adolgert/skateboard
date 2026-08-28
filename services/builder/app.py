@@ -69,6 +69,16 @@ class RunReq(BaseModel):
     mandatory: bool = False
 
 
+class CaptureReq(BaseModel):
+    attempt_id: str
+    executable: str  # the manifest's capture target
+    # The dataset's own arguments, from the manifest. The directory to
+    # write into is added after them by the builder, which is the one
+    # thing the capture contract fixes.
+    args: list[str] = []
+    run_name: str  # what to call this run's output directory
+
+
 class SanitizeReq(BaseModel):
     attempt_id: str
     executable: str
@@ -106,6 +116,12 @@ def run(req: RunReq, authorization: str | None = Header(default=None)):
         req.attempt_id, req.executable, req.cases,
         notify=req.notify, mandatory=req.mandatory,
     )
+
+
+@app.post("/v1/capture")
+def capture(req: CaptureReq, authorization: str | None = Header(default=None)):
+    _auth(authorization)
+    return stages.capture(req.attempt_id, req.executable, req.args, req.run_name)
 
 
 @app.post("/v1/sanitize")

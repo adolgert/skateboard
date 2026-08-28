@@ -57,7 +57,7 @@ def test_both_builds_succeeding_is_a_pass_that_records_each_one(tmp_path):
     assert result["detail"]["failed_strategies"] == []
     assert sorted(result["detail"]["strategies"]) == ["cpu_reference", "onboarding"]
     # Every target the tree's own manifest declares was asked for.
-    assert result["detail"]["targets_asked_for"] == ["replay", "timing"]
+    assert result["detail"]["targets_asked_for"] == ["replay", "timing", "capture"]
     assert len(builder.build_calls) == 2
 
 

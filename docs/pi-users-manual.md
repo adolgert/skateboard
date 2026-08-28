@@ -369,17 +369,17 @@ which point `status` ends with `ONBOARDED` rather than `ACCEPTED`:
 | --- | --- |
 | `manifest_check` | the manifest is there, complete, names only files the tree holds, gives every floating-point output a tolerance band, and has the visible and held-out runs differ |
 | `harness_build` | every target the manifest declares builds under both the baseline strategy and the port strategy, with each strategy's flags proven to have reached every compile |
-| `harness_capture` | the capture program writes a visible and a held-out dataset that match the declared interface |
+| `harness_capture` | the capture program writes every declared dataset, each case matching the declared interface, and the visible and held-out inputs differ |
 | `harness_replay` | the replay driver reproduces the captured outputs bitwise from the captured inputs |
 | `harness_determinism` | capturing and replaying again agrees bitwise with what was stored |
 | `harness_timing` | the timing target runs twice inside its budget and writes the same outputs both times |
 
-The first two are built; the other four are the next piece of work, and
-until they exist an onboarding session can reach them and be told the
-check is not implemented yet. Promoting what passed — copying the
+The datasets a capture writes are kept in the region's ledger, under a
+name that is a hash of their own bytes, and every claim that was reached
+by comparing against one names it. Promoting what passed — copying the
 manifest and the datasets out of the tree and making the tree the new
-baseline — is a person's step, not a gateway action, and is also still
-to come.
+baseline — is a person's step, not a gateway action, and is still to
+come.
 
 ## Things worth knowing
 

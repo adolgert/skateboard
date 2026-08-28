@@ -99,23 +99,26 @@ _register(
 )
 _register(
     "harness/captured", True, DetailLevel.FULL,
-    "The capture program wrote a visible and a held-out dataset that match the "
-    "declared interface and are different runs. On the tree.",
+    "The capture program wrote every dataset the manifest declares; each case holds "
+    "exactly the variables the region declares, of the declared type and rank; and "
+    "the visible and held-out inputs are not the same run. The sets it wrote are "
+    "stored in the ledger and named in this claim's materials. On the tree.",
 )
 _register(
     "harness/replays", True, DetailLevel.FULL,
-    "The replay driver reproduces the captured outputs bitwise from the captured "
-    "inputs, on the tree.",
+    "The replay driver, built the way the baseline is built, reproduces every "
+    "captured output bitwise from the captured inputs. On the tree.",
 )
 _register(
     "harness/deterministic", True, DetailLevel.FULL,
-    "Capturing and replaying a second time agrees bitwise with the stored capture "
-    "set, on the tree.",
+    "Capturing each dataset again writes the set already stored, and replaying the "
+    "visible inputs twice writes the same outputs twice. On the tree.",
 )
 _register(
     "harness/times", True, DetailLevel.FULL,
-    "The timing target runs twice inside its budget and writes the same declared "
-    "outputs both times, on the tree.",
+    "The timing program runs twice inside its declared budget and writes the same "
+    "declared outputs both times; the last run's outputs are stored as the code's "
+    "program capture set. On the tree.",
 )
 
 

@@ -159,7 +159,7 @@ def _run_session(parser: argparse.ArgumentParser, args) -> int:
         _, _, events = session.read_session(path)
 
     joined = session.join(events, requests, session.claim_verdicts(store))
-    summary = session.summarize(store, args.session_id, requests, events, joined)
+    summary = session.summarize(store, args.session_id, requests, events, joined, cfg.phase)
 
     if args.json:
         print(json.dumps({

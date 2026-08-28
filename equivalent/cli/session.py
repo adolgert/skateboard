@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 from equivalent.gateway.table import ACTION_TABLE
-from equivalent.ledger.acceptance import ACCEPTANCE_REQUIREMENTS
+from equivalent.ledger.acceptance import PORTING, requirements_for
 from equivalent.ledger.records import RequestLogLine
 from equivalent.ledger.store import LedgerStore
 
@@ -378,10 +378,10 @@ def _elapsed(start: str, end: str) -> str:
     return f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s"
 
 
-def _accepted_after(claims) -> bool:
-    """Would these claims, and no others, make some tree accepted?
+def _accepted_after(claims, requirements) -> bool:
+    """Would these claims, and no others, finish some tree?
 
-    Every requirement is read from the acceptance list rather than named
+    Every requirement is read from the phase's own list rather than named
     here, so a requirement added there counts here without an edit. A
     requirement on the frozen files is met by any frozen value that
     passes, because the transcript cannot say which frozen value was
@@ -397,38 +397,46 @@ def _accepted_after(claims) -> bool:
         subjects_of = {"tree": [tree], "frozen": sorted(frozen, key=lambda s: s.sha256)}
         if all(
             any(latest.get((req.predicate_type, s)) == "pass" for s in subjects_of[req.subject_kind])
-            for req in ACCEPTANCE_REQUIREMENTS
+            for req in requirements
         ):
             return True
     return False
 
 
-def time_to_acceptance(requests, claims) -> str:
+def time_to_acceptance(requests, claims, phase: str = PORTING) -> str:
     """How long from the session's first request to the claim that finished a tree.
 
     Replays the session's claims oldest first and stops at the one that
-    leaves every acceptance requirement met on a single tree. A session
-    whose claims never add up to that gets "not accepted", which is also
-    the honest answer for a session that finished a port someone else had
-    already half-done: acceptance is measured against this session's own
-    claims.
+    leaves every requirement of the region's phase met on a single tree.
+    An onboarding session and a porting session are finished by different
+    lists, so which list is used comes from the region the session ran
+    against; a caller that knows only a ledger directory reads it as a
+    port, which is what the rest of this tool does with one.
+
+    A session whose claims never add up to that gets "not accepted",
+    which is also the honest answer for a session that finished a port
+    someone else had already half-done: what is measured is this
+    session's own claims.
     """
     if not requests:
         return "not accepted"
+    requirements = requirements_for(phase)
     ordered = sorted(claims, key=lambda c: c.ts)
     for i in range(len(ordered)):
-        if _accepted_after(ordered[: i + 1]):
+        if _accepted_after(ordered[: i + 1], requirements):
             return _elapsed(requests[0].ts, ordered[i].ts)
     return "not accepted"
 
 
-def summarize(store: LedgerStore, session_id: str, requests, events, joined: JoinResult) -> Summary:
+def summarize(store: LedgerStore, session_id: str, requests, events, joined: JoinResult,
+              phase: str = PORTING) -> Summary:
     """Count what this session did, reading the ledger for anything about claims.
 
     `requests` are already this session's lines; the claims are picked out
     of the ledger by the same session id, because a request line names a
     claim id but never a predicate type, and one request can file several
-    claims.
+    claims. `phase` is the region's, and decides which list of
+    requirements the session is judged to have finished.
     """
     outcomes = [line.outcome for line in requests]
     claims = [claim for claim in store.all_claims() if claim.session == session_id]
@@ -451,7 +459,7 @@ def summarize(store: LedgerStore, session_id: str, requests, events, joined: Joi
         claims_by_predicate=claims_by_predicate,
         fail_verdicts=sum(1 for claim in claims if claim.predicate.verdict == "fail"),
         trees=tuple(trees),
-        time_to_acceptance=time_to_acceptance(requests, claims),
+        time_to_acceptance=time_to_acceptance(requests, claims, phase),
         unmatched_calls=len(joined.unmatched_calls),
         unmatched_requests=len(joined.unmatched_requests),
     )

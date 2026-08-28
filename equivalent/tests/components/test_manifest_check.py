@@ -43,7 +43,7 @@ def test_a_well_formed_manifest_passes_and_says_what_the_code_is(tmp_path):
     assert len(detail["manifest_sha256"]) == 64
     # What every later claim about this tree was filed under, in the words
     # the manifest used: the targets, the region's variables, the datasets.
-    assert sorted(detail["targets"]) == ["replay", "timing"]
+    assert sorted(detail["targets"]) == ["capture", "replay", "timing"]
     assert detail["outputs"] == [v["name"] for v in FIXTURE_VARIABLES]
     assert detail["datasets"] == ["holdout", "visible"]
 

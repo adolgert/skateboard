@@ -45,16 +45,22 @@ def _timing_target(manifest: Manifest):
     return target
 
 
-def _collected(outputs: dict) -> dict:
-    """What the run wrote, named and hashed rather than carried.
+def _collected(runs: list) -> dict:
+    """What the last run wrote, named and hashed rather than carried.
+
+    The builder collects the declared files once per run; a timing claim
+    describes the binary that finished, so it is the last run's files
+    that are recorded. Whether every run wrote the same thing is an
+    onboarding question, asked where the two are compared.
 
     The files themselves can be large and are the program's output, not
     evidence about it; their names and digests are what a reader needs to
     see that two runs produced the same thing.
     """
+    last = runs[-1] if runs else {}
     return {
         name: hashlib.sha256(base64.b64decode(encoded)).hexdigest()
-        for name, encoded in sorted(outputs.items())
+        for name, encoded in sorted(last.items())
     }
 
 
@@ -79,7 +85,7 @@ def _time(builder, attempt_id: str, manifest: Manifest, repeats: int,
         "executable": target.executable,
         "args": list(timing.args),
         "env": dict(timing.env),
-        "outputs": _collected(resp.get("outputs", {})),
+        "outputs": _collected(resp.get("outputs", [])),
     }
     detail.update(extra_detail or {})
     return {"verdict": "pass", "detail": detail}

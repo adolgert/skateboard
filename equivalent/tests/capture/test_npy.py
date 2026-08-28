@@ -116,3 +116,14 @@ def test_a_dataset_directory_loads_every_case_it_lists(tmp_path):
     assert sorted(dataset) == ["case0000", "case0001"]
     assert dataset["case0000"]["inputs"]["field"].shape == (5,)
     assert dataset["case0000"]["outputs"] == {}
+
+
+def test_a_variable_named_like_a_path_is_written_in_its_own_subdirectory(tmp_path):
+    # The timing run's outputs are named by the file the program wrote,
+    # and a program is free to write into a subdirectory of its own.
+    npy.write_case(tmp_path, {}, {"results/rho": _sample("f64", 2)})
+
+    back = npy.read_case(tmp_path)
+
+    assert (tmp_path / "results" / "rho.out.npy").is_file()
+    assert np.array_equal(back["outputs"]["results/rho"], _sample("f64", 2))

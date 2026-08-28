@@ -74,6 +74,7 @@ def test_the_build_recipe_comes_from_the_manifest_and_the_flags_from_the_strateg
     assert call["targets"] == [
         {"role": "replay", "target": "replay", "executable": "replay"},
         {"role": "timing", "target": "timing", "executable": "whole_program"},
+        {"role": "capture", "target": "capture", "executable": "gen_reference"},
     ]
     assert call["compiler"] == strategy.languages["fortran"].compiler
     assert call["flags"] == list(strategy.languages["fortran"].flags)
