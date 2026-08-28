@@ -6,9 +6,14 @@
 # reads it from the submitted tree -- so the line range below must match
 # the baseline kernel, not whatever the working copy has been edited to.
 #
+# files: is every path the region may edit. This one stays inside the
+# kernel module, so it names only that file.
+#
 # pst_node's range is inclusive: line 34 is `subroutine step(h, u)` and
 # line 43 is `end subroutine step` in the baseline src/mod_kernel.f90.
 region: ch04:step
+files:
+  - src/mod_kernel.f90
 anchor:
   file: src/mod_kernel.f90
   pst_node: "step@34-43"

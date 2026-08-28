@@ -49,4 +49,4 @@ sanitizers: []
 # strategy and this is the value the porting strategies use.
 sanitize_cases: first
 
-analyzer_command: "python3 tools/regionharness/check_sese.py"
+analyzer_command: "python3 -m equivalent.analyzers.check_sese"

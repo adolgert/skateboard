@@ -100,6 +100,14 @@ failure lands as a claim. It runs in a container on the agent's network,
 because the gateway is reachable from nowhere else. It takes a few
 minutes; the timing checks run the full-size program repeatedly.
 
+It drives the region named in `EQUIVALENT_REGION`, so a deployment
+holding more than one is checked a region at a time:
+
+    EQUIVALENT_REGION=ch04:step-stencil ./walkthrough.sh
+
+The two regions in the shipped `gateway.yaml` share one working copy, so
+run them one after the other rather than at the same time.
+
 Read what it left behind:
 
     cd ..
@@ -257,8 +265,9 @@ strategy its speedup is measured against, and its visible dataset.
 `equivalent/strategy/files/` holds the strategies (`stdpar_managed`,
 `omp_target`, and `cpu_reference`, which is the usual comparison floor).
 
-A new region is a new entry in `gateway.yaml` and `EQUIVALENT_REGION` in
-`.env`; a new strategy is a new YAML file; a new code is a new directory
+A new region is a new entry in `gateway.yaml`, a spec file checked in at
+`programs/<code>/regions/<region id with the colon as a dash>.sese.yaml`,
+and `EQUIVALENT_REGION` in `.env`; a new strategy is a new YAML file; a new code is a new directory
 under `programs/` holding a tree that builds itself, a new `codes:`
 entry, and `EQUIVALENT_CODE` in `.env`. The manifest's `build:` section
 names the makefile and, per role, the `make` target and the executable

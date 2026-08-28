@@ -1,5 +1,8 @@
 # regionharness — spec-driven capture-replay for Fortran regions
 
+`check_sese.py` moved to `equivalent/analyzers/check_sese.py`; run it as
+`python3 -m equivalent.analyzers.check_sese <region.yaml>`.
+
 Turns a region spec (`notes/regions/*.yaml`) into Serialbox capture
 instrumentation, a standalone replay harness, and a set of validation gates.
 Everything is deterministic code generation from the spec; no AI at run time.
@@ -22,7 +25,7 @@ All artifacts dated 2026-08-05; gate results recorded in the spec's
    `parameter` constants are constant-folded and invisible to assembler-level
    analysis; the checker explains them rather than failing.
 
-2. **SESE check (VAL-1)** — `./check_sese.py <region.yaml>`: no goto / early
+2. **SESE check (VAL-1)** — `python3 -m equivalent.analyzers.check_sese <region.yaml>`: no goto / early
    return / entry / stop in the anchor or its closure.
 
 3. **Generate + instrument** — `gen_harness.py <region.yaml>` emits the capture

@@ -395,84 +395,88 @@ and a port that inlines the stencil into a new file.
 **Goal.** The verifiable goals of G6: every onboarding step is a gateway
 action that files a claim, and `status` says what is missing.
 
-**Establish.** Read `table.py`, `acceptance.py`, `predicates.py`,
-`app.py`'s dispatch, and the extension's tool generation from `/table`.
-Confirm the extension needs no change beyond the table serving a
-different row set per region.
+*Settled during execution (2026-08-28), after Steps 0–4 were built.* The
+step is done in three parts, and one of its checks moves after Step 7.
+The decisions:
 
-**Build.**
+- **A manifest has a minimal form.** `version`, `name`, and `source` are
+  enough to seed a baseline and start an onboarding region; the rest
+  (`build`, `interface`, `datasets`, `timing`, `tolerances`,
+  `properties`) is what onboarding produces. A porting region refuses to
+  start on a manifest that lacks them. Every path in the manifest other
+  than `source.root` is relative to the *source tree root*, so the same
+  file reads the same inside the tree and beside it.
+- **During onboarding the manifest lives in the tree** at
+  `harness/manifest.yaml`, written by the AI, with `source.root: .`.
+  `promote` copies it out to `programs/<code>/manifest.yaml` with
+  `source.root: baseline`, and the promoted tree (minus that file)
+  becomes the new baseline. Tolerances and properties live under
+  `harness/` in the tree too.
+- **Tolerances are the AI's proposal, not the harness's calibration.**
+  The harness checks that every floating-point output has a band and,
+  in `harness_self_check`, that no mutant survives inside the band. How
+  the AI arrives at the numbers (running two flag sets locally, say) is
+  its business and the person's review. No calibration profiles in the
+  manifest.
+- **Timing outputs are `.npy` files.** A code whose program writes text
+  gets a timing driver that writes arrays; program-level regression then
+  uses the same comparator as the region's outputs.
+- **The onboarding region's allow-list is the strategy's `allow_globs`**
+  (`onboarding.yaml` allows the whole tree); no SESE claim is involved.
+  `phase: onboarding | porting` is a region config field; `/table` and
+  `status` serve the rows for the region's phase; `spec_path` is not
+  required for an onboarding region.
+- **The oracle image copies the whole `programs/<code>/` directory** and
+  starts without captures (answering `/v1/compare` with an error naming
+  the missing dataset) so a deployment can be brought up for onboarding
+  before any capture exists.
+- **`harness_self_check` waits for Step 7's runner** and is built with
+  `harness_property` as part 5b, after Steps 6 and 7. Mutation and
+  comparison run inside the builder (the comparator is baked in beside
+  the shim); the builder returns per-mutant verdicts, not outputs.
 
-- Region config gains `phase: onboarding | porting`. `/table` serves the
-  rows for the region's phase; `status` uses the matching acceptance row
-  (`onboarded` or `accept`).
-- A strategy file `onboarding.yaml` whose `allow_globs` cover the
-  manifest, the Makefile, the replay driver, the capture program, the
-  tolerance file, and the properties module, plus the source tree.
-- New predicate types and components, each a small module:
-  - `manifest/valid` — `manifest_check`: loads the manifest from the
-    tree; every named path exists or is a declared target output; every
-    interface variable has dtype and rank; datasets name distinct
-    parameter sets. Gateway-side only.
-  - `harness/builds` — `harness_build`: Step 3's build under
-    `cpu_reference` and under the region's port strategy; all targets
-    produce executables; shim log clean.
-  - `harness/captured` — `harness_capture`: runs the `capture` target
-    with the visible and held-out parameter sets; each case has every
-    declared input and output as NPY of the declared dtype and rank;
-    the two sets' inputs differ; stores the result as a `capture_set`
-    artifact.
-  - `harness/replays` — `harness_replay`: the `cpu_reference` replay
-    reproduces every captured output bitwise from the captured inputs.
-    This is `generate.sh`'s self-test, made a claim.
-  - `harness/deterministic` — `harness_determinism`: two capture runs
-    and two replay runs are bitwise identical.
-  - `harness/self_check` — `harness_self_check`: fmutate, retargeted
-    from the manifest, mutates the region's files; every mutant that
-    changes an output is caught under the proposed tolerances
-    (tolerance-blind gap zero); at least one mutant is generated per
-    operator class that applies. The proposed `tolerances.json` is
-    checked to name every declared output.
-  - `harness/times` — `harness_timing`: the timing target runs with the
-    manifest's arguments under `cpu_reference` within the declared
-    budget, writes the declared output files, and two runs agree under
-    the tolerance policy; the outputs are stored as the `program`
-    capture set.
-  - `harness/properties` — `harness_property`: if the manifest names a
-    properties module, it runs against the `cpu_reference` replay
-    binary and passes.
-- The `onboarded` row requires all of the above on one tree (properties
-  only when declared).
-- A CLI command `equivalent promote --region <id>`: given an `ONBOARDED`
-  tree, copies the manifest, Makefile, driver, capture program,
-  tolerances, and properties into `programs/<code>/`, writes the visible
-  inputs to `datasets/visible` and the outputs and held-out set to
-  `captures/`, and prints the oracle rebuild command. It refuses if any
-  file differs from what the passing claims' tree holds.
+**5a-i — phase, rows, minimal manifest, the first two checks.**
+`phase` in region config; `onboarding.yaml`; `/table?region=` and the
+extension passing its region; the `onboarded` acceptance row beside
+`accept`, chosen by phase in the gateway and the CLI; predicate types
+`manifest/valid`, `harness/builds`, `harness/captured`, `harness/replays`,
+`harness/deterministic`, `harness/times`; components `manifest_check`
+(gateway-side: loads `harness/manifest.yaml` from the materialized tree,
+checks every named path exists, every float output has a band in the
+tree's tolerance file) and `harness_build` (both the baseline strategy
+and the region's port strategy build every declared target with the
+flags proven).
 
-**Decide.** Whether onboarding claims are filed under the same ledger
-directory as later porting claims for that code (proposed: a region id
-`<code>:onboard`, so the ledger keeps the evidence that the harness
-itself was checked). Whether `harness_self_check` requires zero
-surviving mutants or reports the survivors for the person (proposed:
-report; the gap must be zero, survivors are allowed with reasons).
-Whether the calibration profiles for tolerances are named in the
-manifest or the strategy (proposed: manifest, two flag sets).
+**5a-ii — captures, replay, determinism, timing.** A builder endpoint
+that runs the `capture` executable with a dataset's arguments and
+returns the dataset it wrote; `harness_capture` validates every case
+against the interface, requires the visible and held-out inputs to
+differ, and stores both sets as ledger artifacts under a `capture_set`
+subject; `harness_replay` runs the baseline-strategy replay on the
+captured inputs and requires bitwise agreement with the captured
+outputs; `harness_determinism` repeats capture and replay and requires
+bitwise agreement with the stored artifacts; `harness_timing` runs the
+timing target twice within budget and stores its declared outputs as the
+`program` capture set, requiring the two runs to agree bitwise.
 
-**Tests.**
+**5a-iii — `promote`, and tsunami onboarded from a bare baseline.** The
+CLI command, refusing unless the current tree is `ONBOARDED` and the
+working copy matches it; then a `pi` session that onboards tsunami from
+`programs/tsunami/baseline` with the manifest reduced to its minimal
+form, reaching `ONBOARDED` with the person doing nothing but reading
+`status`; `promote` reproduces the checked-in tsunami manifest and
+datasets.
 
-- Each component: a manifest and tree that pass; one that fails with the
-  reason named. For `harness_replay`, a driver that writes outputs in
-  the wrong order fails and names the variable. For `harness_self_check`,
-  a tolerance so loose that a mutant passes yields a nonzero gap.
-- `status` for an onboarding region lists the eight requirements and
-  which are present.
-- `promote` refuses when the working copy differs from the passing tree.
-- The extension's tool list for an onboarding region matches a golden
-  file.
+**5b — after Step 7.** `harness_self_check` (mutation in the builder,
+tolerance-blind gap zero, survivors reported) and `harness_property`.
+
+**Tests.** As listed for each component in the original text below, plus:
+a minimal manifest loads and a porting region refuses it; `/table` for
+an onboarding region lists the onboarding rows only; `promote` refuses
+when the working copy differs from the passing tree.
 
 **Shown that week.** A `pi` session onboards tsunami from a bare
-`programs/tsunami/baseline` to `ONBOARDED`, with the person doing nothing
-but reading `status`.
+`programs/tsunami/baseline` to `ONBOARDED`.
 
 ---
 

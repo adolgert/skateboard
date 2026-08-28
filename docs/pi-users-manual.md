@@ -78,9 +78,9 @@ session, and it is the first thing submitted.
 **The allow-list.** The set of files the region is permitted to change.
 Files outside it are frozen. Before the spec has been checked, only the
 spec file itself is on the list. Once the analyzer has passed the spec,
-the list is the spec file plus the one source file the spec names. The
-strategy sets a ceiling on this (`src/*.f90` and the spec directory), so
-a spec cannot unfreeze anything outside it.
+the list is the spec file plus every file the spec lists. The strategy
+sets a ceiling on this (`src/*.f90` and the spec directory), so a spec
+cannot unfreeze anything outside it.
 
 ## Starting a session
 
@@ -115,22 +115,32 @@ Ask the model to write the region spec. It needs to read the source to
 find the line range. For `ch04:step` the file is:
 
     region: ch04:step
+    files:
+      - src/mod_kernel.f90
     anchor:
       file: src/mod_kernel.f90
       pst_node: "step@34-43"
       entry_symbol: step
 
+`files` is every path the region may edit, and it is what the allow-list
+is built from. The anchor's file has to be one of them. A path that does
+not exist yet is allowed: a port that splits a routine into a new module
+lists that module here and then writes it.
+
 `pst_node` is the subroutine name and the inclusive line range of its
 body, from `subroutine step` through `end subroutine step`. A spec can
 also list callees whose bodies the analyzer should scan, under
-`closure: {callees: [{name: ..., lines: "lo-hi"}]}`, but `step`'s
-callee is in another module and is not part of the region.
+`closure: {callees: [{name: ..., file: ..., lines: "lo-hi"}]}`. A callee
+that names no `file` is in the anchor's file; one that names another
+file must have that file in `files` too. The `ch04:step-stencil` region
+is `ch04:step` written that way: it lists `src/mod_diff.f90` as well and
+scans `diff_centered` there, so a port may change both files.
 
 Then the model calls `submit`, and then `sese_check`. The analyzer
 scans the named lines for anything that would break single-entry,
 single-exit control flow: `goto`, an early `return`, `entry`, `stop`. A
-pass widens the allow-list to include `src/mod_kernel.f90`, which is
-what makes editing possible. The answer looks like:
+pass widens the allow-list to include every file the spec lists, which
+is what makes editing possible. The answer looks like:
 
     sese_check: pass (c-0001)
 
@@ -334,11 +344,11 @@ id is shown by `pi` and is the suffix of the transcript's filename under
   evidence does not exist yet.
 - The model can compile and run in the working copy, and should. That
   is exploration; only submitted checks count.
-- The spec decides which one source file is unfrozen, and the model
-  wrote the spec. Read it. The strategy caps what it can name, and
-  submitting always starts from the baseline, so pointing the spec at a
-  different file drops the edits to the first — but the choice of file
-  is the model's, and it is visible in the tree.
+- The spec decides which source files are unfrozen, and the model wrote
+  the spec. Read it. The strategy caps what it can name, and submitting
+  always starts from the baseline, so dropping a file from the spec
+  drops the edits to it — but the choice of files is the model's, and it
+  is visible in the tree.
 - `status` calls leave no line in the request log; every other tool
   does. The `session` timeline shows them as unlogged, which is
   expected.

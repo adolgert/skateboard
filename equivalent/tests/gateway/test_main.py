@@ -28,6 +28,8 @@ end module mod_kernel
 
 SPEC = (
     "region: ch04:step\n"
+    "files:\n"
+    "  - src/mod_kernel.f90\n"
     "anchor:\n"
     "  file: src/mod_kernel.f90\n"
     '  pst_node: "step@3-5"\n'

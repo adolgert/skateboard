@@ -20,3 +20,11 @@ regions:
     strategy: stdpar_managed        # -> <strategies>/stdpar_managed.yaml
     baseline_strategy: cpu_reference # what the pristine baseline is timed against
     visible_dataset: visible        # -> <programs>/tsunami/datasets/visible ; optional
+  # The same time step taken as a two-file region: the spec lists the
+  # stencil module as well, so a port may change both files.
+  "ch04:step-stencil":
+    code: tsunami
+    spec_path: notes/regions/ch04-step-stencil.sese.yaml
+    strategy: stdpar_managed
+    baseline_strategy: cpu_reference
+    visible_dataset: visible

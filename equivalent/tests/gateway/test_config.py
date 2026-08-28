@@ -1,10 +1,15 @@
 """Reading the gateway's configuration file, as a deployment would write it."""
+from pathlib import Path
+
 import pytest
 import yaml
 
 from equivalent.gateway.config import load_gateway_config
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.gateway.submit import init_baseline_repo, region_slug
 from equivalent.tests.fakes import write_program
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DEPLOYMENT_CONFIG = REPO_ROOT / "deploy" / "gateway.yaml"
 
 CONFIG = {
     "version": 1,
@@ -243,3 +248,23 @@ def test_a_baseline_strategy_whose_file_is_not_there_fails_at_startup(tmp_path):
 
     assert "cpu_absent" in str(excinfo.value)
     assert "ch04:step" in str(excinfo.value)
+
+
+def test_the_deployments_own_config_names_a_checked_in_spec_for_every_region():
+    # The deployment file cannot be loaded here -- its paths are the
+    # gateway container's mount points. What is worth checking from
+    # outside the container is that each region it names has the spec
+    # file the walkthrough copies into the working copy, found by the
+    # region id with its colon written as a dash.
+    config = yaml.safe_load(DEPLOYMENT_CONFIG.read_text())
+
+    assert sorted(config["regions"]) == ["ch04:step", "ch04:step-stencil"]
+    for region_id, region in config["regions"].items():
+        code = region["code"]
+        spec = REPO_ROOT / "programs" / code / "regions" / f"{region_slug(region_id)}.sese.yaml"
+        assert spec.is_file(), f"{region_id} has no checked-in spec at {spec}"
+        assert yaml.safe_load(spec.read_text())["region"] == region_id
+        # The walkthrough lays that file into the working copy at a path it
+        # derives from the region id alone, so the two spellings have to
+        # agree or the gateway would read a spec nobody wrote.
+        assert region["spec_path"] == f"notes/regions/{region_slug(region_id)}.sese.yaml"

@@ -93,6 +93,27 @@ def test_new_allowed_file_is_added_new_disallowed_file_is_rejected(tmp_path):
     assert {"path": "scripts/helper.sh", "reason": "not_allowed"} in receipt.rejected
 
 
+def test_a_file_the_region_creates_is_committed_and_is_not_a_missing_file(tmp_path):
+    # A region may list a file that does not exist in the baseline yet --
+    # a port that splits a stencil into its own module writes one. It is
+    # committed like any other allowed file, and `not_sent` must not warn
+    # about it: there is no baseline copy for a stale one to ride along.
+    repo_dir = tmp_path / "repo"
+    init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
+
+    working = tmp_path / "working"
+    _write(working, "src/mod_kernel.f90", "subroutine step\nend subroutine\n")
+    _write(working, "src/mod_stencil.f90", "module mod_stencil\nend module\n")
+
+    receipt = submit(repo_dir, "ch04:step", working, ["src/*.f90"], "sess-1")
+
+    assert receipt.committed is True
+    assert receipt.rejected == ()
+    assert receipt.not_sent == ()
+    tree = {f["path"]: f["content"] for f in tracked_files(repo_dir, "region/ch04-step")}
+    assert tree["src/mod_stencil.f90"] == b"module mod_stencil\nend module\n"
+
+
 def test_bytes_that_are_not_utf8_survive_seed_repo_submit_and_materialize(tmp_path):
     # A code's tree is not all UTF-8 source: it holds namelists in other
     # encodings and small data files. Whatever the baseline holds has to

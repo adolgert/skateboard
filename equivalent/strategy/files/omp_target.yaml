@@ -45,4 +45,4 @@ sanitizers:
 # input data; "all" is the other choice.
 sanitize_cases: first
 
-analyzer_command: "python3 tools/regionharness/check_sese.py"
+analyzer_command: "python3 -m equivalent.analyzers.check_sese"

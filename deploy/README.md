@@ -24,12 +24,12 @@ before it will start.
 | --- | --- |
 | `docker-compose.yml` | the four services and the four networks |
 | `gateway.yaml` | the gateway's configuration, in the container's paths |
-| `gateway/Dockerfile` | the gateway image: the package plus the analyzer |
+| `gateway/Dockerfile` | the gateway image: the package, which holds the analyzer |
 | `agent/Dockerfile` | the session image: compilers, a GPU, and the session tool |
 | `seed.py` | writes the baseline the gateway's repository starts from, reading which tree from the code's manifest |
 | `up.sh` | prepare state, seed, build, start, wait for health |
 | `pi.sh` | open an interactive session in the agent container |
-| `walkthrough.sh`, `walkthrough.py` | drive one region from nothing to accepted |
+| `walkthrough.sh`, `walkthrough.py` | drive one region from nothing to accepted; the region is `EQUIVALENT_REGION` |
 | `isolation_check.sh` | assert the isolation from inside the agent |
 | `isolation_check_gateway.sh` | assert the gateway's half of it, from here |
 | `down.sh` | stop; with `--reset`, discard state after asking |
