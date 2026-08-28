@@ -1,9 +1,9 @@
 /**
- * Trust role: none (architecture doc §4.1). Delete this and no claim
- * changes -- the gateway remains the only thing that decides anything.
- * This just registers one tool per gateway action, plus `submit` and
- * `status`, and forwards calls with the session id and model id attached
- * (D11).
+ * Trust role: none. Delete this and no claim changes -- the gateway
+ * remains the only thing that decides anything. This just registers one
+ * tool per gateway action, plus `submit` and `status`, and forwards
+ * calls with the session id and model id attached so the gateway's
+ * request log can be joined with the session files.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

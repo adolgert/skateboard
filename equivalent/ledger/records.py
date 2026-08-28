@@ -1,6 +1,12 @@
 """Claim and request-log-line records.
 
 These are what is written to claims.jsonl and requests.jsonl.
+
+Trust role: the on-disk shape of all evidence. A field silently dropped
+or renamed here makes old ledger lines unreadable or, worse, readable
+with a different meaning; `from_dict` rejecting unknown Claim fields is
+what keeps a hand-edited or corrupted line from loading as if it were
+evidence.
 """
 from __future__ import annotations
 
@@ -93,7 +99,7 @@ class RequestLogLine:
     region: str
     tree: str | None
     config_hash: str | None
-    outcome: str  # one of: claim, refused, duplicate, error
+    outcome: str  # one of: claim, refused, duplicate, error, submitted
     claim_id: str | None = None
     missing: tuple | None = None  # present when outcome == "refused"
     version: int = SCHEMA_VERSION

@@ -20,11 +20,11 @@ export interface RefusalBody {
 export interface ClaimBody {
   claim_id: string;
   verdict: string;
-  detail: unknown;
+  detail?: unknown; // absent when the predicate's receipt policy is verdict-only
 }
 
 export interface MultiClaimBody {
-  claims: { predicateType: string; claim_id: string; verdict: string; detail: unknown }[];
+  claims: { predicateType: string; claim_id: string; verdict: string; detail?: unknown }[];
 }
 
 export interface ErrorBody {
@@ -65,11 +65,21 @@ export function runResultText(actionName: string, body: RunBody): string {
 export interface SubmitBody {
   tree: string;
   frozen: string;
-  rejected: string[];
+  rejected: { path: string; reason: string }[] | string[];
+  not_sent?: string[];
   committed: boolean;
 }
 
+function rejectedName(entry: { path: string; reason: string } | string): string {
+  return typeof entry === "string" ? entry : `${entry.path} (${entry.reason})`;
+}
+
 export function submitResultText(body: SubmitBody): string {
-  const rejected = body.rejected.length > 0 ? ` ignored: ${body.rejected.join(", ")}.` : "";
-  return `submitted -> tree ${body.tree}, frozen ${body.frozen}.${rejected}`;
+  const rejected =
+    body.rejected.length > 0 ? ` ignored: ${body.rejected.map(rejectedName).join(", ")}.` : "";
+  const notSent =
+    body.not_sent && body.not_sent.length > 0
+      ? ` allowed but not sent: ${body.not_sent.join(", ")}.`
+      : "";
+  return `submitted -> tree ${body.tree}, frozen ${body.frozen}.${rejected}${notSent}`;
 }

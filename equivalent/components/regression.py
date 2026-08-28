@@ -1,7 +1,8 @@
-"""Wraps the oracle's /v1/compare as two gateway components (Step 6e).
+"""Wraps the oracle's /v1/compare as two gateway components.
 
 regression_visible reads the outputs already stored in the tree's latest
-gpu/executed claim (run_replay, 6c) rather than re-running the binary.
+gpu/executed claim (written by run_replay) rather than re-running the
+binary.
 
 regression_holdout is the one action that reaches two backends in a
 single dispatch: it fetches the held-out inputs from the oracle, runs

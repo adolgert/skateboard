@@ -22,6 +22,12 @@ class BuildReq(BaseModel):
     attempt_id: str
     source: dict            # {"files": [{"path","content"}]}
     profile: str
+    # Optional explicit compile/link flags from the gateway's strategy file.
+    # When present they replace the profile's baked flag list for this
+    # build; the profile still names the workspace/notify behavior.
+    # Absent (the demo orchestrator's case), the profile table applies.
+    flags: list | None = None
+    link_flags: list | None = None
 
 
 class RunReq(BaseModel):
@@ -48,7 +54,8 @@ def build(req: BuildReq, authorization: str | None = Header(default=None)):
     _auth(authorization)
     if req.profile not in stages.PROFILES:
         raise HTTPException(status_code=400, detail="unknown profile")
-    return stages.build(req.attempt_id, req.source.get("files", []), req.profile)
+    return stages.build(req.attempt_id, req.source.get("files", []), req.profile,
+                        flags=req.flags, link_flags=req.link_flags)
 
 
 @app.post("/v1/run")

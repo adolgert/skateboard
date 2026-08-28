@@ -38,13 +38,31 @@ describe("runResultText", () => {
 });
 
 describe("submitResultText", () => {
-  it("names ignored files in the receipt", () => {
-    const body = { tree: "T3", frozen: "F1", rejected: ["Makefile"], committed: true };
-    expect(submitResultText(body)).toBe("submitted -> tree T3, frozen F1. ignored: Makefile.");
+  it("names ignored files in the receipt, in the gateway's {path, reason} shape", () => {
+    const body = {
+      tree: "T3",
+      frozen: "F1",
+      rejected: [{ path: "Makefile", reason: "not_allowed" }],
+      committed: true,
+    };
+    expect(submitResultText(body)).toBe("submitted -> tree T3, frozen F1. ignored: Makefile (not_allowed).");
   });
 
   it("says nothing about ignored files when none were", () => {
-    const body = { tree: "T1", frozen: "F0", rejected: [], committed: true };
+    const body = { tree: "T1", frozen: "F0", rejected: [], not_sent: [], committed: true };
     expect(submitResultText(body)).toBe("submitted -> tree T1, frozen F0.");
+  });
+
+  it("warns about allowed files the agent did not send", () => {
+    const body = {
+      tree: "T2",
+      frozen: "F0",
+      rejected: [],
+      not_sent: ["src/mod_kernel.f90"],
+      committed: false,
+    };
+    expect(submitResultText(body)).toBe(
+      "submitted -> tree T2, frozen F0. allowed but not sent: src/mod_kernel.f90.",
+    );
   });
 });

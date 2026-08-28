@@ -43,6 +43,28 @@ def test_latest_returns_most_recent_claim_for_same_subject_and_config(tmp_path):
     assert got.predicate.verdict == "fail"
 
 
+def test_latest_prefers_the_later_appended_claim_on_a_timestamp_tie(tmp_path):
+    # Timestamps have one-second resolution, so a pass and a fail recorded
+    # in the same second are a real case; the later line in the file wins.
+    store = LedgerStore(tmp_path / "region")
+    tree = _tree(1)
+    ts = "2026-01-01T00:00:00Z"
+    store.append_claim(_claim_at(store, tree, "build/replay", _pred("pass"), ts=ts))
+    later = _claim_at(store, tree, "build/replay", _pred("fail"), ts=ts)
+    store.append_claim(later)
+    assert store.latest("build/replay", tree).id == later.id
+
+
+def test_a_reader_skips_a_torn_final_line_instead_of_crashing(tmp_path):
+    # The CLI reads a ledger the gateway may be appending to from another
+    # process; a final line whose newline hasn't landed yet is skipped.
+    store = LedgerStore(tmp_path / "region")
+    store.record_claim([_tree(1)], "build/replay", _pred(), [], "sess-1")
+    with open(store.claims_path, "a") as f:
+        f.write('{"id": "c-0002", "ts": "2026-')
+    assert [c.id for c in store.all_claims()] == ["c-0001"]
+
+
 def test_exists_pass_unaffected_by_later_fail_on_a_different_subject(tmp_path):
     store = LedgerStore(tmp_path / "region")
     tree1, tree2 = _tree(1), _tree(2)

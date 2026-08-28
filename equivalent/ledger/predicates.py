@@ -1,7 +1,7 @@
 """The predicate type registry.
 
 Trust role: this table decides:
- * whether a check's result may be reused instead of re-run (D10), and
+ * whether a check's result may be reused instead of re-run, and
  * how much of a claim's detail an agent is allowed to see.
 
 A human, via the ledger CLI, always sees a claim's full detail regardless

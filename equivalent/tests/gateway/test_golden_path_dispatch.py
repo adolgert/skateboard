@@ -1,6 +1,5 @@
-"""One region, start to acceptance, through every real 6a-6f dispatch --
-the same shape as the architecture doc's own worked example (section 6),
-run against fakes standing in for the builder and oracle (see
+"""One region, start to acceptance, through every real component
+dispatch, run against fakes standing in for the builder and oracle (see
 equivalent/tests/fakes.py for why: no nvfortran/compute-sanitizer/GPU in
 this environment).
 """
@@ -13,6 +12,7 @@ from equivalent.gateway.app import create_app
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import init_baseline_repo
 from equivalent.ledger.store import LedgerStore
+from equivalent.strategy.schema import load_strategy
 from equivalent.tests.fakes import FakeBuilder, FakeOracle
 
 TOKEN = "test-token"
@@ -99,6 +99,29 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
     assert len(builder.run_calls) == 2
     assert len(oracle.compare_calls) == 2
 
+    # Every claim, whatever the action, names the strategy in its
+    # materials.
+    strategy = load_strategy(STRATEGY_PATH)
+    for claim in store.all_claims():
+        assert any(
+            m.kind == "strategy" and m.sha256 == strategy.sha256 for m in claim.materials
+        ), claim.predicateType
+
+    # Regression claims carry the tolerance policy as a formal material,
+    # matching the hash the oracle reported.
+    for predicate_type in ("regression/visible", "regression/holdout"):
+        claim = next(c for c in store.all_claims() if c.predicateType == predicate_type)
+        assert any(m.kind == "policy" and m.sha256 == "policyabc" for m in claim.materials)
+
+    # The build claim records the strategy's own flags as what was
+    # compiled, and the timing claim carries the same flags read back
+    # from it.
+    expected_flags = list(strategy.languages["fortran"].flags)
+    build_claim = next(c for c in store.all_claims() if c.predicateType == "build/replay")
+    port_claim = next(c for c in store.all_claims() if c.predicateType == "timing/port")
+    assert build_claim.predicate.detail["flags"] == expected_flags
+    assert port_claim.predicate.detail["flags"] == expected_flags
+
 
 def test_sanitize_dispatch_writes_three_claims_and_is_a_duplicate_on_repeat(tmp_path):
     client, cfg, store, builder, oracle = _client(tmp_path)
@@ -118,6 +141,28 @@ def test_sanitize_dispatch_writes_three_claims_and_is_a_duplicate_on_repeat(tmp_
     assert second["claims"] == first["claims"]
     assert len(builder.sanitize_calls) == 1  # not called again
     assert store.all_requests()[-1].outcome == "duplicate"
+
+
+def test_holdout_receipt_is_verdict_only_but_the_stored_claim_keeps_its_detail(tmp_path):
+    # The receipt policy (predicate registry: regression/holdout is
+    # VERDICT_ONLY) filters what /run returns to the agent; the ledger
+    # line itself keeps everything the component recorded, for the CLI.
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = tmp_path / "working"
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+    for action in ("sese_check", "build_replay", "run_replay", "sanitize", "regression_visible"):
+        _run(client, cfg, action)
+
+    first = _run(client, cfg, "regression_holdout")
+    assert first["verdict"] == "pass"
+    assert "detail" not in first
+    assert store.get_claim(first["claim_id"]).predicate.detail  # full record stays in the ledger
+
+    # The duplicate path is filtered by the same policy.
+    second = _run(client, cfg, "regression_holdout")
+    assert second == first
 
 
 def test_time_baseline_is_filed_against_the_baseline_tree_not_the_current_tree(tmp_path):

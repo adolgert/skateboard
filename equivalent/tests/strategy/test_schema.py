@@ -108,7 +108,7 @@ def test_the_two_strategy_files_hash_differently():
 
 @pytest.mark.parametrize("name", sorted(STRATEGY_FILES))
 def test_bootstrap_region_allow_list_is_accepted(name):
-    # D4's bootstrap rule: before sese/verified exists, a region's allow-list
+    # The bootstrap rule: before sese/verified exists, a region's allow-list
     # is the spec file alone.
     strategy = load_strategy(STRATEGY_FILES[name])
     assert strategy.rejected_paths(["notes/regions/ch04-step.yaml"]) == []

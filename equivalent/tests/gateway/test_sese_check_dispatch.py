@@ -1,6 +1,6 @@
-"""POST /run dispatching to the real sese_check component (Step 6a).
+"""POST /run dispatching to the real sese_check component.
 
-Step 5b's test_run.py already covers refusal/duplicate logic against
+test_run.py already covers refusal/duplicate logic against
 synthetic claims recorded directly on the store; these tests exercise the
 real analyzer dispatch end to end, through the HTTP layer.
 """

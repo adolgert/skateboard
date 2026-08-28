@@ -40,12 +40,18 @@ class LedgerStore:
     def _read_jsonl(self, path: Path) -> list[dict]:
         if not path.exists():
             return []
-        out = []
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    out.append(json.loads(line))
+        text = path.read_text()
+        complete, _, partial = text.rpartition("\n")
+        out = [json.loads(line) for line in complete.splitlines() if line.strip()]
+        if partial.strip():
+            # Every append writes "...json...\n" in one call, so a final
+            # line with no newline is a write another process (the
+            # gateway) hasn't finished flushing. A reader (the CLI) skips
+            # it if it doesn't parse rather than crashing on it.
+            try:
+                out.append(json.loads(partial))
+            except json.JSONDecodeError:
+                pass
         return out
 
     def _read_claims(self) -> list[Claim]:
@@ -126,7 +132,10 @@ class LedgerStore:
             and subject in c.subject
             and (config_hash is None or c.predicate.configHash == config_hash)
         ]
-        return max(matches, key=lambda c: c.ts) if matches else None
+        # Timestamps have one-second resolution, so ties happen; sorted()
+        # is stable, so [-1] is the last-appended claim among the newest,
+        # matching find_duplicate's file-order rule.
+        return sorted(matches, key=lambda c: c.ts)[-1] if matches else None
 
     def exists_pass(self, predicate_type: str, subject: Subject) -> bool:
         return any(
@@ -137,11 +146,9 @@ class LedgerStore:
     def find_duplicate(self, predicate_type: str, tree: Subject, config_hash: str):
         """Most recent claim for this (predicate type, tree, config), if any.
 
-        The plan's Establish text names this find_duplicate(action, tree,
-        config_hash); at this layer a Claim only ever records predicateType
-        (not an action name), and one action emits exactly one predicate
-        type, so the gateway (Step 5) is expected to pass the row's `emits`
-        value here.
+        A Claim records a predicateType, never an action name, so a caller
+        asking "did this action already run?" passes the predicate type
+        the action emits.
         """
         matches = [
             c for c in self._read_claims()

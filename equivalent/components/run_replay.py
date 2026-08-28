@@ -1,7 +1,11 @@
-"""Wraps the builder's /v1/run against the visible cases (Step 6c).
+"""Wraps the builder's /v1/run against the visible cases.
+
+Trust role: what this returns becomes the gpu/executed claim, including
+the device proof -- if the kernel count check here were wrong, a
+CPU-only build would count as having run on the GPU.
 
 The visible outputs are stored in this claim's own detail -- regression_visible
-(6e) reads them back from here rather than re-running the replay binary a
+reads them back from here rather than re-running the replay binary a
 second time for the same cases, matching what
 demo/orchestrator/orchestrator.py already does (it reuses the same
 in-memory `runr["outputs"]`).

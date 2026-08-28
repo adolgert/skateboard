@@ -1,4 +1,4 @@
-"""Wraps the builder's /v1/sanitize as a gateway component (Step 6d).
+"""Wraps the builder's /v1/sanitize as a gateway component.
 
 One builder call produces one verdict per tool named in the strategy's
 `sanitizers` list (memcheck, racecheck, initcheck), matching
@@ -6,8 +6,7 @@ demo/orchestrator/orchestrator.py's single call -> three ledger columns.
 Unlike every other component here, this one returns several verdicts, not
 one -- equivalent.gateway.app records one claim per tool from a single
 dispatch, atomically, so a duplicate check against any single one of them
-is a safe proxy for "all three already exist" (see Step 6d's memory note,
-which had flagged this as deferred from Step 5b).
+is a safe proxy for "all three already exist".
 
 Only the first visible case is used, matching demo's own choice (sanitizer
 runs are much slower than a plain replay run).

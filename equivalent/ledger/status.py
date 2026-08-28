@@ -1,8 +1,8 @@
 """Compute a region's status from its ledger: current tree, which claims
 are present, which are missing, and whether the region is accepted.
 
-The ledger CLI (Step 3) and the gateway's GET /status (Step 5) must both
-render from this function, not two copies of it, or they will drift apart.
+The ledger CLI and the gateway's GET /status must both render from this
+function, not two copies of it, or they will drift apart.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def _current_subject(store: LedgerStore, kind: str):
     This is a guess, used only when the caller has no better source: it
     reports no current tree at all until some check has actually run,
     which is wrong for a region that has been submitted but not yet
-    checked. The gateway (Step 5) knows the real current tree from its own
+    checked. The gateway knows the real current tree from its own
     git repo and passes it in as `compute_status`'s `tree` argument
     instead of relying on this. The ledger CLI, which has no repo to read,
     still falls back to this.
@@ -35,18 +35,32 @@ def _current_subject(store: LedgerStore, kind: str):
 def requirement_status(store: LedgerStore, predicate_type: str, subject: Subject | None, producing_action: str) -> dict:
     """Is this one requirement met? Present (with its claim) or missing (with what would produce it).
 
+    Only a claim whose latest verdict is "pass" satisfies a requirement.
+    A latest claim that failed still reports as "missing" -- with its
+    verdict and claim id, so the reader knows a run happened and failed
+    rather than never ran -- because a failing sese/verified must not let
+    build_replay dispatch.
+
     This is the one place that decides what a missing or present claim
     looks like. `compute_status`'s per-row loop below and the gateway's
-    /run refusal (Step 5b) both call this, so a claim renders the same way
-    in both places.
+    /run refusal both call this, so a claim renders the same way in both
+    places.
     """
     claim = store.latest(predicate_type, subject) if subject is not None else None
-    if claim is not None:
+    if claim is not None and claim.predicate.verdict == "pass":
         return {
             "predicateType": predicate_type,
             "status": "present",
             "verdict": claim.predicate.verdict,
             "claim_id": claim.id,
+        }
+    if claim is not None:
+        return {
+            "predicateType": predicate_type,
+            "status": "missing",
+            "verdict": claim.predicate.verdict,
+            "claim_id": claim.id,
+            "producing_action": producing_action,
         }
     return {"predicateType": predicate_type, "status": "missing", "producing_action": producing_action}
 

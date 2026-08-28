@@ -94,7 +94,7 @@ def test_anchor_outside_the_strategys_allow_globs_fails_without_a_pass(tmp_path)
 
 
 def test_check_reads_the_committed_tree_not_whatever_is_on_disk_in_repo_dir(tmp_path):
-    # Step 4 never checks out a region's branch into repo_dir's working
+    # submit() never checks out a region's branch into repo_dir's working
     # tree, so stray on-disk content there must not affect the result --
     # only what was actually committed to the ref being checked.
     repo_dir = _repo(tmp_path, CLEAN_SOURCE)

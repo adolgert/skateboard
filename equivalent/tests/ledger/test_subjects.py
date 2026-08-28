@@ -33,6 +33,18 @@ def test_hash_files_changes_with_one_byte():
     assert hash_files(mutated) != original
 
 
+def test_normalization_strips_a_dot_slash_prefix_but_not_leading_dots():
+    # lstrip("./") would collide ".gitignore" with "gitignore" -- two
+    # distinct trees, one hash, which is exactly what this module must
+    # never do.
+    assert hash_files([{"path": ".gitignore", "content": "x\n"}]) != hash_files(
+        [{"path": "gitignore", "content": "x\n"}]
+    )
+    assert hash_files([{"path": "./src/mod_a.f90", "content": "y\n"}]) == hash_files(
+        [{"path": "src/mod_a.f90", "content": "y\n"}]
+    )
+
+
 def test_hash_files_reproduces_demo_src_sha_scheme():
     # demo/orchestrator/orchestrator.py's src_sha(): sha256 over sorted-by-path
     # (path, content) pairs, path bytes then content bytes, no separator,

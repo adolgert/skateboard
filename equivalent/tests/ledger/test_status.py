@@ -84,6 +84,25 @@ def test_status_reports_a_removed_claim_as_missing_with_its_producing_action(tmp
     assert missing[0]["producing_action"] == "regression_holdout"
 
 
+def test_a_failing_latest_claim_does_not_satisfy_a_requirement(tmp_path):
+    # A fail newer than a pass means the requirement is unmet again; the
+    # row reports missing but names the failing claim so the reader knows
+    # a run happened and failed rather than never ran.
+    tree, frozen = "a" * 64, "b" * 64
+    store = LedgerStore(tmp_path / "region")
+    claims = _all_passing_claims(tree, frozen)
+    claims.append(_claim("c-0099", "2026-01-02T00:00:00Z", "tree", tree, "build/replay", "fail"))
+    _write_claims(store, claims)
+
+    status = compute_status(store)
+    assert status["accepted"] is False
+    row = next(r for r in status["rows"] if r["predicateType"] == "build/replay")
+    assert row["status"] == "missing"
+    assert row["verdict"] == "fail"
+    assert row["claim_id"] == "c-0099"
+    assert row["producing_action"] == "build_replay"
+
+
 def test_status_on_an_empty_ledger_has_no_tree_and_is_not_accepted(tmp_path):
     store = LedgerStore(tmp_path / "region")
     status = compute_status(store)

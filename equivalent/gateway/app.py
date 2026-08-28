@@ -9,10 +9,9 @@ All four endpoints are built now: GET /table, GET /status, POST /submit,
 POST /run. POST /run refuses a request whose required claims are missing,
 returns an existing claim for a repeated deterministic request, and
 otherwise dispatches to the action's component. Every row in
-equivalent.gateway.table.ACTION_TABLE now has real dispatch (Step 6a-6f);
-an action whose builder or oracle client isn't configured for this
-gateway instance still falls back to the "not implemented" response
-rather than crashing.
+equivalent.gateway.table.ACTION_TABLE has real dispatch; an action whose
+builder or oracle client isn't configured for this gateway instance
+still falls back to the "not implemented" response rather than crashing.
 """
 from __future__ import annotations
 
@@ -26,6 +25,7 @@ from equivalent.components import build_replay, regression, run_replay, sanitize
 from equivalent.components.errors import ComponentError
 from equivalent.gateway.datasets import load_visible_cases
 from equivalent.ledger.acceptance import ACCEPTANCE_REQUIREMENTS
+from equivalent.ledger.predicates import agent_receipt
 from equivalent.ledger.records import Predicate, RequestLogLine
 from equivalent.ledger.status import compute_status, requirement_status
 from equivalent.ledger.store import LedgerStore
@@ -49,9 +49,26 @@ PRODUCERS = {predicate_type: row.name for row in ACTION_TABLE for predicate_type
 # sese/verified is scoped to "frozen", everything else in this list to
 # "tree". Reused from the accept row's own requirements rather than a
 # second hand-written copy. Falls back to "tree" for anything not listed
-# there (currently just timing/baseline, which is nondeterministic and so
-# never reaches the duplicate check that uses this).
+# there: timing/baseline (nondeterministic, so it never reaches the
+# duplicate check that uses this) and sanitize/initcheck (recorded on
+# "tree", which is what the fallback says).
 SUBJECT_KIND_OF = {req.predicate_type: req.subject_kind for req in ACCEPTANCE_REQUIREMENTS}
+
+
+def _claim_response(claim) -> dict:
+    """One claim as a /run response body, filtered by the receipt policy.
+
+    The agent sees the verdict always, the detail only where the
+    predicate registry allows it (regression/holdout is verdict-only).
+    The full detail stays in claims.jsonl for the CLI.
+    """
+    return {"claim_id": claim.id, **agent_receipt(claim.predicateType, claim.predicate)}
+
+
+def _claims_response(claims) -> dict:
+    return {"claims": [
+        {"predicateType": c.predicateType, **_claim_response(c)} for c in claims
+    ]}
 
 
 def _now() -> str:
@@ -81,7 +98,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
     at all -- a gateway can be brought up with the ledger/analyzer side
     working before the builder or oracle are reachable.
     """
-    app = FastAPI(title="skateboard-gateway")
+    app = FastAPI(title="equivalent-gateway")
     stores: dict[str, LedgerStore] = {}
     visible_cases: dict[str, dict] = {}
 
@@ -148,12 +165,13 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
 
         store.append_request(RequestLogLine(
             ts=_now(), session=x_session_id, model=x_model_id, endpoint="submit", action="submit",
-            region=req.region, tree=receipt.tree, config_hash=None, outcome="claim",
+            region=req.region, tree=receipt.tree, config_hash=None, outcome="submitted",
         ))
         return {
             "tree": receipt.tree,
             "frozen": receipt.frozen,
             "rejected": list(receipt.rejected),
+            "not_sent": list(receipt.not_sent),
             "committed": receipt.committed,
         }
 
@@ -173,6 +191,16 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             raise HTTPException(status_code=400, detail=f"unknown action: {req.action}")
         if row.component is None:
             raise HTTPException(status_code=400, detail=f"'{req.action}' has no component; see GET /status")
+        unknown_keys = sorted(set(req.config) - set(row.config_keys))
+        if unknown_keys:
+            # Rejected like a malformed request (no log line), not refused:
+            # an unvalidated config key would hash into duplicate detection
+            # and let an identical request look new.
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{req.action}' does not accept config key(s) {unknown_keys}; "
+                       f"allowed: {sorted(row.config_keys)}",
+            )
 
         tree_sha, frozen_sha = current_tree_and_frozen(cfg.repo_dir, cfg.region_id, store, cfg.spec_path)
         subjects_by_kind = {
@@ -200,7 +228,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
 
         if row.deterministic:
             # All of a multi-emit row's claims are written together in one
-            # dispatch (see sanitize, 6d), so an existing claim for any one
+            # dispatch (see sanitize), so an existing claim for any one
             # of them means all of them exist -- checking just the first
             # would also do, but checking every one is no more expensive
             # and doesn't rely on that invariant holding forever.
@@ -212,18 +240,18 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 duplicate = existing[0] if len(existing) == 1 else None
                 if duplicate is not None:
                     log("duplicate", claim_id=duplicate.id)
-                    return {"claim_id": duplicate.id, "verdict": duplicate.predicate.verdict, "detail": duplicate.predicate.detail}
+                    return _claim_response(duplicate)
                 log("duplicate")
-                return {"claims": [
-                    {"predicateType": c.predicateType, "claim_id": c.id, "verdict": c.predicate.verdict, "detail": c.predicate.detail}
-                    for c in existing
-                ]}
+                return _claims_response(existing)
 
         def record(predicate_type: str, subject: Subject, tool: str, result: dict, materials=()):
+            # Every claim names the strategy in its materials, so no call
+            # site lists it (or can forget it). `strategy` is loaded
+            # below, before any dispatch branch calls this.
             return store.record_claim(
                 [subject], predicate_type,
                 Predicate(tool=tool, version="0.1", configHash=cfg_hash, verdict=result["verdict"], detail=result["detail"]),
-                materials, x_session_id,
+                (strategy.as_subject(), *materials), x_session_id,
             )
 
         try:
@@ -235,83 +263,89 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             if req.action == "sese_check":
                 result = sese_check.check(cfg.repo_dir, ref, cfg.spec_path, strategy)
                 # A pass widens the region's allow-list, which changes its
-                # own frozen value (D5). The claim must be filed against
-                # that new frozen value, not the one computed before this
-                # check ran -- otherwise resolve_allow_globs would report
-                # the claim's own existence as changing "current frozen"
-                # out from under it, and the claim would immediately look
-                # missing again. See the pi-ledger-plan-progress memory
-                # note this resolves.
+                # own frozen value. The claim must be filed against that
+                # new frozen value, not the one computed before this check
+                # ran -- otherwise resolve_allow_globs would report the
+                # claim's own existence as changing "current frozen" out
+                # from under it, and the claim would immediately look
+                # missing again.
                 subject_sha = (
                     frozen_for_allow_globs(cfg.repo_dir, result["allow_globs"])
                     if result["allow_globs"] is not None else frozen_sha
                 )
                 claim = record("sese/verified", Subject(kind="frozen", sha256=subject_sha), "sese_check", result)
                 log("claim", claim_id=claim.id)
-                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+                return _claim_response(claim)
 
             if req.action == "build_replay":
                 if builder is None:
                     raise ComponentError("builder not configured")
                 result = build_replay.check(cfg.repo_dir, ref, cfg.region_id, tree_sha, strategy, builder)
-                claim = record("build/replay", subjects_by_kind["tree"], "builder", result, materials=[strategy.as_subject()])
+                claim = record("build/replay", subjects_by_kind["tree"], "builder", result)
                 log("claim", claim_id=claim.id)
-                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+                return _claim_response(claim)
 
             if req.action == "run_replay":
                 if builder is None:
                     raise ComponentError("builder not configured")
                 result = run_replay.check(cfg.region_id, tree_sha, strategy, _visible_cases(cfg), builder)
-                claim = record("gpu/executed", subjects_by_kind["tree"], "builder", result, materials=[strategy.as_subject()])
+                claim = record("gpu/executed", subjects_by_kind["tree"], "builder", result)
                 log("claim", claim_id=claim.id)
-                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+                return _claim_response(claim)
 
             if req.action == "sanitize":
                 if builder is None:
                     raise ComponentError("builder not configured")
                 results = sanitize.check(cfg.region_id, tree_sha, strategy, _visible_cases(cfg), builder)
                 claims = [
-                    record(f"sanitize/{tool}", subjects_by_kind["tree"], "compute-sanitizer", result, materials=[strategy.as_subject()])
+                    record(f"sanitize/{tool}", subjects_by_kind["tree"], "compute-sanitizer", result)
                     for tool, result in results.items()
                 ]
                 log("claim", claim_id=claims[0].id if len(claims) == 1 else None)
-                return {"claims": [
-                    {"predicateType": c.predicateType, "claim_id": c.id, "verdict": c.predicate.verdict, "detail": c.predicate.detail}
-                    for c in claims
-                ]}
+                return _claims_response(claims)
 
             if req.action == "regression_visible":
                 if oracle is None:
                     raise ComponentError("oracle not configured")
                 result = regression.check_visible(store, subjects_by_kind["tree"], oracle)
-                claim = record("regression/visible", subjects_by_kind["tree"], "oracle", result, materials=[strategy.as_subject()])
+                # The tolerance policy shaped this verdict, so it is a
+                # formal material, not just a note in detail.
+                policy = Subject(kind="policy", sha256=result["detail"]["policy_sha256"])
+                claim = record("regression/visible", subjects_by_kind["tree"], "oracle", result, materials=[policy])
                 log("claim", claim_id=claim.id)
-                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+                return _claim_response(claim)
 
             if req.action == "regression_holdout":
                 if builder is None or oracle is None:
                     raise ComponentError("builder or oracle not configured")
                 result = regression.check_holdout(cfg.region_id, tree_sha, strategy, oracle, builder)
-                claim = record("regression/holdout", subjects_by_kind["tree"], "oracle", result, materials=[strategy.as_subject()])
+                policy = Subject(kind="policy", sha256=result["detail"]["policy_sha256"])
+                claim = record("regression/holdout", subjects_by_kind["tree"], "oracle", result, materials=[policy])
                 log("claim", claim_id=claim.id)
-                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+                return _claim_response(claim)
 
             if req.action == "time_port":
                 if builder is None:
                     raise ComponentError("builder not configured")
-                result = timing.check_port(cfg.region_id, tree_sha, builder)
+                result = timing.check_port(
+                    store, subjects_by_kind["tree"], cfg.region_id, tree_sha, builder,
+                    repeats=int(req.config.get("repeats", 5)),
+                )
                 claim = record("timing/port", subjects_by_kind["tree"], "builder", result)
                 log("claim", claim_id=claim.id)
-                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+                return _claim_response(claim)
 
             if req.action == "time_baseline":
                 if builder is None:
                     raise ComponentError("builder not configured")
                 base_tree = baseline_tree_sha(cfg.repo_dir)
-                result = timing.check_baseline(cfg.repo_dir, cfg.region_id, base_tree, builder)
+                result = timing.check_baseline(
+                    cfg.repo_dir, cfg.region_id, base_tree, builder,
+                    repeats=int(req.config.get("repeats", 5)),
+                )
                 claim = record("timing/baseline", Subject(kind="tree", sha256=base_tree), "builder", result)
                 log("claim", claim_id=claim.id)
-                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+                return _claim_response(claim)
         except ComponentError as exc:
             log("error")
             return {"error": str(exc)}

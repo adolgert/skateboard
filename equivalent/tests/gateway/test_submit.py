@@ -161,6 +161,22 @@ def test_resolve_allow_globs_before_and_after_sese_verified(tmp_path):
     assert resolve_allow_globs(store, spec_path) == ["src/mod_kernel.f90", spec_path]
 
 
+def test_receipt_names_allowed_baseline_paths_that_were_not_sent(tmp_path):
+    # An allowed file the agent forgot to send is named in the receipt,
+    # so a stale baseline copy riding along silently is visible.
+    repo_dir = tmp_path / "repo"
+    init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
+
+    working = tmp_path / "working"
+    working.mkdir()
+    receipt = submit(repo_dir, "ch04:step", working, ["src/*.f90"], "sess-1")
+    assert receipt.not_sent == ("src/mod_kernel.f90",)
+
+    _write(working, "src/mod_kernel.f90", "subroutine step\nend subroutine\n")
+    receipt = submit(repo_dir, "ch04:step", working, ["src/*.f90"], "sess-1")
+    assert receipt.not_sent == ()
+
+
 def test_submit_with_nothing_matching_allow_list_is_a_no_op(tmp_path):
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))

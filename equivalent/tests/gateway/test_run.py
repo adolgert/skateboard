@@ -122,9 +122,32 @@ def test_frozen_requirement_survives_an_allowed_edit_but_tree_requirement_does_n
     assert now_missing_build["missing"][0]["predicateType"] == "build/replay"
 
 
+def test_a_failing_requirement_claim_still_refuses_the_dependent_action(tmp_path):
+    # A claim that exists but failed must not open the gate; the refusal
+    # names the failing claim so the model knows to fix and re-run, not
+    # that the check never ran.
+    client, cfg, store = _client(tmp_path)
+    _submit_spec_only(client, cfg)
+    _, frozen_sha = current_tree_and_frozen(cfg.repo_dir, cfg.region_id, store, cfg.spec_path)
+    failed = store.record_claim(
+        [Subject(kind="frozen", sha256=frozen_sha)], "sese/verified",
+        Predicate(tool="sese_check", version="0.1", configHash="cfg", verdict="fail", detail={}),
+        [], "sess-0",
+    )
+
+    body = client.post(
+        "/run", json={"action": "build_replay", "region": cfg.region_id, "config": {}}, headers=HEADERS,
+    ).json()
+
+    assert body["refused"] is True
+    item = next(m for m in body["missing"] if m["predicateType"] == "sese/verified")
+    assert item["verdict"] == "fail"
+    assert item["claim_id"] == failed.id
+
+
 def test_duplicate_deterministic_request_returns_existing_claim_and_writes_no_new_one(tmp_path):
     client, cfg, store = _client(tmp_path)
-    config = {"x": 1}
+    config = {}
     allow_globs = [SPEC_PATH]
     baseline = tracked_files(cfg.repo_dir, "main")
     frozen_sha = frozen_subject([f for f in baseline if f["path"] not in allow_globs]).sha256
@@ -182,6 +205,29 @@ def test_every_row_references_real_predicate_types_and_agrees_with_the_registry_
             assert row.component.startswith(known_component_prefixes)
         if row.emits:
             assert row.deterministic == all(PREDICATE_TYPES[pt].deterministic for pt in row.emits)
+        assert isinstance(row.config_keys, tuple)
+        assert all(isinstance(k, str) for k in row.config_keys)
+
+
+def test_a_config_key_the_row_does_not_declare_is_rejected_before_dispatch(tmp_path):
+    # An undeclared key would hash into duplicate detection and make an
+    # identical request look new, so it is a malformed request, not a
+    # run.
+    client, cfg, store = _client(tmp_path)
+
+    r = client.post(
+        "/run", json={"action": "sese_check", "region": cfg.region_id, "config": {"junk": 1}}, headers=HEADERS,
+    )
+
+    assert r.status_code == 400
+    assert "junk" in r.json()["detail"]
+    assert store.all_requests() == []  # rejected like an unknown action: no log line
+
+    # A declared key passes validation ("repeats" on the timing rows).
+    r = client.post(
+        "/run", json={"action": "time_baseline", "region": cfg.region_id, "config": {"repeats": 3}}, headers=HEADERS,
+    )
+    assert r.status_code == 200
 
 
 def test_unknown_action_and_the_componentless_accept_row_are_rejected(tmp_path):
@@ -197,7 +243,7 @@ def test_unknown_action_and_the_componentless_accept_row_are_rejected(tmp_path):
 
 
 def test_ready_action_without_a_configured_builder_reports_that_plainly(tmp_path):
-    # time_baseline requires nothing and is fully wired up as of Step 6f,
+    # time_baseline requires nothing and is fully wired up,
     # but this gateway (like this test's _client()) was never given a
     # builder client -- a real deployment shape where the ledger/analyzer
     # side works before the builder or oracle are reachable.

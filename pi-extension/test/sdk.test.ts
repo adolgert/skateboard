@@ -20,7 +20,7 @@ function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-describe("a real pi session (D11: session files land on the sessions/ volume)", () => {
+describe("a real pi session: session files land in the configured session directory", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     for (const key of Object.keys(ENV)) delete process.env[key];

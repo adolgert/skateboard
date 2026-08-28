@@ -38,6 +38,22 @@ def test_pass_sends_every_fortran_file_in_the_tree(tmp_path):
     assert builder.build_calls[0]["profile"] == "stdpar_managed"
 
 
+def test_the_strategy_files_flags_reach_the_builder_and_the_claim_detail(tmp_path):
+    # The hashed strategy YAML fixes the flags. The builder must receive
+    # them explicitly (not look up its own profile table), and the claim
+    # records what the builder says it actually compiled with.
+    repo_dir = _repo(tmp_path, {"mod_kernel.f90": "module mod_kernel\nend module\n"})
+    strategy = load_strategy(STRATEGY_PATH)
+    builder = FakeBuilder()
+
+    result = build_replay.check(repo_dir, "main", "ch04:step", "tree123", strategy, builder)
+
+    expected = list(strategy.languages["fortran"].flags)
+    assert builder.build_calls[0]["flags"] == expected
+    assert builder.build_calls[0]["link_flags"] == list(strategy.link_flags)
+    assert result["detail"]["flags"] == expected  # link_flags is empty today
+
+
 def test_fail_when_the_builder_reports_a_compile_error(tmp_path):
     repo_dir = _repo(tmp_path, {"mod_kernel.f90": "module mod_kernel\nend module\n"})
     strategy = load_strategy(STRATEGY_PATH)

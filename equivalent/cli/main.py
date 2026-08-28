@@ -1,7 +1,12 @@
 """ledger: print what's in a region's ledger directory.
 
 Reads claims.jsonl/requests.jsonl directly. Does not need the gateway
-running -- there is no gateway yet.
+running.
+
+Trust role: none over the ledger (it only reads), but this is what a
+person looks at to judge a region, so output that misrenders a verdict
+or hides a missing claim misleads the reviewer even though the ledger
+itself is right.
 """
 from __future__ import annotations
 

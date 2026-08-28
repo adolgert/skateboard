@@ -9,7 +9,10 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-SUBJECT_KINDS = ("tree", "frozen", "capture_set", "strategy", "binary", "outputs")
+# "policy" is the oracle's tolerance policy -- it appears in regression
+# claims' materials (a pass under a loose policy must be distinguishable
+# from a pass under a strict one), never as a claim's subject.
+SUBJECT_KINDS = ("tree", "frozen", "capture_set", "strategy", "binary", "outputs", "policy")
 
 
 @dataclass(frozen=True)
@@ -30,7 +33,13 @@ class Subject:
 
 
 def _normalize_path(path: str) -> str:
-    return path.replace("\\", "/").lstrip("./")
+    # Strip a "./" prefix, not a character class: str.lstrip("./") would
+    # also turn ".gitignore" into "gitignore" and collide two distinct
+    # trees into one hash.
+    path = path.replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    return path
 
 
 def hash_files(files: list[dict]) -> str:

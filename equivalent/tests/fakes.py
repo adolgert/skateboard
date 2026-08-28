@@ -1,6 +1,6 @@
-"""Fake builder/oracle clients for Steps 6b-6f.
+"""Fake builder/oracle clients for the component and dispatch tests.
 
-Unlike 6a's check_sese.py (cheap, pure Python, safe to run for real in
+Unlike check_sese.py (cheap, pure Python, safe to run for real in
 tests), the builder needs nvfortran/compute-sanitizer/a GPU and the
 oracle needs its baked capture data -- none of which exist in this
 development environment. These fakes match the real services' response
@@ -24,11 +24,18 @@ class FakeBuilder:
         self.time_ok = True
         self.runs_s = [0.21, 0.20, 0.22]
 
-    def build(self, attempt_id, files, profile):
-        self.build_calls.append({"attempt_id": attempt_id, "files": files, "profile": profile})
+    def build(self, attempt_id, files, profile, flags=None, link_flags=None):
+        self.build_calls.append({
+            "attempt_id": attempt_id, "files": files, "profile": profile,
+            "flags": flags, "link_flags": link_flags,
+        })
+        # Like the real builder: echo back what would have reached the
+        # compiler (explicit flags when given, else the profile's).
+        used_flags = list(flags or ["-O2", "-profile-default"]) + list(link_flags or [])
         if not self.build_ok:
-            return {"ok": False, "stage": "build", "target": "replay", "log_tail": "compile error"}
-        return {"ok": True, "stage": "build", "profile": profile, "minfo_excerpt": "Generating Tesla code", "log_tail": ""}
+            return {"ok": False, "stage": "build", "target": "replay", "flags": used_flags, "log_tail": "compile error"}
+        return {"ok": True, "stage": "build", "profile": profile, "flags": used_flags,
+                "minfo_excerpt": "Generating Tesla code", "log_tail": ""}
 
     def run(self, attempt_id, profile, cases, mandatory=False):
         self.run_calls.append({"attempt_id": attempt_id, "profile": profile, "cases": cases, "mandatory": mandatory})

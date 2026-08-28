@@ -1,4 +1,4 @@
-"""Wraps the SESE control-flow analyzer as a gateway component (Step 6a).
+"""Wraps the SESE control-flow analyzer as a gateway component.
 
 Trust role: what this returns becomes a claim. It runs the strategy's own
 analyzer_command as a subprocess against a tree the gateway materializes

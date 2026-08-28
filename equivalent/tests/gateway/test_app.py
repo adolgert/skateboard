@@ -48,6 +48,24 @@ def test_get_table_returns_the_action_rows(tmp_path):
     assert {"sese_check", "build_replay", "accept"} <= names
 
 
+def test_get_table_matches_the_pi_extension_fixture(tmp_path):
+    # pi-extension/test/fixtures/table.json is the TS tests' hand copy of
+    # the real table (its golden tool descriptions are generated from it).
+    # Pinning it to GET /table here means a table change fails this test
+    # until the fixture -- and so the golden descriptions the person
+    # reviews -- is regenerated. Without this, a table change would only
+    # ever be tested against the stale copy.
+    import json
+
+    client, _ = _client(tmp_path)
+    fixture_path = Path(__file__).resolve().parents[3] / "pi-extension" / "test" / "fixtures" / "table.json"
+    fixture = json.loads(fixture_path.read_text())
+
+    r = client.get("/table", headers=HEADERS)
+
+    assert r.json() == fixture
+
+
 def test_get_status_reports_the_real_current_tree_before_any_check_has_run(tmp_path):
     client, cfg = _client(tmp_path)
     store = LedgerStore(cfg.ledger_dir)
@@ -84,6 +102,8 @@ def test_post_submit_wraps_step4_submit_and_returns_its_receipt(tmp_path):
     body = r.json()
     assert body["committed"] is True
     assert len(body["tree"]) == 64
+    assert body["rejected"] == []
+    assert body["not_sent"] == []  # no baseline file matches the bootstrap allow-list here
 
 
 def test_submit_writes_exactly_one_request_log_line_with_the_session_id(tmp_path):
@@ -100,6 +120,7 @@ def test_submit_writes_exactly_one_request_log_line_with_the_session_id(tmp_path
     assert len(requests) == 1
     assert requests[0].session == "sess-1"
     assert requests[0].endpoint == "submit"
+    assert requests[0].outcome == "submitted"  # a submit yields no claim, so not "claim"
 
 
 def test_request_without_a_valid_token_is_rejected(tmp_path):
@@ -113,8 +134,8 @@ def test_request_without_a_valid_token_is_rejected(tmp_path):
 
 
 def test_compute_status_and_history_without_repo_info_are_unchanged(tmp_path):
-    # Step 3's own behaviour and golden file must keep working: no tree or
-    # frozen argument means fall back to the claims-based guess.
+    # The CLI's own behaviour and golden file must keep working: no tree
+    # or frozen argument means fall back to the claims-based guess.
     store = LedgerStore(tmp_path / "region")
     status = compute_status(store)
     history = compute_history(store)

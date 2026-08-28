@@ -27,6 +27,7 @@ class SubmitReceipt:
     tree: str
     frozen: str
     rejected: tuple  # ({"path": ..., "reason": "not_allowed" | "binary"}, ...)
+    not_sent: tuple  # allowed baseline paths absent from the working copy, named as a warning
     committed: bool
 
 
@@ -58,7 +59,7 @@ def init_baseline_repo(repo_dir, seed_dir) -> str:
     repo_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run(["cp", "-r", f"{seed_dir}/.", f"{repo_dir}/"], check=True)
     _git(repo_dir, "init", "-q")
-    _git(repo_dir, "config", "user.email", "gateway@skateboard")
+    _git(repo_dir, "config", "user.email", "gateway@equivalent")
     _git(repo_dir, "config", "user.name", "gateway")
     _git(repo_dir, "add", "-A")
     _git(repo_dir, "commit", "-q", "-m", "baseline")
@@ -101,7 +102,7 @@ def resolve_allow_globs(store: LedgerStore, spec_path: str) -> list[str]:
     Before any passing sese/verified claim exists for the region, the
     allow-list is the spec file alone (the bootstrap rule). After one
     exists, the allow-list is whatever that claim's own detail recorded --
-    sese_check (Step 6a) is the thing that writes that field; this
+    the sese_check component is the thing that writes that field; this
     function only reads it.
     """
     passing = [
@@ -163,6 +164,9 @@ def submit(repo_dir, region_id: str, working_copy_dir, allow_globs: list[str], s
     constructed = {**baseline, **applied}
     frozen_files = [{"path": p, "content": c} for p, c in baseline.items() if not _matches_any(p, allow_globs)]
     tree_files = [{"path": p, "content": c} for p, c in constructed.items()]
+    not_sent = sorted(
+        p for p in baseline if _matches_any(p, allow_globs) and p not in working
+    )
 
     branch = _region_branch(region_id)
     committed = _commit_tree_if_changed(repo_dir, branch, constructed, f"submit {region_id} session={session}")
@@ -171,6 +175,7 @@ def submit(repo_dir, region_id: str, working_copy_dir, allow_globs: list[str], s
         tree=tree_subject(tree_files).sha256,
         frozen=frozen_subject(frozen_files).sha256,
         rejected=tuple(rejected),
+        not_sent=tuple(not_sent),
         committed=committed,
     )
 
@@ -213,10 +218,10 @@ def attempt_id_for(region_id: str, tree_sha: str) -> str:
     demo/builder/stages.py keeps a workspace on disk per attempt_id and
     never checks a tree hash itself; deriving the id from (region, tree)
     means every action against the same tree reuses the same workspace
-    without the gateway needing to remember anything extra. See the 6b
-    Establish note in the pi-ledger-plan-progress memory for why this
-    follows the builder's real (stateful) behavior instead of the
-    architecture doc's "nothing kept between calls" description.
+    without the gateway needing to remember anything extra. This follows
+    the builder's real, stateful behavior; if the builder loses its
+    workspace (a container restart), re-running the build re-creates it
+    under the same id.
     """
     safe_region = re.sub(r"[^A-Za-z0-9._-]", "-", region_id)
     return f"{safe_region}-{tree_sha[:16]}"
@@ -228,9 +233,9 @@ def fortran_files_at(repo_dir, ref: str) -> list[dict]:
     Sent as-is to the builder: demo/builder/stages.py picks its own fixed
     basenames out of whatever it's given and compiles them in its own
     fixed order, so neither the set's precision nor its order matters here
-    -- only that everything the builder might want is present. See the 6b
-    Establish note in memory for why this is simpler than deriving a
-    precise per-region dependency closure.
+    -- only that everything the builder might want is present. Sending
+    this superset is simpler than deriving a precise per-region
+    dependency closure, and the builder ignores what it doesn't use.
     """
     files = [f for f in tracked_files(repo_dir, ref) if f["path"].lower().endswith(".f90")]
     return sorted(files, key=lambda f: f["path"])

@@ -17,6 +17,12 @@ def render_status(status: dict, region: str) -> str:
     for row in status["rows"]:
         if row["status"] == "present":
             lines.append(f"  {row['predicateType']:<20} {row['verdict']:<6} {row['claim_id']}")
+        elif "claim_id" in row:
+            # The latest claim exists but did not pass; that is still an
+            # unmet requirement, shown with the failing claim's id.
+            lines.append(
+                f"  {row['predicateType']:<20} {row['verdict']:<6} {row['claim_id']}  (run again: {row['producing_action']})"
+            )
         else:
             lines.append(f"  {row['predicateType']:<20} MISSING  (run: {row['producing_action']})")
     if status["accepted"]:

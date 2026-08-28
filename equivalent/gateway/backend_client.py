@@ -21,8 +21,12 @@ class BuilderClient:
     def __init__(self, http: httpx.Client):
         self._http = http
 
-    def build(self, attempt_id: str, files: list[dict], profile: str) -> dict:
-        r = self._http.post("/v1/build", json={"attempt_id": attempt_id, "source": {"files": files}, "profile": profile})
+    def build(self, attempt_id: str, files: list[dict], profile: str,
+              flags: list[str] | None = None, link_flags: list[str] | None = None) -> dict:
+        r = self._http.post("/v1/build", json={
+            "attempt_id": attempt_id, "source": {"files": files}, "profile": profile,
+            "flags": flags, "link_flags": link_flags,
+        })
         r.raise_for_status()
         return r.json()
 
