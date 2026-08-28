@@ -1,0 +1,12 @@
+session 01a047f0-5296-7c73-8ab1-364aad7ae166
+  submits              1
+  refusals             0
+  duplicates           0
+  errors               0
+  fail verdicts        0
+  trees                1
+  claims
+    sese/verified        1
+  time to acceptance   not accepted
+  calls with no request line   0
+  request lines with no call   0

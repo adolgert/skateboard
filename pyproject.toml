@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "equivalent"
+version = "0.1.0"
+description = "A gateway, a ledger, and a CLI for evidence-backed porting of a code region"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.*",
+    "pydantic==2.*",
+    "httpx",
+    "PyYAML",
+    "uvicorn[standard]==0.30.*",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "hypothesis"]
+
+[project.scripts]
+ledger = "equivalent.cli.main:main"
+equivalent-gateway = "equivalent.gateway.main:serve"
+
+[tool.setuptools.packages.find]
+# Only the package ships. The tests stay in the source tree, where they
+# are run from the repository root; nothing in them belongs in an image.
+include = ["equivalent*"]
+exclude = ["equivalent.tests*"]
+
+[tool.setuptools.package-data]
+# The strategy files are data the installed gateway reads, not examples.
+"equivalent.strategy" = ["files/*.yaml"]
+
+[tool.pytest.ini_options]
+# `pytest` with no arguments collects these two trees and nothing else.
+# tools/ also holds third-party checkouts -- pFUnit, serialbox, KGen and
+# others -- which carry their own suites and their own dependencies; left
+# to itself, pytest collects those and fails before a single test of this
+# project runs.
+testpaths = ["equivalent", "tools/regionharness"]

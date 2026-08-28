@@ -1,0 +1,145 @@
+# Four networks, and what each service can reach across them.
+#
+#   agent_net   : agent <-> gateway            (internal: no route off the host)
+#   egress_net  : agent -> the model provider  (the only way out to the internet)
+#   build_net   : gateway <-> builder          (internal)
+#   oracle_net  : gateway <-> oracle           (internal)
+#
+# The agent is untrusted: it has a compiler, a GPU, and internet access, and it
+# shares no network with the builder or the oracle -- those are missing routes,
+# not blocked ones. The gateway is on three internal networks and has no way
+# out to the internet at all. It reads the agent's working copy through a
+# read-only mount rather than over the network, so nothing the agent sends
+# chooses which files are read. Every service also checks a bearer token.
+#
+# isolation_check.sh (inside the agent) and isolation_check_gateway.sh (from
+# the host) assert all of this against the running stack.
+name: equivalent
+
+services:
+  agent:                        # UNTRUSTED
+    build:
+      context: ..
+      dockerfile: deploy/agent/Dockerfile
+    networks: [agent_net, egress_net]
+    # A name for this machine as seen from inside the container, so a model
+    # server running here -- ollama, say -- can be named in models.json. It is
+    # a widening: the session can reach services on this machine that are not
+    # exposed to the internet. Remove this line to take it back.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    gpus: all
+    environment:
+      - EQUIVALENT_GATEWAY_URL=http://gateway:8000
+      - EQUIVALENT_GATEWAY_TOKEN=${EQUIVALENT_TOKEN}
+      - EQUIVALENT_REGION=${EQUIVALENT_REGION:-ch04:step}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # How the session reaches a model. Each of these is empty unless it is
+      # set in this terminal or in deploy/.env, and the terminal wins. The
+      # session is the only container with a route to the internet, so these
+      # belong here and nowhere else. The names are pi's own, from the
+      # environment section of `pi --help`; add one that is missing.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - CEREBRAS_API_KEY=${CEREBRAS_API_KEY:-}
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      - TOGETHER_API_KEY=${TOGETHER_API_KEY:-}
+      - FIREWORKS_API_KEY=${FIREWORKS_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+    volumes:
+      - ./state/working:/working
+      - ./state/sessions:/sessions
+      - ./state/pi-home:/home/agent/.pi     # holds the login the person does once
+    stdin_open: true
+    tty: true
+
+  gateway:                      # the reference monitor; the only thing the agent can call
+    build:
+      context: ..
+      dockerfile: deploy/gateway/Dockerfile
+    networks: [agent_net, build_net, oracle_net]
+    depends_on: [builder, oracle]
+    # Runs as the account that started the deployment, not root. The
+    # repository and the ledger are bind mounts owned by that account, and
+    # git refuses to work in a repository owned by someone other than the
+    # caller -- in both directions: root in the container could not seed
+    # /repo, and the person on the host could not read a root-owned one.
+    user: "${EQUIVALENT_UID:-1000}:${EQUIVALENT_GID:-1000}"
+    environment:
+      - HOME=/tmp
+      - EQUIVALENT_CONFIG=/etc/equivalent/gateway.yaml
+      - EQUIVALENT_TOKEN=${EQUIVALENT_TOKEN}
+      - EQUIVALENT_BUILDER_URL=http://builder:9090
+      - EQUIVALENT_ORACLE_URL=http://oracle:7070
+    volumes:
+      - ./state/repo:/repo
+      - ./state/ledger:/ledger
+      - ./state/working:/working:ro
+      - ./state/seed:/seed:ro
+      - ./gateway.yaml:/etc/equivalent/gateway.yaml:ro
+      - ../demo/orchestrator/datasets:/datasets:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  builder:                      # semi-trusted executor; the only container with the GPU
+    build:
+      context: ../demo
+      dockerfile: builder/Dockerfile
+    image: skateboard/builder   # the same image the demonstration harness builds
+    networks: [build_net]
+    gpus: all
+    environment:
+      - SKATEBOARD_TOKEN=${EQUIVALENT_TOKEN}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    # /work is a normal writable dir in the (ephemeral) container. NOT a tmpfs:
+    # Docker mounts tmpfs noexec, which blocks executing the compiled binary.
+
+  oracle:                       # trusted, sealed; read-only rootfs
+    build:
+      context: ../demo/oracle
+    networks: [oracle_net]
+    environment:
+      - SKATEBOARD_TOKEN=${EQUIVALENT_TOKEN}
+    read_only: true
+    tmpfs: [/tmp]
+
+  walkthrough:                  # the end-to-end check, run on demand
+    # Reuses the gateway image only for its Python environment. It runs on
+    # agent_net and so reaches nothing the agent could not reach: the gateway,
+    # over HTTP, with the same token. Started only by `docker compose run`.
+    profiles: [tools]
+    build:
+      context: ..
+      dockerfile: deploy/gateway/Dockerfile
+    environment:
+      - EQUIVALENT_GATEWAY_URL=http://gateway:8000
+      - EQUIVALENT_TOKEN=${EQUIVALENT_TOKEN}
+    networks: [agent_net]
+    # It writes into the working copy, which the agent's account also writes
+    # to. walkthrough.sh passes this terminal's own account so the two do not
+    # leave each other files they cannot overwrite.
+    user: "${EQUIVALENT_UID:-1000}:${EQUIVALENT_GID:-1000}"
+    volumes:
+      - ./walkthrough.py:/opt/walkthrough.py:ro
+      - ../docs/examples:/examples:ro
+      - ./state/working:/working
+    entrypoint: ["python3", "/opt/walkthrough.py"]
+
+networks:
+  agent_net:
+    internal: true
+  egress_net: {}
+  build_net:
+    internal: true
+  oracle_net:
+    internal: true

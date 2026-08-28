@@ -2,6 +2,11 @@
 **/__pycache__/
 *.pyc
 
+# Packaging artifacts from `pip install -e .` and wheel builds
+*.egg-info/
+build/
+dist/
+
 # Fortran build artifacts
 *.mod
 *.o
@@ -10,6 +15,11 @@ demo/capture/.build/
 
 # Local environment (contains a local dev token; use demo/.env.example)
 demo/.env
+
+# Deployment state: the gateway's repository, the ledger, the working copy,
+# the sessions, and the local token. Use deploy/.env.example.
+deploy/.env
+deploy/state/
 
 # LaTeX build artifacts
 docs/*.aux

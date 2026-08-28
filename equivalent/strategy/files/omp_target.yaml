@@ -1,0 +1,42 @@
+name: omp_target
+version: 1
+
+# fnmatch's "*" already matches across "/" (it has no directory-boundary
+# meaning here), so "src/*.f90" covers both src/mod_kernel.f90 and something
+# like src/PESs/N4_UMN_PES_Class.F90 -- no "**" needed or supported.
+allow_globs:
+  - "src/*.f90"
+  - "notes/regions/*.yaml"
+
+languages:
+  fortran:
+    compiler: nvfortran
+    # Exactly what demo/builder/stages.py PROFILES["omp_target"] passes to
+    # nvfortran today. Note this includes mem:managed even though the current
+    # agent-runner prompt text says "there is NO managed memory on this rung"
+    # -- the flags below are what actually gets compiled; the prompt is wrong.
+    flags:
+      - "-O2"
+      - "-mp=gpu"
+      - "-gpu=cc89,mem:managed"
+      - "-Minfo=accel"
+
+link_flags: []
+
+required_tools:
+  - nvfortran
+  - compute-sanitizer
+
+# Same NVCOMPILER_ACC_NOTIFY launch-counting as stdpar_managed (notify: omp).
+# mandatory: true -- OMP_TARGET_OFFLOAD=MANDATORY is also set, so a host
+# fallback is a runtime error here, unlike stdpar_managed.
+device_proof:
+  notify: omp
+  mandatory: true
+
+sanitizers:
+  - memcheck
+  - racecheck
+  - initcheck
+
+analyzer_command: "python3 tools/regionharness/check_sese.py"

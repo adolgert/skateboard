@@ -1,0 +1,26 @@
+[
+  { "name": "sese_check", "emits": ["sese/verified"], "requires": [], "deterministic": true, "component": "analyzer:check_sese" },
+  { "name": "build_replay", "emits": ["build/replay"], "requires": [["sese/verified", "frozen"]], "deterministic": true, "component": "builder:/v1/build" },
+  { "name": "run_replay", "emits": ["gpu/executed"], "requires": [["build/replay", "tree"]], "deterministic": true, "component": "builder:/v1/run" },
+  { "name": "sanitize", "emits": ["sanitize/memcheck", "sanitize/racecheck", "sanitize/initcheck"], "requires": [["gpu/executed", "tree"]], "deterministic": true, "component": "builder:/v1/sanitize" },
+  { "name": "regression_visible", "emits": ["regression/visible"], "requires": [["sanitize/memcheck", "tree"], ["sanitize/racecheck", "tree"]], "deterministic": true, "component": "oracle:/v1/compare" },
+  { "name": "regression_holdout", "emits": ["regression/holdout"], "requires": [["regression/visible", "tree"]], "deterministic": true, "component": "oracle:/v1/compare" },
+  { "name": "time_port", "emits": ["timing/port"], "requires": [["regression/holdout", "tree"]], "deterministic": false, "component": "builder:/v1/time" },
+  { "name": "time_baseline", "emits": ["timing/baseline"], "requires": [], "deterministic": false, "component": "builder:/v1/time" },
+  {
+    "name": "accept",
+    "emits": [],
+    "requires": [
+      ["sese/verified", "frozen"],
+      ["build/replay", "tree"],
+      ["gpu/executed", "tree"],
+      ["sanitize/memcheck", "tree"],
+      ["sanitize/racecheck", "tree"],
+      ["regression/visible", "tree"],
+      ["regression/holdout", "tree"],
+      ["timing/port", "tree"]
+    ],
+    "deterministic": true,
+    "component": null
+  }
+]

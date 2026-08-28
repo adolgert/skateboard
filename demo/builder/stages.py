@@ -53,8 +53,13 @@ def _run(cmd, cwd=None, env=None, timeout=300):
     return p.returncode, p.stdout, p.stderr
 
 
-def build(attempt_id, files, profile):
+def build(attempt_id, files, profile, flags=None, link_flags=None):
+    # `flags`/`link_flags`, when given, come from the gateway's hashed
+    # strategy file and replace this profile's baked flag list. The
+    # agent still can't reach this endpoint; only the gateway can.
     prof = PROFILES[profile]
+    used_flags = list(flags) if flags is not None else list(prof["flags"])
+    used_flags += list(link_flags or [])
     ws = _ws(attempt_id)
     shutil.rmtree(ws, ignore_errors=True)
     src, have = _write_sources(ws, files)
@@ -67,16 +72,16 @@ def build(attempt_id, files, profile):
     logs = []
     # replay binary (region-level)
     replay_srcs = [os.path.join(src, s) for s in REPLAY_PAYLOAD] + REPLAY_BAKED
-    rc, out, err = _run([prof["fc"], *prof["flags"], "-module", ws, "-o", os.path.join(ws, "replay"), *replay_srcs], cwd=ws, env=env)
+    rc, out, err = _run([prof["fc"], *used_flags, "-module", ws, "-o", os.path.join(ws, "replay"), *replay_srcs], cwd=ws, env=env)
     logs.append(("replay", rc, out, err))
     if rc != 0:
-        return {"ok": False, "stage": "build", "target": "replay", "log_tail": (out + err)[-4000:]}
+        return {"ok": False, "stage": "build", "target": "replay", "flags": used_flags, "log_tail": (out + err)[-4000:]}
 
     # end-to-end binary (for timing) -- best effort; only required for /time
     tsu_ok = all(s in have for s in TSUNAMI_PAYLOAD)
     if tsu_ok:
         tsu_srcs = [os.path.join(src, s) for s in TSUNAMI_PAYLOAD]
-        rc2, out2, err2 = _run([prof["fc"], *prof["flags"], "-module", ws, "-o", os.path.join(ws, "tsunami"), *tsu_srcs], cwd=ws, env=env)
+        rc2, out2, err2 = _run([prof["fc"], *used_flags, "-module", ws, "-o", os.path.join(ws, "tsunami"), *tsu_srcs], cwd=ws, env=env)
         logs.append(("tsunami", rc2, out2, err2))
 
     minfo = "\n".join(l[3] for l in logs)  # -Minfo=accel goes to stderr
@@ -85,6 +90,7 @@ def build(attempt_id, files, profile):
         "ok": True,
         "stage": "build",
         "profile": profile,
+        "flags": used_flags,  # what was actually passed to the compiler
         "minfo_excerpt": "\n".join(accel_lines[:40]),
         "log_tail": minfo[-2000:],
     }
