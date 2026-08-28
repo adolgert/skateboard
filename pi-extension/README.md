@@ -9,6 +9,10 @@ the gateway comes back as the tool's result text, so the model reads it
 as its next steps. The extension decides nothing; the gateway remains
 the reference monitor.
 
+None of the tools take arguments. `submit` in particular names no path:
+the gateway reads the working copy its own configuration gives the
+region, so the session edits its files and calls `submit` with nothing.
+
 ## Configuration
 
 Three environment variables, all required:

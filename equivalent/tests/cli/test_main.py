@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from equivalent.cli.main import main
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
@@ -78,7 +81,52 @@ def test_status_json_flag_produces_parseable_json(tmp_path, capsys):
     rc = main(["status", str(region_dir), "--json"])
     out = capsys.readouterr().out
 
-    import json
     parsed = json.loads(out)
     assert parsed["accepted"] is False
     assert rc == 0
+
+
+def test_status_with_a_configuration_file_shows_the_tree_the_gateway_shows(tmp_path, capsys):
+    # Naming only a ledger directory, the CLI can report the tree of the
+    # last claim and no more. Given the gateway's own configuration file
+    # it reads the repository too, and then both answers are the same
+    # tree -- which is the point of reading the one configuration loader
+    # from both sides.
+    import yaml
+    from fastapi.testclient import TestClient
+
+    from equivalent.gateway.app import create_app
+    from equivalent.gateway.config import load_gateway_config
+
+    strategies = Path(__file__).resolve().parents[2] / "strategy" / "files"
+    spec_path = "notes/regions/ch04-step.sese.yaml"
+    seed = tmp_path / "seed"
+    (seed / "src").mkdir(parents=True)
+    (seed / "src" / "mod_kernel.f90").write_text("subroutine step\nend subroutine\n")
+    (tmp_path / "working" / "notes" / "regions").mkdir(parents=True)
+    (tmp_path / "working" / spec_path).write_text("region: ch04:step\n")
+
+    config_path = tmp_path / "gateway.yaml"
+    config_path.write_text(yaml.safe_dump({
+        "version": 1,
+        "paths": {
+            "repo": str(tmp_path / "repo"),
+            "ledger_root": str(tmp_path / "ledger"),
+            "working_copy": str(tmp_path / "working"),
+            "strategies": str(strategies),
+            "seed": str(seed),
+        },
+        "regions": {"ch04:step": {"spec_path": spec_path, "strategy": "stdpar_managed"}},
+    }))
+
+    config = load_gateway_config(config_path, seed_if_empty=True)
+    client = TestClient(create_app(config.regions, "test-token"))
+    headers = {"Authorization": "Bearer test-token", "X-Session-Id": "sess-1", "X-Model-Id": "m"}
+    client.post("/submit", json={"region": "ch04:step"}, headers=headers)
+    from_gateway = client.get("/status", params={"region": "ch04:step"}, headers=headers).json()
+
+    rc = main(["status", "--config", str(config_path), "--region-id", "ch04:step", "--json"])
+    from_cli = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert from_cli == from_gateway

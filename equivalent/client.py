@@ -9,6 +9,11 @@ from __future__ import annotations
 
 import httpx
 
+# One /run call spans the whole check behind it -- a compile, a sanitizer
+# pass, or repeated timed runs -- so a caller waits as long as the gateway
+# itself is willing to wait on its builder (equivalent.gateway.backend_client).
+TIMEOUT = httpx.Timeout(connect=10.0, read=1800.0, write=60.0, pool=10.0)
+
 
 class GatewayClient:
     def __init__(self, http: httpx.Client):
@@ -24,8 +29,10 @@ class GatewayClient:
         r.raise_for_status()
         return r.json()
 
-    def submit(self, region: str, working_copy_dir: str) -> dict:
-        r = self._http.post("/submit", json={"region": region, "working_copy_dir": working_copy_dir})
+    def submit(self, region: str) -> dict:
+        """The gateway reads the region's own configured working copy; a
+        submit names only which region is being submitted."""
+        r = self._http.post("/submit", json={"region": region})
         r.raise_for_status()
         return r.json()
 
@@ -37,4 +44,4 @@ class GatewayClient:
 
 def connect(base_url: str, token: str, session_id: str, model_id: str) -> GatewayClient:
     headers = {"Authorization": f"Bearer {token}", "X-Session-Id": session_id, "X-Model-Id": model_id}
-    return GatewayClient(httpx.Client(base_url=base_url, headers=headers))
+    return GatewayClient(httpx.Client(base_url=base_url, headers=headers, timeout=TIMEOUT))

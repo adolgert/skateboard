@@ -16,10 +16,12 @@ def _client_pair(tmp_path):
     (tmp_path / "seed" / "src").mkdir(parents=True)
     (tmp_path / "seed" / "src" / "mod_kernel.f90").write_text("subroutine step\nend subroutine\n")
     init_baseline_repo(repo_dir, tmp_path / "seed")
+    working = tmp_path / "working"
+    working.mkdir()
     cfg = RegionConfig(
         region_id="ch04:step", repo_dir=repo_dir,
         spec_path="notes/regions/ch04-step.sese.yaml", ledger_dir=tmp_path / "ledger",
-        strategy_path=STRATEGY_PATH,
+        strategy_path=STRATEGY_PATH, working_copy_dir=working,
     )
     app = create_app({cfg.region_id: cfg}, TOKEN)
     fastapi_client = TestClient(app)
@@ -49,11 +51,10 @@ def test_client_status_matches_calling_the_endpoint_directly(tmp_path):
 
 def test_client_submit_matches_calling_the_endpoint_directly(tmp_path):
     client, fastapi_client, cfg = _client_pair(tmp_path)
-    working = tmp_path / "working"
-    (working / "notes" / "regions").mkdir(parents=True)
-    (working / "notes" / "regions" / "ch04-step.sese.yaml").write_text("region: ch04:step\n")
+    (cfg.working_copy_dir / "notes" / "regions").mkdir(parents=True)
+    (cfg.working_copy_dir / "notes" / "regions" / "ch04-step.sese.yaml").write_text("region: ch04:step\n")
 
-    result = client.submit(cfg.region_id, str(working))
+    result = client.submit(cfg.region_id)
 
     assert result["committed"] is True
     assert len(result["tree"]) == 64

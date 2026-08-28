@@ -28,9 +28,11 @@ def _seed(root, with_makefile=False):
 def _region(tmp_path, with_makefile=False):
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, _seed(tmp_path / "seed", with_makefile))
+    working = tmp_path / "working"
+    working.mkdir()
     return RegionConfig(
         region_id="ch04:step", repo_dir=repo_dir, spec_path=SPEC_PATH, ledger_dir=tmp_path / "ledger",
-        strategy_path=STRATEGY_PATH,
+        strategy_path=STRATEGY_PATH, working_copy_dir=working,
     )
 
 
@@ -42,10 +44,9 @@ def _client(tmp_path, with_makefile=False):
 
 
 def _submit_spec_only(client, cfg):
-    working = cfg.repo_dir.parent / "working"
-    (working / "notes" / "regions").mkdir(parents=True, exist_ok=True)
-    (working / "notes" / "regions" / "ch04-step.sese.yaml").write_text("region: ch04:step\n")
-    return client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+    (cfg.working_copy_dir / "notes" / "regions").mkdir(parents=True, exist_ok=True)
+    (cfg.working_copy_dir / "notes" / "regions" / "ch04-step.sese.yaml").write_text("region: ch04:step\n")
+    return client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
 
 
 def test_refused_action_names_the_current_tree(tmp_path):
@@ -91,10 +92,10 @@ def test_frozen_requirement_survives_an_allowed_edit_but_tree_requirement_does_n
     )
 
     client = TestClient(create_app({cfg.region_id: cfg}, TOKEN))
-    working = tmp_path / "working"
+    working = cfg.working_copy_dir
     (working / "src").mkdir(parents=True)
     (working / "src" / "mod_kernel.f90").write_text("subroutine step\n  x = 1\nend subroutine\n")
-    client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
     tree_a, _ = current_tree_and_frozen(cfg.repo_dir, cfg.region_id, store, cfg.spec_path)
     store.record_claim(
         [Subject(kind="tree", sha256=tree_a)], "build/replay",
@@ -108,7 +109,7 @@ def test_frozen_requirement_survives_an_allowed_edit_but_tree_requirement_does_n
     assert "refused" not in before
 
     (working / "src" / "mod_kernel.f90").write_text("subroutine step\n  x = 2\nend subroutine\n")
-    client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
 
     still_verified = client.post(
         "/run", json={"action": "build_replay", "region": cfg.region_id, "config": {}}, headers=HEADERS,

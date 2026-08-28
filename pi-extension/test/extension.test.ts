@@ -114,7 +114,7 @@ describe("equivalentExtension", () => {
     await pi.handlers.get("session_start")({}, ctx);
 
     await pi.tools.get("sese_check").execute("call-1", {}, undefined, undefined, ctx);
-    await pi.tools.get("submit").execute("call-2", { working_copy_dir: "/work" }, undefined, undefined, ctx);
+    await pi.tools.get("submit").execute("call-2", {}, undefined, undefined, ctx);
 
     const runHeaders = fetchMock.mock.calls[1][1].headers;
     const submitHeaders = fetchMock.mock.calls[2][1].headers;
@@ -122,5 +122,25 @@ describe("equivalentExtension", () => {
     expect(runHeaders["X-Model-Id"]).toBe("claude-sonnet-5");
     expect(submitHeaders["X-Session-Id"]).toBe("sess-1");
     expect(submitHeaders["X-Model-Id"]).toBe("claude-sonnet-5");
+  });
+
+  it("submits the region alone -- no path the gateway would then read", async () => {
+    const table = [
+      { name: "sese_check", emits: ["sese/verified"], requires: [], deterministic: true, component: "analyzer:check_sese" },
+    ];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(table))
+      .mockResolvedValueOnce(jsonResponse({ tree: "T1", frozen: "F0", rejected: [], committed: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pi = fakePi();
+    equivalentExtension(pi as any);
+    const ctx = fakeCtx();
+    await pi.handlers.get("session_start")({}, ctx);
+    await pi.tools.get("submit").execute("call-1", {}, undefined, undefined, ctx);
+
+    expect(pi.tools.get("submit").parameters.properties ?? {}).toEqual({});
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ region: "ch04:step" });
   });
 });

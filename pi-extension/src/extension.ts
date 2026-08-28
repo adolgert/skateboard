@@ -50,14 +50,13 @@ export default function equivalentExtension(pi: ExtensionAPI) {
       name: "submit",
       label: "Submit",
       description:
-        "Send the region's working copy to the gateway. Only files on the region's " +
+        "Send the region's working copy to the gateway. Takes no arguments: the gateway " +
+        "reads the working copy this session edits. Only files on the region's " +
         "allow-list are kept; anything else is ignored and named in the receipt. " +
         "Returns the resulting tree and frozen hashes.",
-      parameters: Type.Object({
-        working_copy_dir: Type.String({ description: "Path to the working copy to submit" }),
-      }),
-      async execute(_toolCallId, params, _signal, _onUpdate, execCtx) {
-        const body = (await postSubmit(cfg, params.working_copy_dir, execCtx)) as SubmitBody;
+      parameters: Type.Object({}),
+      async execute(_toolCallId, _params, _signal, _onUpdate, execCtx) {
+        const body = (await postSubmit(cfg, execCtx)) as SubmitBody;
         return {
           content: [{ type: "text", text: submitResultText(body) }],
           details: body as unknown as Record<string, unknown>,

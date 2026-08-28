@@ -57,10 +57,12 @@ def _client(tmp_path):
 
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, seed)
+    working = tmp_path / "working"
+    working.mkdir()
     cfg = RegionConfig(
         region_id="ch04:step", repo_dir=repo_dir, spec_path=SPEC_PATH,
         ledger_dir=tmp_path / "ledger", strategy_path=STRATEGY_PATH,
-        visible_dataset_dir=_visible_dataset(tmp_path),
+        working_copy_dir=working, visible_dataset_dir=_visible_dataset(tmp_path),
     )
     builder, oracle = FakeBuilder(), FakeOracle()
     client = TestClient(create_app({cfg.region_id: cfg}, TOKEN, builder=builder, oracle=oracle))
@@ -76,10 +78,10 @@ def _run(client, cfg, action):
 def test_full_pipeline_reaches_acceptance(tmp_path):
     client, cfg, store, builder, oracle = _client(tmp_path)
 
-    working = tmp_path / "working"
+    working = cfg.working_copy_dir
     (working / "notes" / "regions").mkdir(parents=True)
     (working / SPEC_PATH).write_text(SPEC)
-    client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
 
     for action in (
         "sese_check", "build_replay", "run_replay", "sanitize",
@@ -125,10 +127,10 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
 
 def test_sanitize_dispatch_writes_three_claims_and_is_a_duplicate_on_repeat(tmp_path):
     client, cfg, store, builder, oracle = _client(tmp_path)
-    working = tmp_path / "working"
+    working = cfg.working_copy_dir
     (working / "notes" / "regions").mkdir(parents=True)
     (working / SPEC_PATH).write_text(SPEC)
-    client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
     _run(client, cfg, "sese_check")
     _run(client, cfg, "build_replay")
     _run(client, cfg, "run_replay")
@@ -148,10 +150,10 @@ def test_holdout_receipt_is_verdict_only_but_the_stored_claim_keeps_its_detail(t
     # VERDICT_ONLY) filters what /run returns to the agent; the ledger
     # line itself keeps everything the component recorded, for the CLI.
     client, cfg, store, builder, oracle = _client(tmp_path)
-    working = tmp_path / "working"
+    working = cfg.working_copy_dir
     (working / "notes" / "regions").mkdir(parents=True)
     (working / SPEC_PATH).write_text(SPEC)
-    client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
     for action in ("sese_check", "build_replay", "run_replay", "sanitize", "regression_visible"):
         _run(client, cfg, action)
 
@@ -167,15 +169,15 @@ def test_holdout_receipt_is_verdict_only_but_the_stored_claim_keeps_its_detail(t
 
 def test_time_baseline_is_filed_against_the_baseline_tree_not_the_current_tree(tmp_path):
     client, cfg, store, builder, oracle = _client(tmp_path)
-    working = tmp_path / "working"
+    working = cfg.working_copy_dir
     (working / "notes" / "regions").mkdir(parents=True)
     (working / SPEC_PATH).write_text(SPEC)
-    client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
     _run(client, cfg, "sese_check")  # widens the allow-list to include mod_kernel.f90
 
     (working / "src").mkdir(parents=True)
     (working / "src" / "mod_kernel.f90").write_text(CLEAN_SOURCE.replace("h + u", "h + u + 0"))
-    client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
 
     result = _run(client, cfg, "time_baseline")
 

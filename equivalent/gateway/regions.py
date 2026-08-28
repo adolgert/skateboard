@@ -17,4 +17,8 @@ class RegionConfig:
     spec_path: str
     ledger_dir: Path
     strategy_path: Path
+    # The directory the gateway reads a submit from. It is named here,
+    # not in the submit request, so that nothing the agent sends can
+    # choose which gateway-side path gets read.
+    working_copy_dir: Path
     visible_dataset_dir: Path | None = None

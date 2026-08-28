@@ -16,6 +16,13 @@ from __future__ import annotations
 
 import httpx
 
+# A build, a sanitizer pass, or five timed runs of the full program can
+# each take minutes; httpx's default of five seconds per read would cut
+# the first real timing call off. The builder bounds each of its own
+# subprocesses at five minutes, so this is a ceiling on a whole action,
+# not a per-run figure.
+TIMEOUT = httpx.Timeout(connect=10.0, read=1800.0, write=60.0, pool=10.0)
+
 
 class BuilderClient:
     def __init__(self, http: httpx.Client):
@@ -67,8 +74,12 @@ class OracleClient:
 
 
 def connect_builder(base_url: str, token: str) -> BuilderClient:
-    return BuilderClient(httpx.Client(base_url=base_url, headers={"Authorization": f"Bearer {token}"}))
+    return BuilderClient(httpx.Client(
+        base_url=base_url, headers={"Authorization": f"Bearer {token}"}, timeout=TIMEOUT,
+    ))
 
 
 def connect_oracle(base_url: str, token: str) -> OracleClient:
-    return OracleClient(httpx.Client(base_url=base_url, headers={"Authorization": f"Bearer {token}"}))
+    return OracleClient(httpx.Client(
+        base_url=base_url, headers={"Authorization": f"Bearer {token}"}, timeout=TIMEOUT,
+    ))

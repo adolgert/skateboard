@@ -5,10 +5,11 @@ session can reach. Everything the agent or the person believes about a
 region's progress comes from what this module reads and returns; a bug
 here can make a bad port look accepted.
 
-All four endpoints are built now: GET /table, GET /status, POST /submit,
-POST /run. POST /run refuses a request whose required claims are missing,
-returns an existing claim for a repeated deterministic request, and
-otherwise dispatches to the action's component. Every row in
+The endpoints are GET /table, GET /status, POST /submit, POST /run, and
+an unauthenticated GET /healthz for container healthchecks. POST /run
+refuses a request whose required claims are missing, returns an existing
+claim for a repeated deterministic request, and otherwise dispatches to
+the action's component. Every row in
 equivalent.gateway.table.ACTION_TABLE has real dispatch; an action whose
 builder or oracle client isn't configured for this gateway instance
 still falls back to the "not implemented" response rather than crashing.
@@ -19,7 +20,9 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 
 from equivalent.components import build_replay, regression, run_replay, sanitize, sese_check, timing
 from equivalent.components.errors import ComponentError
@@ -80,14 +83,29 @@ def config_hash(config: dict) -> str:
 
 
 class SubmitRequest(BaseModel):
+    # A submit names only the region. Which directory on the gateway's
+    # side is read for it comes from the region's own configuration, so
+    # a caller cannot point the gateway at a path of its choosing. An
+    # extra field is a caller working from a stale idea of this endpoint,
+    # so it is rejected by name rather than quietly ignored.
+    model_config = ConfigDict(extra="forbid")
+
     region: str
-    working_copy_dir: str
 
 
 class RunRequest(BaseModel):
     action: str
     region: str
     config: dict = {}
+
+
+def _validation_detail(exc: RequestValidationError) -> str:
+    """Name the offending fields, so a caller reads which part of its body was wrong."""
+    parts = []
+    for error in exc.errors():
+        field = ".".join(str(item) for item in error["loc"][1:]) or "body"
+        parts.append(f"{field}: {error['msg']}")
+    return "; ".join(parts) or "malformed request body"
 
 
 def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, oracle=None) -> FastAPI:
@@ -101,6 +119,27 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
     app = FastAPI(title="equivalent-gateway")
     stores: dict[str, LedgerStore] = {}
     visible_cases: dict[str, dict] = {}
+
+    @app.exception_handler(RequestValidationError)
+    def malformed_request(request, exc: RequestValidationError):
+        """A body that doesn't fit the endpoint is the caller's mistake, reported as 400.
+
+        The default answer would be 422, which reads as "the request was
+        understood but rejected"; a body with a field this endpoint does
+        not have was never understood. Nothing is written to the request
+        log for one of these: the handler never runs, so there is no
+        region and no tree to log it against.
+        """
+        return JSONResponse(status_code=400, content={"detail": _validation_detail(exc)})
+
+    @app.get("/healthz")
+    def get_healthz():
+        """Liveness only, and deliberately unauthenticated.
+
+        Container healthchecks and the isolation checks need something to
+        reach without a token. It reports nothing about any region.
+        """
+        return {"ok": True}
 
     def _auth(authorization):
         if token and authorization != f"Bearer {token}":
@@ -161,7 +200,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         cfg = _region(req.region)
         store = _store(req.region)
         allow_globs = resolve_allow_globs(store, cfg.spec_path)
-        receipt = do_submit(cfg.repo_dir, cfg.region_id, req.working_copy_dir, allow_globs, x_session_id)
+        receipt = do_submit(cfg.repo_dir, cfg.region_id, cfg.working_copy_dir, allow_globs, x_session_id)
 
         store.append_request(RequestLogLine(
             ts=_now(), session=x_session_id, model=x_model_id, endpoint="submit", action="submit",

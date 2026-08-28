@@ -60,9 +60,12 @@ def _client(tmp_path, source, hi):
 
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, seed)
+    working = tmp_path / "working"
+    working.mkdir()
     cfg = RegionConfig(
         region_id="ch04:step", repo_dir=repo_dir, spec_path=SPEC_PATH,
         ledger_dir=tmp_path / "ledger", strategy_path=STRATEGY_PATH,
+        working_copy_dir=working,
     )
     store = LedgerStore(cfg.ledger_dir)
     client = TestClient(create_app({cfg.region_id: cfg}, TOKEN))

@@ -37,15 +37,16 @@ export async function fetchStatus(config: GatewayConfig): Promise<unknown> {
   return res.json();
 }
 
-export async function postSubmit(
-  config: GatewayConfig,
-  workingCopyDir: string,
-  ctx: SessionContext,
-): Promise<unknown> {
+/**
+ * A submit names only the region. Which directory the gateway reads for
+ * it is part of that region's own configuration, so nothing sent from
+ * here can point the gateway at a different path.
+ */
+export async function postSubmit(config: GatewayConfig, ctx: SessionContext): Promise<unknown> {
   const res = await fetch(`${config.url}/submit`, {
     method: "POST",
     headers: sessionHeaders(config, ctx),
-    body: JSON.stringify({ region: config.region, working_copy_dir: workingCopyDir }),
+    body: JSON.stringify({ region: config.region }),
   });
   return res.json();
 }

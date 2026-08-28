@@ -1,0 +1,27 @@
+# Build contexts here are the repository root. Keep out of them everything the
+# images do not need: the local virtualenv, editor and test caches, the third
+# party checkouts under tools/, the papers, and the deployment's own state.
+.git
+.venv
+.hypothesis
+.pytest_cache
+**/__pycache__
+**/*.egg-info
+**/*.pyc
+**/node_modules
+
+codes
+demo
+docs
+experiments
+ftgdata
+notes
+
+deploy/state
+deploy/.env
+
+# Only the analyzer is needed out of tools/; the rest are third-party trees,
+# some of them large.
+tools/*
+!tools/regionharness
+tools/regionharness/cases

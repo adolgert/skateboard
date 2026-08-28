@@ -180,8 +180,19 @@ def submit(repo_dir, region_id: str, working_copy_dir, allow_globs: list[str], s
     )
 
 
+def region_slug(region_id: str) -> str:
+    """A region id spelled so it can be a path or branch component.
+
+    A region id like "ch04:step" contains a colon, which git does not
+    accept in a branch name and which is awkward in a directory name.
+    Replacing it with a dash is the one rule; the region's branch and its
+    ledger directory both use this so the two never disagree.
+    """
+    return region_id.replace(":", "-")
+
+
 def _region_branch(region_id: str) -> str:
-    return f"region/{region_id.replace(':', '-')}"
+    return f"region/{region_slug(region_id)}"
 
 
 def current_ref(repo_dir, region_id: str) -> str:
@@ -239,6 +250,11 @@ def fortran_files_at(repo_dir, ref: str) -> list[dict]:
     """
     files = [f for f in tracked_files(repo_dir, ref) if f["path"].lower().endswith(".f90")]
     return sorted(files, key=lambda f: f["path"])
+
+
+def baseline_commit(repo_dir) -> str | None:
+    """The baseline commit id -- the `main` branch's tip -- or None if the repo isn't initialized."""
+    return _rev_parse(repo_dir, "main")
 
 
 def baseline_tree_sha(repo_dir) -> str:

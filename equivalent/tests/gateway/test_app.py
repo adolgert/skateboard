@@ -22,12 +22,15 @@ def _seed(root):
 def _region(tmp_path, region_id="ch04:step"):
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
+    working = tmp_path / "working"
+    working.mkdir()
     cfg = RegionConfig(
         region_id=region_id,
         repo_dir=repo_dir,
         spec_path="notes/regions/ch04-step.sese.yaml",
         ledger_dir=tmp_path / "ledger",
         strategy_path=STRATEGY_PATH,
+        working_copy_dir=working,
     )
     return cfg
 
@@ -87,16 +90,13 @@ def test_get_status_reports_the_real_current_tree_before_any_check_has_run(tmp_p
     assert body == expected
 
 
-def test_post_submit_wraps_step4_submit_and_returns_its_receipt(tmp_path):
+def test_post_submit_reads_the_region_own_working_copy_and_returns_its_receipt(tmp_path):
     client, cfg = _client(tmp_path)
 
-    working = tmp_path / "working"
-    (working / "notes" / "regions").mkdir(parents=True)
-    (working / "notes" / "regions" / "ch04-step.sese.yaml").write_text("region: ch04:step\n")
+    (cfg.working_copy_dir / "notes" / "regions").mkdir(parents=True)
+    (cfg.working_copy_dir / "notes" / "regions" / "ch04-step.sese.yaml").write_text("region: ch04:step\n")
 
-    r = client.post(
-        "/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS,
-    )
+    r = client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
 
     assert r.status_code == 200
     body = r.json()
@@ -110,11 +110,10 @@ def test_submit_writes_exactly_one_request_log_line_with_the_session_id(tmp_path
     client, cfg = _client(tmp_path)
     store = LedgerStore(cfg.ledger_dir)
 
-    working = tmp_path / "working"
-    (working / "notes" / "regions").mkdir(parents=True)
-    (working / "notes" / "regions" / "ch04-step.sese.yaml").write_text("region: ch04:step\n")
+    (cfg.working_copy_dir / "notes" / "regions").mkdir(parents=True)
+    (cfg.working_copy_dir / "notes" / "regions" / "ch04-step.sese.yaml").write_text("region: ch04:step\n")
 
-    client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
 
     requests = store.all_requests()
     assert len(requests) == 1
@@ -142,3 +141,31 @@ def test_compute_status_and_history_without_repo_info_are_unchanged(tmp_path):
     assert status["tree"] is None
     assert status["accepted"] is False
     assert history == []
+
+
+def test_submit_body_naming_a_working_copy_directory_is_rejected(tmp_path):
+    # The gateway reads the directory its own configuration names. A body
+    # that still carries a path is a caller working from an older idea of
+    # the endpoint; it is refused by name rather than silently ignored,
+    # and nothing about it reaches the region's request log.
+    client, cfg = _client(tmp_path)
+    store = LedgerStore(cfg.ledger_dir)
+
+    r = client.post(
+        "/submit",
+        json={"region": cfg.region_id, "working_copy_dir": "/somewhere/else"},
+        headers=HEADERS,
+    )
+
+    assert r.status_code == 400
+    assert "working_copy_dir" in r.json()["detail"]
+    assert store.all_requests() == []
+
+
+def test_healthz_answers_without_a_token(tmp_path):
+    client, _ = _client(tmp_path)
+
+    r = client.get("/healthz")
+
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
