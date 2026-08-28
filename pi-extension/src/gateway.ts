@@ -73,16 +73,22 @@ export async function postSubmit(
   return res.json();
 }
 
+/**
+ * The run config carries the settings the action declared and the model
+ * chose to set. It is built by the caller from the row, so a key the
+ * gateway never offered cannot reach the request body from here.
+ */
 export async function postRun(
   config: GatewayConfig,
   action: string,
   ctx: SessionContext,
   toolCallId: string,
+  runConfig: Record<string, unknown> = {},
 ): Promise<unknown> {
   const res = await fetch(`${config.url}/run`, {
     method: "POST",
     headers: sessionHeaders(config, ctx, toolCallId),
-    body: JSON.stringify({ action, region: config.region, config: {} }),
+    body: JSON.stringify({ action, region: config.region, config: runConfig }),
   });
   return res.json();
 }

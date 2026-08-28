@@ -149,6 +149,75 @@ describe("equivalentExtension", () => {
     expect(statusHeaders["X-Tool-Call-Id"]).toBeUndefined();
   });
 
+  it("offers a row's settings as tool parameters and sends what the model set", async () => {
+    const table = [
+      {
+        name: "time_port",
+        emits: ["timing/port"],
+        requires: [],
+        deterministic: false,
+        component: "builder:/v1/time",
+        config_keys: ["repeats"],
+        config_params: {
+          repeats: { type: "integer", description: "How many timed runs to make. Five when left out." },
+        },
+      },
+    ];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(table))
+      .mockResolvedValueOnce(jsonResponse({ claim_id: "c-1", verdict: "pass", detail: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pi = fakePi();
+    equivalentExtension(pi as any);
+    const ctx = fakeCtx();
+    await pi.handlers.get("session_start")({}, ctx);
+
+    const tool = pi.tools.get("time_port");
+    expect(tool.parameters.properties.repeats).toEqual({
+      type: "integer",
+      description: "How many timed runs to make. Five when left out.",
+    });
+    expect(tool.parameters.required).toBeUndefined();
+    expect(tool.description).toContain("repeats");
+
+    await tool.execute("call-1", { repeats: 3 }, undefined, undefined, ctx);
+
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).config).toEqual({ repeats: 3 });
+  });
+
+  it("a row that takes no settings keeps an empty parameter object and an empty config", async () => {
+    const table = [
+      {
+        name: "sese_check",
+        emits: ["sese/verified"],
+        requires: [],
+        deterministic: true,
+        component: "analyzer:check_sese",
+        config_keys: [],
+        config_params: {},
+      },
+    ];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(table))
+      .mockResolvedValueOnce(jsonResponse({ claim_id: "c-1", verdict: "pass", detail: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pi = fakePi();
+    equivalentExtension(pi as any);
+    const ctx = fakeCtx();
+    await pi.handlers.get("session_start")({}, ctx);
+
+    expect(pi.tools.get("sese_check").parameters.properties ?? {}).toEqual({});
+    await pi.tools.get("sese_check").execute("call-1", {}, undefined, undefined, ctx);
+
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      action: "sese_check", region: "ch04:step", config: {},
+    });
+  });
+
   it("submits the region alone -- no path the gateway would then read", async () => {
     const table = [
       { name: "sese_check", emits: ["sese/verified"], requires: [], deterministic: true, component: "analyzer:check_sese" },

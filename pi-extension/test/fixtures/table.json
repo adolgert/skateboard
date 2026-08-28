@@ -1,14 +1,33 @@
 [
-  { "name": "sese_check", "emits": ["sese/verified"], "requires": [], "deterministic": true, "component": "analyzer:check_sese" },
-  { "name": "build_replay", "emits": ["build/replay"], "requires": [["sese/verified", "frozen"]], "deterministic": true, "component": "builder:/v1/build" },
-  { "name": "run_replay", "emits": ["gpu/executed"], "requires": [["build/replay", "tree"]], "deterministic": true, "component": "builder:/v1/run" },
-  { "name": "sanitize", "emits": ["sanitize/memcheck", "sanitize/racecheck", "sanitize/initcheck"], "requires": [["gpu/executed", "tree"]], "deterministic": true, "component": "builder:/v1/sanitize" },
-  { "name": "regression_visible", "emits": ["regression/visible"], "requires": [["sanitize/memcheck", "tree"], ["sanitize/racecheck", "tree"]], "deterministic": true, "component": "oracle:/v1/compare" },
-  { "name": "property_check", "emits": ["regression/property"], "requires": [["regression/visible", "tree"]], "deterministic": true, "component": "builder:/v1/properties" },
-  { "name": "regression_holdout", "emits": ["regression/holdout"], "requires": [["regression/visible", "tree"]], "deterministic": true, "component": "oracle:/v1/compare" },
-  { "name": "program_regression", "emits": ["program/regression"], "requires": [["regression/holdout", "tree"]], "deterministic": true, "component": "builder:/v1/time" },
-  { "name": "time_port", "emits": ["timing/port"], "requires": [["program/regression", "tree"]], "deterministic": false, "component": "builder:/v1/time" },
-  { "name": "time_baseline", "emits": ["timing/baseline"], "requires": [], "deterministic": false, "component": "builder:/v1/time" },
+  { "name": "sese_check", "emits": ["sese/verified"], "requires": [], "deterministic": true, "component": "analyzer:check_sese", "config_keys": [], "config_params": {} },
+  { "name": "build_replay", "emits": ["build/replay"], "requires": [["sese/verified", "frozen"]], "deterministic": true, "component": "builder:/v1/build", "config_keys": [], "config_params": {} },
+  { "name": "run_replay", "emits": ["gpu/executed"], "requires": [["build/replay", "tree"]], "deterministic": true, "component": "builder:/v1/run", "config_keys": [], "config_params": {} },
+  { "name": "sanitize", "emits": ["sanitize/memcheck", "sanitize/racecheck", "sanitize/initcheck"], "requires": [["gpu/executed", "tree"]], "deterministic": true, "component": "builder:/v1/sanitize", "config_keys": [], "config_params": {} },
+  { "name": "regression_visible", "emits": ["regression/visible"], "requires": [["sanitize/memcheck", "tree"], ["sanitize/racecheck", "tree"]], "deterministic": true, "component": "oracle:/v1/compare", "config_keys": [], "config_params": {} },
+  {
+    "name": "property_check", "emits": ["regression/property"], "requires": [["regression/visible", "tree"]], "deterministic": true, "component": "builder:/v1/properties",
+    "config_keys": ["seed", "max_examples"],
+    "config_params": {
+      "seed": { "type": "integer", "description": "The Hypothesis seed for the search. One is drawn for the run when left out, and the claim records which." },
+      "max_examples": { "type": "integer", "description": "How many examples to draw per property. A hundred when left out." }
+    }
+  },
+  { "name": "regression_holdout", "emits": ["regression/holdout"], "requires": [["regression/visible", "tree"]], "deterministic": true, "component": "oracle:/v1/compare", "config_keys": [], "config_params": {} },
+  { "name": "program_regression", "emits": ["program/regression"], "requires": [["regression/holdout", "tree"]], "deterministic": true, "component": "builder:/v1/time", "config_keys": [], "config_params": {} },
+  {
+    "name": "time_port", "emits": ["timing/port"], "requires": [["program/regression", "tree"]], "deterministic": false, "component": "builder:/v1/time",
+    "config_keys": ["repeats"],
+    "config_params": {
+      "repeats": { "type": "integer", "description": "How many timed runs to make. Five when left out." }
+    }
+  },
+  {
+    "name": "time_baseline", "emits": ["timing/baseline"], "requires": [], "deterministic": false, "component": "builder:/v1/time",
+    "config_keys": ["repeats"],
+    "config_params": {
+      "repeats": { "type": "integer", "description": "How many timed runs to make. Five when left out." }
+    }
+  },
   {
     "name": "accept",
     "emits": [],
@@ -25,6 +44,7 @@
       ["regression/property", "tree"]
     ],
     "deterministic": true,
-    "component": null
+    "component": null,
+    "config_keys": [], "config_params": {}
   }
 ]

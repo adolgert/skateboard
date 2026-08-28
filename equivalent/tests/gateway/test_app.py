@@ -91,6 +91,23 @@ def test_get_table_without_a_region_says_it_needs_one(tmp_path):
     assert "region" in r.json()["detail"]
 
 
+def test_get_table_says_which_settings_an_action_takes_and_what_they_mean(tmp_path):
+    # A client that offers these to a model reads the wording from here,
+    # so it cannot drift from what POST /run validates against.
+    client, cfg = _client(tmp_path)
+
+    rows = {row["name"]: row for row in
+            client.get("/table", params={"region": cfg.region_id}, headers=HEADERS).json()}
+
+    assert rows["time_port"]["config_keys"] == ["repeats"]
+    assert rows["time_port"]["config_params"]["repeats"]["type"] == "integer"
+    assert rows["time_port"]["config_params"]["repeats"]["description"]
+    assert rows["property_check"]["config_keys"] == ["seed", "max_examples"]
+    # An action that takes no settings says so rather than leaving it out.
+    assert rows["build_replay"]["config_keys"] == []
+    assert rows["build_replay"]["config_params"] == {}
+
+
 def test_get_table_matches_the_pi_extension_fixture(tmp_path):
     # pi-extension/test/fixtures/table.json is the TS tests' hand copy of
     # the real table (its golden tool descriptions are generated from it).

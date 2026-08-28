@@ -4,14 +4,22 @@ A thin `pi` client for interactive porting sessions against the
 `equivalent` gateway. Everything it knows, it fetched from the gateway:
 on session start it calls `GET /table` and registers one tool per action
 row (plus `submit` and `status`), with each tool's description —
-including its `Requires:` line — generated from the row. A refusal from
-the gateway comes back as the tool's result text, so the model reads it
-as its next steps. The extension decides nothing; the gateway remains
-the reference monitor.
+including its `Requires:` line — and its parameters generated from the
+row. A refusal from the gateway comes back as the tool's result text, so
+the model reads it as its next steps. The extension decides nothing; the
+gateway remains the reference monitor.
 
-None of the tools take arguments. `submit` in particular names no path:
-the gateway reads the working copy its own configuration gives the
-region, so the session edits its files and calls `submit` with nothing.
+A tool's arguments are the settings its row says the action takes, with
+the gateway's own wording: `time_baseline` and `time_port` take
+`repeats`, `property_check` and `harness_property` take `seed` and
+`max_examples`, and `harness_self_check` takes `limit`. All of them are
+optional integers, so a call that names none is the ordinary call and
+gets the gateway's defaults, and only the keys the row declared are sent
+— the gateway hashes the config to spot a repeated request, so nothing
+else belongs in it. Every other tool takes no arguments.
+`submit` in particular names no path: the gateway reads the working copy
+its own configuration gives the region, so the session edits its files
+and calls `submit` with nothing.
 
 Every `/submit` and `/run` carries three identifying headers —
 `X-Session-Id`, `X-Model-Id`, and `X-Tool-Call-Id`, the last being pi's

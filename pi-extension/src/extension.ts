@@ -14,7 +14,7 @@ import { type GatewayConfig, readConfig } from "./config.js";
 import { fetchStatus, fetchTable, postRun, postSubmit } from "./gateway.js";
 import { runResultText, submitResultText, type RunBody, type SubmitBody } from "./format.js";
 import { renderStatus, type StatusBody } from "./status.js";
-import { callableRows, describeRow } from "./table.js";
+import { callableRows, describeRow, runConfig, toolParameters } from "./table.js";
 
 export default function equivalentExtension(pi: ExtensionAPI) {
   let config: GatewayConfig | undefined;
@@ -36,9 +36,13 @@ export default function equivalentExtension(pi: ExtensionAPI) {
         name: row.name,
         label: row.name,
         description: describeRow(row),
-        parameters: Type.Object({}),
-        async execute(toolCallId, _params, _signal, _onUpdate, execCtx) {
-          const body = (await postRun(cfg, row.name, execCtx, toolCallId)) as RunBody;
+        // Whatever settings the gateway says this action takes, and
+        // nothing else: an action with none keeps an empty object.
+        parameters: toolParameters(row),
+        async execute(toolCallId, params, _signal, _onUpdate, execCtx) {
+          const body = (await postRun(
+            cfg, row.name, execCtx, toolCallId, runConfig(row, params),
+          )) as RunBody;
           return {
             content: [{ type: "text", text: runResultText(row.name, body) }],
             details: body as unknown as Record<string, unknown>,

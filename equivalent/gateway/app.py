@@ -68,7 +68,7 @@ from .submit import (
     resolve_allow_globs,
 )
 from .submit import submit as do_submit
-from .table import ACTION_TABLE, requires_for, rows_for
+from .table import ACTION_TABLE, CONFIG_KEY_SPECS, config_params, requires_for, rows_for
 
 ROWS_BY_NAME = {row.name: row for row in ACTION_TABLE}
 PRODUCERS = {predicate_type: row.name for row in ACTION_TABLE for predicate_type in row.emits}
@@ -239,6 +239,12 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 "requires": [list(pair) for pair in requires_for(row, cfg.manifest)],
                 "deterministic": row.deterministic,
                 "component": row.component,
+                # The settings this action takes, and what each one means.
+                # A client that offers them to a model reads the wording
+                # from here rather than repeating it, and POST /run checks
+                # a request against the same list.
+                "config_keys": list(row.config_keys),
+                "config_params": config_params(row),
             }
             for row in rows_for(cfg.phase)
         ]
@@ -311,6 +317,20 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 detail=f"'{req.action}' does not accept config key(s) {unknown_keys}; "
                        f"allowed: {sorted(row.config_keys)}",
             )
+        for key in sorted(req.config):
+            # Values are checked as well as names: a "repeats" of "lots"
+            # would hash into duplicate detection and then fail deep in a
+            # component, where the caller reads a traceback instead of
+            # which key it got wrong.
+            value = req.config[key]
+            if CONFIG_KEY_SPECS[key]["type"] == "integer" and (
+                isinstance(value, bool) or not isinstance(value, int)
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"config key '{key}' of '{req.action}' must be an integer; "
+                           f"got {value!r}",
+                )
 
         strategy = load_strategy(cfg.strategy_path)
         tree_sha, frozen_sha = _current(cfg, store, strategy)

@@ -331,13 +331,19 @@ run times, what the program was given, which files it wrote and their
 digests, and whether the GPU was otherwise idle, which on a shared
 workstation it usually is not.
 
-Three rows accept settings from whoever asks: `time_baseline` and
-`time_port` take `repeats`, and `property_check` takes `seed` and
-`max_examples`. Nothing else takes any configuration, and the tools the
-extension registers take no arguments at all — they send the empty
-configuration every time, so a session always gets the defaults. Asking
-for a particular seed or a different repeat count means calling the
-gateway from a client on its network, as `deploy/walkthrough.py` does.
+A few rows accept settings, and the tools take them as optional
+arguments: `time_baseline` and `time_port` take `repeats`, how many
+timed runs to make, five when it is left out; `property_check` takes
+`seed`, which repeats one exact search and is drawn for the run when
+left out, and `max_examples`, how many examples to draw per property, a
+hundred when left out. In the onboarding session, `harness_property`
+takes the same two, and `harness_self_check` takes `limit`, which scores
+at most that many mutants rather than all of them. Every one of them is
+an integer and every one of them is optional: a call that names none is
+the ordinary call, and gets the defaults above. Nothing else takes any
+configuration, and a value of the wrong kind — or a setting the action
+does not take — is refused as a malformed request naming what was wrong,
+before anything runs.
 
 ### 5. Acceptance
 

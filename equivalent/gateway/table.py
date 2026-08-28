@@ -27,6 +27,33 @@ from equivalent.ledger.acceptance import (
 # depend on the code, so it is spelled here for `requires_for` to find.
 ACCEPT = "accept"
 
+# What a config key means and what shape its value has, written once.
+# GET /table serves this beside the row that declares the key, so the pi
+# extension can offer the key as a typed tool parameter without keeping a
+# second copy of the wording, and POST /run checks a value against the
+# same type before it hashes the config.
+CONFIG_KEY_SPECS = {
+    "repeats": {
+        "type": "integer",
+        "description": "How many timed runs to make. Five when left out.",
+    },
+    "seed": {
+        "type": "integer",
+        "description": (
+            "The Hypothesis seed for the search. One is drawn for the run "
+            "when left out, and the claim records which."
+        ),
+    },
+    "max_examples": {
+        "type": "integer",
+        "description": "How many examples to draw per property. A hundred when left out.",
+    },
+    "limit": {
+        "type": "integer",
+        "description": "Score at most this many mutants, rather than all of them.",
+    },
+}
+
 
 @dataclass(frozen=True)
 class ActionRow:
@@ -44,7 +71,10 @@ class ActionRow:
     # The config keys POST /run accepts for this action; anything else is
     # rejected before dispatch. This keeps the config canonical, so
     # duplicate detection (which hashes the config) can't be defeated by
-    # padding a request with junk keys until it hashes differently.
+    # padding a request with junk keys until it hashes differently. GET
+    # /table serves these keys with the row, so a client can offer them
+    # without knowing the table; every one of them needs an entry in
+    # CONFIG_KEY_SPECS above to say what it is.
     config_keys: tuple = ()
 
 
@@ -129,3 +159,8 @@ def requires_for(row: ActionRow, manifest=None) -> tuple:
     return tuple(
         (req.predicate_type, req.subject_kind) for req in acceptance_requirements(manifest)
     )
+
+
+def config_params(row: ActionRow) -> dict:
+    """The type and wording of every config key this row accepts."""
+    return {key: dict(CONFIG_KEY_SPECS[key]) for key in row.config_keys}

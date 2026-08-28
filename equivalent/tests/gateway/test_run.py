@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from equivalent.gateway.app import config_hash, create_app
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import current_tree_and_frozen, init_baseline_repo, tracked_files
-from equivalent.gateway.table import ACTION_TABLE
+from equivalent.gateway.table import ACTION_TABLE, CONFIG_KEY_SPECS
 from equivalent.ledger.acceptance import PHASES, PORTING
 from equivalent.ledger.predicates import PREDICATE_TYPES
 from equivalent.ledger.records import Predicate
@@ -228,6 +228,13 @@ def test_every_row_references_real_predicate_types_and_agrees_with_the_registry_
             assert row.deterministic == all(PREDICATE_TYPES[pt].deterministic for pt in row.emits)
         assert isinstance(row.config_keys, tuple)
         assert all(isinstance(k, str) for k in row.config_keys)
+        # Every key a row takes has to say what it is: that wording is
+        # what a session is offered, and what POST /run types the value
+        # against.
+        for key in row.config_keys:
+            assert key in CONFIG_KEY_SPECS
+            assert CONFIG_KEY_SPECS[key]["type"] == "integer"
+            assert CONFIG_KEY_SPECS[key]["description"]
 
 
 def test_a_config_key_the_row_does_not_declare_is_rejected_before_dispatch(tmp_path):
@@ -249,6 +256,34 @@ def test_a_config_key_the_row_does_not_declare_is_rejected_before_dispatch(tmp_p
         "/run", json={"action": "time_baseline", "region": cfg.region_id, "config": {"repeats": 3}}, headers=HEADERS,
     )
     assert r.status_code == 200
+
+
+def test_a_config_value_of_the_wrong_type_is_rejected_naming_the_key(tmp_path):
+    # The value is checked as well as the name: a repeat count that is
+    # not a number would hash into duplicate detection and then fail
+    # inside a component, where the caller reads a traceback instead of
+    # which setting it got wrong.
+    client, cfg, store = _client(tmp_path)
+
+    r = client.post(
+        "/run",
+        json={"action": "time_baseline", "region": cfg.region_id, "config": {"repeats": "lots"}},
+        headers=HEADERS,
+    )
+
+    assert r.status_code == 400
+    assert "repeats" in r.json()["detail"]
+    assert store.all_requests() == []  # malformed, so no log line
+
+    # A boolean is not a repeat count either, though Python counts it as
+    # an int.
+    r = client.post(
+        "/run",
+        json={"action": "time_baseline", "region": cfg.region_id, "config": {"repeats": True}},
+        headers=HEADERS,
+    )
+    assert r.status_code == 400
+    assert "repeats" in r.json()["detail"]
 
 
 def test_unknown_action_and_the_componentless_accept_row_are_rejected(tmp_path):
