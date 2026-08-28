@@ -130,3 +130,48 @@ def test_status_with_a_configuration_file_shows_the_tree_the_gateway_shows(tmp_p
 
     assert rc == 0
     assert from_cli == from_gateway
+
+
+def test_session_command_runs_end_to_end(tmp_path, capsys):
+    import yaml
+
+    from equivalent.gateway.submit import init_baseline_repo
+    from equivalent.ledger.records import RequestLogLine
+
+    strategies = Path(__file__).resolve().parents[2] / "strategy" / "files"
+    seed = tmp_path / "seed"
+    (seed / "src").mkdir(parents=True)
+    (seed / "src" / "mod_kernel.f90").write_text("subroutine step\nend subroutine\n")
+    baseline = init_baseline_repo(tmp_path / "repo", seed)
+    (tmp_path / "working").mkdir()
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+
+    config_path = tmp_path / "gateway.yaml"
+    config_path.write_text(yaml.safe_dump({
+        "version": 1,
+        "paths": {
+            "repo": str(tmp_path / "repo"),
+            "ledger_root": str(tmp_path / "ledger"),
+            "working_copy": str(tmp_path / "working"),
+            "strategies": str(strategies),
+            "sessions": str(sessions),
+        },
+        "regions": {"ch04:step": {"spec_path": "notes/regions/ch04-step.sese.yaml",
+                                  "strategy": "stdpar_managed"}},
+    }))
+
+    store = LedgerStore(tmp_path / "ledger" / baseline / "ch04-step")
+    store.append_request(RequestLogLine(
+        ts="2026-01-01T00:00:00Z", session="sess-1", model="m", endpoint="run", action="sese_check",
+        region="ch04:step", tree="a" * 64, config_hash="cfg", outcome="claim", claim_id="c-0001",
+        tool_call_id="tool:1:aaa",
+    ))
+
+    rc = main(["session", "sess-1", "--config", str(config_path), "--region-id", "ch04:step", "--json"])
+    parsed = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert [row["who"] for row in parsed["timeline"]] == ["sese_check"]
+    assert parsed["unmatched_requests"][0]["tool_call_id"] == "tool:1:aaa"
+    assert parsed["summary"]["time_to_acceptance"] == "not accepted"

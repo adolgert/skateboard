@@ -13,6 +13,12 @@ None of the tools take arguments. `submit` in particular names no path:
 the gateway reads the working copy its own configuration gives the
 region, so the session edits its files and calls `submit` with nothing.
 
+Every `/submit` and `/run` carries three identifying headers —
+`X-Session-Id`, `X-Model-Id`, and `X-Tool-Call-Id`, the last being pi's
+own id for the tool call being executed — so the gateway's request log
+and the session file can be lined up call by call rather than matched by
+order and second-granularity timestamps.
+
 ## Configuration
 
 Three environment variables, all required:
@@ -48,8 +54,9 @@ deployment configuration, not extension code — set one of:
 
 The deployment's agent container sets this; `test/sdk.test.ts` proves
 the mechanism by running a real (scripted-model) session against a
-session directory and reading the tool calls back out of the session
-file.
+session directory and a stubbed gateway, then checking that the session
+id and tool-call id the gateway received are the ones the session file
+records for that call.
 
 ## Development
 

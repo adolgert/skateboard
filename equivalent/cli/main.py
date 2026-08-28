@@ -17,6 +17,11 @@ configuration file) and `--region-id` instead reads the repository too,
 and then the tree shown here is the same one the gateway's status
 endpoint reports.
 
+`session` needs the configuration file for a second reason: the agent's
+own transcripts are written somewhere the ledger directory does not
+name, and the configuration file is where that directory is written down
+once for every tool that reads it.
+
 Both readers use the one configuration loader, so there is no second
 description of where a region's files live. What differs is the machine:
 the paths inside the file are the paths of whoever reads it. Run this
@@ -36,9 +41,10 @@ from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 
-from . import render
+from . import render, session
 
 CONFIG_HELP = "gateway configuration file, read with --region-id to show the repository's current tree"
+SESSION_CONFIG_HELP = "gateway configuration file; it names both the ledger and the sessions directory"
 
 
 def _add_region_arguments(parser: argparse.ArgumentParser) -> None:
@@ -67,7 +73,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_requests = sub.add_parser("requests", help="the request log as a timeline")
     p_requests.add_argument("region_dir")
 
+    p_session = sub.add_parser(
+        "session", help="one agent session beside the request log it produced",
+    )
+    p_session.add_argument("session_id", help="the session to read, as the request log spells it")
+    p_session.add_argument("--config", required=True, help=SESSION_CONFIG_HELP)
+    p_session.add_argument("--region-id", required=True, help="which region in --config to read")
+    p_session.add_argument("--json", action="store_true")
+
     return parser
+
+
+def _named_region(parser: argparse.ArgumentParser, config_path, region_id):
+    """The one region a --config/--region-id pair names, and the whole configuration around it."""
+    config = load_gateway_config(config_path)
+    cfg = config.regions.get(region_id)
+    if cfg is None:
+        parser.error(f"no region '{region_id}' in {config_path}; it has {sorted(config.regions)}")
+    return config, cfg
 
 
 def _open_region(parser: argparse.ArgumentParser, args):
@@ -88,10 +111,7 @@ def _open_region(parser: argparse.ArgumentParser, args):
     if args.region_dir is not None:
         return LedgerStore(args.region_dir), None, None, Path(args.region_dir).name
 
-    config = load_gateway_config(args.config)
-    cfg = config.regions.get(args.region_id)
-    if cfg is None:
-        parser.error(f"no region '{args.region_id}' in {args.config}; it has {sorted(config.regions)}")
+    _, cfg = _named_region(parser, args.config, args.region_id)
     store = LedgerStore(cfg.ledger_dir)
     tree_sha, frozen_sha = current_tree_and_frozen(cfg.repo_dir, cfg.region_id, store, cfg.spec_path)
     return (
@@ -100,6 +120,54 @@ def _open_region(parser: argparse.ArgumentParser, args):
         Subject(kind="frozen", sha256=frozen_sha),
         cfg.region_id,
     )
+
+
+def _run_session(parser: argparse.ArgumentParser, args) -> int:
+    """Print one session's timeline and summary.
+
+    A missing transcript is not an error. The gateway's own log is the
+    half that matters, and a session driven from the command line rather
+    than by an agent leaves no transcript at all -- so the timeline is
+    printed one-sided, with the first line saying which half is absent.
+    """
+    config, cfg = _named_region(parser, args.config, args.region_id)
+    if config.paths.sessions is None:
+        print("this deployment names no sessions directory", file=sys.stderr)
+        return 1
+
+    store = LedgerStore(cfg.ledger_dir)
+    requests = [line for line in store.all_requests() if line.session == args.session_id]
+
+    path = session.find_session_file(config.paths.sessions, args.session_id)
+    events = []
+    note = None
+    if path is None:
+        note = (
+            f"no session file for {args.session_id} in {config.paths.sessions}; "
+            f"showing the request log alone"
+        )
+    else:
+        _, _, events = session.read_session(path)
+
+    joined = session.join(events, requests, session.claim_verdicts(store))
+    summary = session.summarize(store, args.session_id, requests, events, joined)
+
+    if args.json:
+        print(json.dumps({
+            "note": note,
+            "timeline": [row.to_dict() for row in joined.rows],
+            "unmatched_calls": [event.to_dict() for event in joined.unmatched_calls],
+            "unmatched_requests": [line.to_dict() for line in joined.unmatched_requests],
+            "summary": summary.to_dict(),
+        }, indent=2, sort_keys=True))
+        return 0
+
+    if note is not None:
+        print(note)
+    print(render.render_timeline(joined), end="")
+    print()
+    print(render.render_session_summary(summary), end="")
+    return 0
 
 
 def main(argv=None) -> int:
@@ -123,6 +191,9 @@ def main(argv=None) -> int:
         else:
             print(render.render_history(history), end="")
         return 0
+
+    if args.command == "session":
+        return _run_session(parser, args)
 
     store = LedgerStore(args.region_dir)
 

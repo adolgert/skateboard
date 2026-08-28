@@ -78,6 +78,7 @@ paths:
   working_copy: ${here}/state/working
   datasets_root: ${repo_root}/demo/orchestrator/datasets
   strategies: ${repo_root}/equivalent/strategy/files
+  sessions: ${here}/state/sessions
 regions:
   "${region}":
     spec_path: notes/regions/ch04-step.sese.yaml

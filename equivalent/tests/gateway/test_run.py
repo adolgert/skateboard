@@ -255,3 +255,48 @@ def test_ready_action_without_a_configured_builder_reports_that_plainly(tmp_path
 
     assert body["error"] == "builder not configured"
     assert store.all_requests()[-1].outcome == "error"
+
+
+def test_run_records_the_caller_tool_call_id_whatever_the_outcome(tmp_path):
+    # The caller's own id for the tool call it is serving, so that a
+    # session transcript and the request log can be lined up call by call
+    # instead of guessed at from one-second timestamps. Every outcome
+    # writes its line the same way, so a refusal is as traceable back to
+    # the call that caused it as a claim is.
+    client, cfg, store = _client(tmp_path)
+    allow_globs = [SPEC_PATH]
+    baseline = tracked_files(cfg.repo_dir, "main")
+    frozen_sha = frozen_subject([f for f in baseline if f["path"] not in allow_globs]).sha256
+    store.record_claim(
+        [Subject(kind="frozen", sha256=frozen_sha)], "sese/verified",
+        Predicate(tool="sese_check", version="0.1", configHash=config_hash({}), verdict="pass",
+                  detail={"allow_globs": allow_globs}),
+        [], "sess-0",
+    )
+
+    client.post(
+        "/run", json={"action": "sese_check", "region": cfg.region_id, "config": {}},
+        headers={**HEADERS, "X-Tool-Call-Id": "tool:1:aaa"},
+    )
+    client.post(
+        "/run", json={"action": "run_replay", "region": cfg.region_id, "config": {}},
+        headers={**HEADERS, "X-Tool-Call-Id": "tool:1:bbb"},
+    )
+    client.post(
+        "/run", json={"action": "time_baseline", "region": cfg.region_id, "config": {}},
+        headers={**HEADERS, "X-Tool-Call-Id": "tool:1:ccc"},
+    )
+
+    assert [(line.outcome, line.tool_call_id) for line in store.all_requests()] == [
+        ("duplicate", "tool:1:aaa"), ("refused", "tool:1:bbb"), ("error", "tool:1:ccc"),
+    ]
+
+
+def test_a_run_without_the_header_records_no_tool_call_id(tmp_path):
+    client, cfg, store = _client(tmp_path)
+
+    client.post("/run", json={"action": "build_replay", "region": cfg.region_id, "config": {}}, headers=HEADERS)
+
+    line = store.all_requests()[-1]
+    assert line.tool_call_id is None
+    assert "tool_call_id" not in line.to_dict()

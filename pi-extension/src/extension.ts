@@ -2,8 +2,9 @@
  * Trust role: none. Delete this and no claim changes -- the gateway
  * remains the only thing that decides anything. This just registers one
  * tool per gateway action, plus `submit` and `status`, and forwards
- * calls with the session id and model id attached so the gateway's
- * request log can be joined with the session files.
+ * calls with the session id, the model id, and the id of the tool call
+ * itself attached, so the gateway's request log can be joined with the
+ * session files call by call.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -36,8 +37,8 @@ export default function equivalentExtension(pi: ExtensionAPI) {
         label: row.name,
         description: describeRow(row),
         parameters: Type.Object({}),
-        async execute(_toolCallId, _params, _signal, _onUpdate, execCtx) {
-          const body = (await postRun(cfg, row.name, execCtx)) as RunBody;
+        async execute(toolCallId, _params, _signal, _onUpdate, execCtx) {
+          const body = (await postRun(cfg, row.name, execCtx, toolCallId)) as RunBody;
           return {
             content: [{ type: "text", text: runResultText(row.name, body) }],
             details: body as unknown as Record<string, unknown>,
@@ -55,8 +56,8 @@ export default function equivalentExtension(pi: ExtensionAPI) {
         "allow-list are kept; anything else is ignored and named in the receipt. " +
         "Returns the resulting tree and frozen hashes.",
       parameters: Type.Object({}),
-      async execute(_toolCallId, _params, _signal, _onUpdate, execCtx) {
-        const body = (await postSubmit(cfg, execCtx)) as SubmitBody;
+      async execute(toolCallId, _params, _signal, _onUpdate, execCtx) {
+        const body = (await postSubmit(cfg, execCtx, toolCallId)) as SubmitBody;
         return {
           content: [{ type: "text", text: submitResultText(body) }],
           details: body as unknown as Record<string, unknown>,

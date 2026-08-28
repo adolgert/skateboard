@@ -95,7 +95,7 @@ describe("equivalentExtension", () => {
     expect(result.content[0].text).toContain("sese_check");
   });
 
-  it("sends the session id and model id as headers on every /run and /submit call", async () => {
+  it("sends the session id, model id, and tool call id on every /run and /submit call", async () => {
     const table = [
       { name: "sese_check", emits: ["sese/verified"], requires: [], deterministic: true, component: "analyzer:check_sese" },
     ];
@@ -113,15 +113,40 @@ describe("equivalentExtension", () => {
     const ctx = fakeCtx();
     await pi.handlers.get("session_start")({}, ctx);
 
-    await pi.tools.get("sese_check").execute("call-1", {}, undefined, undefined, ctx);
-    await pi.tools.get("submit").execute("call-2", {}, undefined, undefined, ctx);
+    await pi.tools.get("sese_check").execute("tool:1787913327226:mu24lznsjv", {}, undefined, undefined, ctx);
+    await pi.tools.get("submit").execute("tool:1787913327226:zfppu5ar7hf", {}, undefined, undefined, ctx);
 
     const runHeaders = fetchMock.mock.calls[1][1].headers;
     const submitHeaders = fetchMock.mock.calls[2][1].headers;
     expect(runHeaders["X-Session-Id"]).toBe("sess-1");
     expect(runHeaders["X-Model-Id"]).toBe("claude-sonnet-5");
+    expect(runHeaders["X-Tool-Call-Id"]).toBe("tool:1787913327226:mu24lznsjv");
     expect(submitHeaders["X-Session-Id"]).toBe("sess-1");
     expect(submitHeaders["X-Model-Id"]).toBe("claude-sonnet-5");
+    expect(submitHeaders["X-Tool-Call-Id"]).toBe("tool:1787913327226:zfppu5ar7hf");
+  });
+
+  it("leaves the tool call id off /table and /status, which the gateway does not log", async () => {
+    const table = [
+      { name: "sese_check", emits: ["sese/verified"], requires: [], deterministic: true, component: "analyzer:check_sese" },
+    ];
+    const status = { tree: "T1", frozen: "F0", rows: [], accepted: false };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(table))
+      .mockResolvedValueOnce(jsonResponse(status));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pi = fakePi();
+    equivalentExtension(pi as any);
+    const ctx = fakeCtx();
+    await pi.handlers.get("session_start")({}, ctx);
+    await pi.tools.get("status").execute("tool:1787913327226:jvzns42um", {}, undefined, undefined, ctx);
+
+    const tableHeaders = fetchMock.mock.calls[0][1].headers;
+    const statusHeaders = fetchMock.mock.calls[1][1].headers;
+    expect(tableHeaders["X-Tool-Call-Id"]).toBeUndefined();
+    expect(statusHeaders["X-Tool-Call-Id"]).toBeUndefined();
   });
 
   it("submits the region alone -- no path the gateway would then read", async () => {

@@ -146,3 +146,32 @@ def test_an_uninitialized_repository_is_seeded_only_when_the_caller_asks(tmp_pat
 
     config = load_gateway_config(path, seed_if_empty=True)
     assert len(config.baseline_commit) == 40
+
+
+def test_a_sessions_directory_is_read_when_named_and_is_none_when_not(tmp_path):
+    # The gateway never reads this one. It is written down here so that a
+    # tool reading a ledger finds the transcripts of the same deployment
+    # without being told a second time.
+    path, _ = _tree(tmp_path, CONFIG)
+    raw = yaml.safe_load(path.read_text())
+    raw["paths"]["sessions"] = str(tmp_path / "sessions")
+    path.write_text(yaml.safe_dump(raw))
+
+    assert load_gateway_config(path).paths.sessions == tmp_path / "sessions"
+
+    del raw["paths"]["sessions"]
+    path.write_text(yaml.safe_dump(raw))
+
+    assert load_gateway_config(path).paths.sessions is None
+
+
+def test_a_sessions_directory_that_is_not_on_this_machine_is_not_an_error(tmp_path):
+    # The gateway runs where the transcripts are not, so a directory that
+    # does not resolve here must not stop the file from loading; whoever
+    # needs to read it says so then.
+    path, _ = _tree(tmp_path, CONFIG)
+    raw = yaml.safe_load(path.read_text())
+    raw["paths"]["sessions"] = str(tmp_path / "nowhere")
+    path.write_text(yaml.safe_dump(raw))
+
+    assert load_gateway_config(path).paths.sessions == tmp_path / "nowhere"

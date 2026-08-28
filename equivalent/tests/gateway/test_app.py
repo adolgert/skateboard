@@ -169,3 +169,18 @@ def test_healthz_answers_without_a_token(tmp_path):
 
     assert r.status_code == 200
     assert r.json() == {"ok": True}
+
+
+def test_submit_records_the_caller_tool_call_id_when_it_sends_one(tmp_path):
+    client, cfg = _client(tmp_path)
+    store = LedgerStore(cfg.ledger_dir)
+    (cfg.working_copy_dir / "notes" / "regions").mkdir(parents=True)
+    (cfg.working_copy_dir / "notes" / "regions" / "ch04-step.sese.yaml").write_text("region: ch04:step\n")
+
+    client.post("/submit", json={"region": cfg.region_id},
+                headers={**HEADERS, "X-Tool-Call-Id": "tool:1:ccc"})
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+
+    first, second = store.all_requests()
+    assert first.tool_call_id == "tool:1:ccc"
+    assert second.tool_call_id is None

@@ -195,6 +195,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         authorization: str | None = Header(default=None),
         x_session_id: str = Header(...),
         x_model_id: str = Header(...),
+        x_tool_call_id: str | None = Header(default=None),
     ):
         _auth(authorization)
         cfg = _region(req.region)
@@ -205,6 +206,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         store.append_request(RequestLogLine(
             ts=_now(), session=x_session_id, model=x_model_id, endpoint="submit", action="submit",
             region=req.region, tree=receipt.tree, config_hash=None, outcome="submitted",
+            tool_call_id=x_tool_call_id,
         ))
         return {
             "tree": receipt.tree,
@@ -220,6 +222,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         authorization: str | None = Header(default=None),
         x_session_id: str = Header(...),
         x_model_id: str = Header(...),
+        x_tool_call_id: str | None = Header(default=None),
     ):
         _auth(authorization)
         cfg = _region(req.region)
@@ -253,6 +256,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 ts=_now(), session=x_session_id, model=x_model_id, endpoint="run", action=req.action,
                 region=req.region, tree=tree_sha, config_hash=cfg_hash, outcome=outcome,
                 claim_id=claim_id, missing=tuple(missing) if missing else None,
+                tool_call_id=x_tool_call_id,
             ))
 
         missing = [

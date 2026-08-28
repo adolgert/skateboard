@@ -14,6 +14,15 @@ import httpx
 # itself is willing to wait on its builder (equivalent.gateway.backend_client).
 TIMEOUT = httpx.Timeout(connect=10.0, read=1800.0, write=60.0, pool=10.0)
 
+# The caller's own id for the tool call behind a request. Optional: it is
+# what lines a session transcript up with the request log call by call.
+TOOL_CALL_HEADER = "X-Tool-Call-Id"
+
+
+def _call_header(tool_call_id: str | None) -> dict:
+    """The tool-call header, or nothing at all when there is no id to send."""
+    return {TOOL_CALL_HEADER: tool_call_id} if tool_call_id is not None else {}
+
 
 class GatewayClient:
     def __init__(self, http: httpx.Client):
@@ -29,15 +38,24 @@ class GatewayClient:
         r.raise_for_status()
         return r.json()
 
-    def submit(self, region: str) -> dict:
+    def submit(self, region: str, tool_call_id: str | None = None) -> dict:
         """The gateway reads the region's own configured working copy; a
-        submit names only which region is being submitted."""
-        r = self._http.post("/submit", json={"region": region})
+        submit names only which region is being submitted.
+
+        `tool_call_id` is for a caller that is a model's tool call and
+        wants its request log line to name that call. A caller driving
+        the gateway directly leaves it out.
+        """
+        r = self._http.post("/submit", json={"region": region}, headers=_call_header(tool_call_id))
         r.raise_for_status()
         return r.json()
 
-    def run(self, action: str, region: str, config: dict | None = None) -> dict:
-        r = self._http.post("/run", json={"action": action, "region": region, "config": config or {}})
+    def run(self, action: str, region: str, config: dict | None = None, tool_call_id: str | None = None) -> dict:
+        r = self._http.post(
+            "/run",
+            json={"action": action, "region": region, "config": config or {}},
+            headers=_call_header(tool_call_id),
+        )
         r.raise_for_status()
         return r.json()
 

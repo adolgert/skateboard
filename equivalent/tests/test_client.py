@@ -66,3 +66,15 @@ def test_client_run_matches_calling_the_endpoint_directly(tmp_path):
     result = client.run("build_replay", cfg.region_id, {})
 
     assert result["refused"] is True
+
+
+def test_client_passes_the_caller_tool_call_id_through_to_the_request_log(tmp_path):
+    from equivalent.ledger.store import LedgerStore
+
+    client, fastapi_client, cfg = _client_pair(tmp_path)
+    store = LedgerStore(cfg.ledger_dir)
+
+    client.run("build_replay", cfg.region_id, {}, tool_call_id="tool:1:aaa")
+    client.run("build_replay", cfg.region_id, {})
+
+    assert [line.tool_call_id for line in store.all_requests()] == ["tool:1:aaa", None]

@@ -126,3 +126,16 @@ def test_pass_writes_exactly_one_claim_outcome_request_line(tmp_path):
     assert len(requests) == 1
     assert requests[0].outcome == "claim"
     assert requests[0].claim_id is not None
+
+
+def test_the_claim_line_names_the_tool_call_that_asked_for_it(tmp_path):
+    client, cfg, store = _client(tmp_path, CLEAN_SOURCE, hi=5)
+
+    client.post(
+        "/run", json={"action": "sese_check", "region": cfg.region_id, "config": {}},
+        headers={**HEADERS, "X-Tool-Call-Id": "tool:1787913327226:mu24lznsjv"},
+    )
+
+    line = store.all_requests()[0]
+    assert line.outcome == "claim"
+    assert line.tool_call_id == "tool:1787913327226:mu24lznsjv"

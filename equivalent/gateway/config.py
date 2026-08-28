@@ -18,6 +18,7 @@ The file has two sections::
       datasets_root: /datasets
       strategies: /strategies
       seed: /seed
+      sessions: /sessions
     regions:
       "ch04:step":
         spec_path: notes/regions/ch04-step.sese.yaml
@@ -29,6 +30,12 @@ at `<ledger_root>/<baseline commit>/<region id with ':' replaced by
 '-'>`, the strategy at `<strategies>/<strategy>.yaml`, and the visible
 dataset at `<datasets_root>/<visible_dataset>`. Nothing spells those
 layouts a second time.
+
+`sessions` is the odd one out: it names where the agent's own session
+transcripts are written, which nothing in the gateway ever reads. It is
+here so that a tool reading a ledger can find the transcripts belonging
+to the same deployment. A deployment whose transcripts live elsewhere
+leaves the key out.
 """
 from __future__ import annotations
 
@@ -44,7 +51,7 @@ VERSION = 1
 
 TOP_LEVEL_KEYS = ("version", "paths", "regions")
 REQUIRED_PATH_KEYS = ("repo", "ledger_root", "working_copy", "strategies")
-OPTIONAL_PATH_KEYS = ("datasets_root", "seed")
+OPTIONAL_PATH_KEYS = ("datasets_root", "seed", "sessions")
 REQUIRED_REGION_KEYS = ("spec_path", "strategy")
 OPTIONAL_REGION_KEYS = ("visible_dataset",)
 
@@ -59,6 +66,13 @@ class Paths:
     strategies: Path
     datasets_root: Path | None = None
     seed: Path | None = None
+    # Where the agent's own session transcripts are written. The gateway
+    # never reads this -- it is here so the reading tools find the
+    # transcripts of the same deployment the ledger belongs to, rather
+    # than being told a second time on the command line. It is not
+    # checked at load time, because the machine running the gateway need
+    # not be the machine holding the transcripts.
+    sessions: Path | None = None
 
 
 @dataclass(frozen=True)

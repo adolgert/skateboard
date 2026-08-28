@@ -1,0 +1,6 @@
+10:35:27.276  sess  user                 submit the region and run the sese check
+10:35:27.279  both  submit               -> submitted tree abc123
+10:35:27.281  sess  assistant            Submitted. Now the SESE check.
+10:35:27.281  sess  user                 continue
+10:35:27.282  both  sese_check           -> claim c-7 pass
+10:35:27.283  sess  assistant            The region is verified.

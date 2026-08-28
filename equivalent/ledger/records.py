@@ -102,6 +102,12 @@ class RequestLogLine:
     outcome: str  # one of: claim, refused, duplicate, error, submitted
     claim_id: str | None = None
     missing: tuple | None = None  # present when outcome == "refused"
+    # The caller's own id for the tool call that made this request, when
+    # the caller sent one. It is what lets a session transcript and this
+    # log be lined up call by call instead of guessed at by timestamp.
+    # Callers that are not a model's tool call send nothing and the field
+    # is left out of the line entirely.
+    tool_call_id: str | None = None
     version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -121,6 +127,8 @@ class RequestLogLine:
             d["claim_id"] = self.claim_id
         if self.missing is not None:
             d["missing"] = list(self.missing)
+        if self.tool_call_id is not None:
+            d["tool_call_id"] = self.tool_call_id
         return d
 
     @classmethod
@@ -138,5 +146,6 @@ class RequestLogLine:
             outcome=d["outcome"],
             claim_id=d.get("claim_id"),
             missing=tuple(missing) if missing is not None else None,
+            tool_call_id=d.get("tool_call_id"),
             version=d.get("version", SCHEMA_VERSION),
         )
