@@ -2,9 +2,9 @@
 
 This manual is for a person who sits at a `pi` session and ports one
 region of Fortran code to the GPU with help from a model. It explains
-what the pieces are, what the workflow looks like, and how to read what
-comes back. It assumes the containers, the gateway, and the extension
-are already installed and configured.
+what the pieces are, what the session looks like from start to
+acceptance, and how to read what comes back. It assumes the services are
+running and you are logged in; `pi-install.md` covers that.
 
 ## Why this setup exists
 
@@ -15,206 +15,313 @@ If it made a mistake, or described the results too kindly, nothing in
 the transcript would show that.
 
 This setup separates doing the work from judging the work. The model
-edits a working copy and can try anything it likes there, but nothing it
-does locally counts as evidence. To make progress it must send its edit
-to a separate service, called the gateway, which runs each check itself
-and writes the result to an append-only record, called the ledger. The
-gateway also refuses to run a check before the checks it depends on have
-passed. When the ledger shows every required check passing on one
-version of the code, the port is accepted.
+edits a working copy and can try anything it likes there — it has the
+same compilers and the same GPU — but nothing it does locally counts as
+evidence. To make progress it must submit its edit to a separate
+service, the gateway, which runs each check itself and writes the result
+to an append-only record, the ledger. The gateway also refuses to run a
+check before the checks it depends on have passed. When the ledger shows
+every required check passing on one version of the code, the port is
+accepted.
 
 The result is that you, and anyone who reviews the port later, can read
 the ledger instead of trusting the transcript. Every claim in it names
 the exact version of the code it applies to, the check that produced it,
-and the session that asked for it.
+the strategy that was in force, and the session that asked for it. And
+because the gateway also logs every request with the id of the tool call
+that made it, the transcript and the ledger can be laid side by side
+afterwards, call by call.
 
 ## The pieces
 
 **The region.** A port is done one region at a time. A region is a small
-part of the program, named in a spec file, with a defined entry and
-exit. The session is configured for one region.
+part of the program with one way in and one way out, named in a spec
+file. The session is configured for one region; today that is
+`ch04:step`, the time-step routine of a shallow-water solver.
 
-**The working copy.** A directory that the model can edit freely. It
-starts as a copy of the baseline code. Compiling or running things here
-is allowed and useful for exploration, but produces no evidence.
+**The working copy.** `/working` inside the session: a directory the
+model can edit freely, which starts as a copy of the baseline code. The
+model's ordinary tools (`read`, `edit`, `write`, `bash`) work here, and
+`nvfortran` is on the path, so compiling and running locally is allowed
+and useful. It produces no evidence.
 
 **The gateway.** The one service the session can reach. It holds its own
-copy of the code, receives submissions, runs checks, and writes the
-ledger. The model cannot reach the checkers, the reference data, or the
-ledger directly.
+copy of the code, reads the working copy when asked to submit, runs
+checks, and writes the ledger. The model cannot reach the builder, the
+reference data, or the ledger directly.
 
 **The ledger.** One directory per region containing every claim ever
 recorded and a log of every request the gateway received. Nothing in it
-is ever changed or deleted. You can read it at any time with the ledger
-command described near the end of this manual.
+is ever changed or deleted. You can read it at any time with the
+`ledger` command described near the end of this manual.
 
 **The strategy.** A configuration file, chosen by a person before the
-session, that fixes the porting approach: which files may change, which
-compiler and flags are used, and which checks apply. The model cannot
-change it. Every claim records which strategy was in effect.
+session, that fixes the porting approach: which files may change at
+most, which compiler and flags are used, how GPU execution is proven,
+and which sanitizers run. The model cannot change it. Every claim
+records which strategy was in effect.
+
+**The spec.** A short YAML file, `notes/regions/ch04-step.sese.yaml` in
+the working copy, that names the region: which source file, which
+subroutine, and which lines. The model writes it, at the start of the
+session, and it is the first thing submitted.
 
 **The allow-list.** The set of files the region is permitted to change.
-Files outside it are frozen. At the start of a region only the spec file
-is on the list; the first check widens it to the region's own files.
+Files outside it are frozen. Before the spec has been checked, only the
+spec file itself is on the list. Once the analyzer has passed the spec,
+the list is the spec file plus the one source file the spec names. The
+strategy sets a ceiling on this (`src/*.f90` and the spec directory), so
+a spec cannot unfreeze anything outside it.
 
 ## Starting a session
 
-Start `pi` as usual. The extension connects to the gateway, fetches the
-list of available actions, and registers one tool for each, plus a
-`submit` tool and a `status` tool. A short message confirms this, for
-example:
+`pi` starts inside the agent container with the extension loaded. The
+extension connects to the gateway, fetches the list of actions, and
+registers one tool for each, plus `submit` and `status`. One line
+confirms it:
 
     equivalent: registered 10 tools for region ch04:step
 
-If the message reports a configuration error instead, the three
-environment variables `EQUIVALENT_GATEWAY_URL`,
-`EQUIVALENT_GATEWAY_TOKEN`, and `EQUIVALENT_REGION` are not all set.
-That is a deployment problem, not something to fix inside the session.
+If a configuration error is reported instead, the session cannot reach
+the gateway; that is a deployment problem, not something to fix from
+inside the session.
 
-You talk to the model in plain language. The model calls the tools. You
-can also type `/status` at any time to see the region's current state
-yourself, without asking the model.
+You talk to the model in plain language and it calls the tools. None of
+the tools take arguments: `submit` sends whatever is in the working
+copy, and each check runs against whatever was last submitted. You can
+also type `/status` yourself at any time to see the region's state
+without asking the model.
 
-## The checks, in order
+## A session from start to acceptance
 
-Each check depends on earlier ones. The gateway enforces the order, so
-you do not need to; if the model calls a check too early, the gateway
-refuses and says what is missing. The usual sequence is:
+What follows is the shape of a complete port. The gateway enforces the
+order, so you do not have to; if the model calls a check too early it is
+refused and told what is missing, and a capable model reads that and
+does the right thing. Your job is to state the goal, watch, and step in
+when the model is stuck or wrong.
 
-1. **`sese_check`** — The static analyzer confirms the region described
-   in the spec file has clean control flow: one way in, one way out, no
-   goto, no early return. Nothing else can run until this passes. A pass
-   also widens the allow-list from the spec file alone to the region's
-   source files, which is what makes editing possible.
+### 1. Write the spec and have it checked
 
-2. **`submit`** — Not a check. This sends the working copy to the
-   gateway. The gateway keeps only the files on the allow-list, lays
-   them over a clean copy of the baseline, and answers with two
-   identifiers: the *tree*, which names this exact version of the code,
-   and the *frozen* value, which names everything that was not allowed
-   to change. Every later claim is attached to one of these. The answer
-   also warns about files that were sent but ignored, and about allowed
-   files that were not sent.
+Ask the model to write the region spec. It needs to read the source to
+find the line range. For `ch04:step` the file is:
 
-3. **`build_replay`** — The gateway's builder compiles the submitted
-   tree with the strategy's compiler flags and links it with a test
-   harness. The claim records the exact flags used.
+    region: ch04:step
+    anchor:
+      file: src/mod_kernel.f90
+      pst_node: "step@34-43"
+      entry_symbol: step
 
-4. **`run_replay`** — The built program runs on recorded inputs, on the
-   GPU. The gateway counts kernel launches. A program that runs but
-   launches no GPU kernels fails this check, even if its output is
-   correct, because the point of the port is that the work happens on
-   the GPU.
+`pst_node` is the subroutine name and the inclusive line range of its
+body, from `subroutine step` through `end subroutine step`. A spec can
+also list callees whose bodies the analyzer should scan, under
+`closure: {callees: [{name: ..., lines: "lo-hi"}]}`, but `step`'s
+callee is in another module and is not part of the region.
 
-5. **`sanitize`** — The GPU memory and race checkers run over the
-   program. This produces three results at once: memcheck, racecheck,
-   and initcheck. The first two are required for acceptance; initcheck
-   is recorded for information.
+Then the model calls `submit`, and then `sese_check`. The analyzer
+scans the named lines for anything that would break single-entry,
+single-exit control flow: `goto`, an early `return`, `entry`, `stop`. A
+pass widens the allow-list to include `src/mod_kernel.f90`, which is
+what makes editing possible. The answer looks like:
 
-6. **`regression_visible`** — The outputs from the run are compared
-   against reference outputs, for the set of test cases the session is
-   allowed to see. The result includes a per-case breakdown.
+    sese_check: pass (c-0001)
 
-7. **`regression_holdout`** — The same comparison against a second set
-   of test cases that the session never sees. The answer is pass or fail
-   only, with no detail, so a port cannot be tuned to the held-out
-   cases. The full comparison stays in the ledger for a person to read.
+Nothing else can run until this exists.
 
-8. **`time_port`** — The ported program is timed. This is the last gate
-   before acceptance.
+A note on trust: the model chose the line range. A range that covers
+nothing would pass trivially. The spec is in the submitted tree, so you
+can read it, and the ledger records the tree; but the analyzer's verdict
+is only as meaningful as the range it was given.
 
-9. **`time_baseline`** — The original, unmodified program is timed for
-   comparison. This has no prerequisites and can run at any point; once
-   per region is enough, because it measures the baseline, not the port.
+### 2. Port the kernel
 
-Both timing actions accept an optional `repeats` setting that controls
-how many timed runs are made.
+Ask the model to port `step` to the GPU. The strategy `stdpar_managed`
+compiles with `-stdpar=gpu`, so the expected shape is `do concurrent`
+loops. The model can compile and run locally to try things; encourage
+it to, since a local compile failure costs nothing and a submitted one
+becomes a permanent `fail` claim.
 
-When every required check has passed on one tree, `status` reports
-`ACCEPTED` for that tree. There is no separate accept action; acceptance
-is a fact about the ledger, not a step someone performs.
+### 3. Submit
+
+`submit` reads the working copy, keeps only the files on the allow-list,
+lays them over a clean copy of the baseline, and commits the result in
+the gateway's repository. It answers with two identifiers:
+
+    submitted -> tree d7c8d7867dea..., frozen 401d465b2259....
+      ignored: Makefile (not_allowed), src/mod_diff.f90 (not_allowed), ...
+
+The *tree* names this exact version of the code. The *frozen* value
+names everything that was not allowed to change. Every later claim is
+attached to one of these. The `ignored` list is the baseline files that
+were in the working copy but not on the allow-list; seeing the other
+source files there is normal, since the working copy holds the whole
+program. If a file the model meant to change is in that list, the change
+is outside the region.
+
+Submitting the same content twice yields the same tree and makes no new
+commit.
+
+### 4. Run the checks
+
+In order, each depending on the one before:
+
+**`build_replay`** — The builder compiles the submitted tree with the
+strategy's flags and links it with a replay harness. The claim records
+the flags. A compile error is a `fail` claim carrying the compiler's
+messages.
+
+**`run_replay`** — The built program runs on recorded inputs, on the
+GPU, with the driver's kernel-launch notifications turned on. The
+gateway counts launches. A program that runs but launches no kernels
+fails, even if its output is right, because the point of the port is
+that the work moved to the GPU.
+
+**`sanitize`** — `compute-sanitizer` runs the program under memcheck,
+racecheck, and initcheck. One call, three claims:
+
+    sanitize/memcheck: pass (c-0004)
+    sanitize/racecheck: pass (c-0005)
+    sanitize/initcheck: pass (c-0006)
+
+Memcheck and racecheck are required for acceptance; initcheck is
+recorded for information.
+
+**`regression_visible`** — The outputs recorded by `run_replay` are
+compared against the reference outputs for the visible test cases,
+under the oracle's tolerance policy. The answer includes the per-case
+comparison, and the claim names the policy's hash.
+
+**`regression_holdout`** — The same comparison on a second set of cases
+the session never sees. The answer is pass or fail only, so a port
+cannot be tuned to the held-out set. The full comparison stays in the
+ledger for a person.
+
+**`time_port`** — The full-size program is timed, five runs by default.
+This is the last requirement for acceptance. The claim records the
+flags, the run times, and whether the GPU was otherwise idle, which on a
+shared workstation it usually is not.
+
+**`time_baseline`** — The unmodified program is timed the same way, for
+comparison. It has no prerequisites, runs against the baseline tree
+rather than the submission, and is not required for acceptance; once
+per region is enough.
+
+The two timing checks accept a `repeats` setting; nothing else takes
+any configuration.
+
+### 5. Acceptance
+
+When every required check has passed on one tree, `/status` ends with
+`ACCEPTED`:
+
+    tree d7c8d7867dea...  frozen 401d465b2259...
+      sese/verified  pass  c-0001
+      build/replay  pass  c-0002
+      gpu/executed  pass  c-0003
+      sanitize/memcheck  pass  c-0004
+      sanitize/racecheck  pass  c-0005
+      regression/visible  pass  c-0007
+      regression/holdout  pass  c-0008
+      timing/port  pass  c-0009
+    ACCEPTED
+
+There is no accept action. Acceptance is a fact about the ledger, not a
+step someone performs, and the ledger's own `status` command reports the
+same thing from outside the session.
 
 ## Editing and re-checking
 
-Porting is rarely one pass. The normal loop is: the model edits the
-working copy, submits, and re-runs the checks that the edit invalidated.
+Porting is rarely one pass. The loop is: the model edits, submits, and
+re-runs the checks the edit invalidated.
 
-The rules for what an edit invalidates are simple. Every check except
-`sese_check` is attached to the tree, so any submitted change to the
-code means those checks must run again on the new tree. `sese_check` is
-attached to the frozen value instead, so it survives edits to the
-region's own files and does not need to be repeated after each change.
+Every check except `sese_check` is attached to the tree, so any
+submitted change to the code means those checks run again on the new
+tree. `sese_check` is attached to the frozen value instead — the set of files
+that were not allowed to change — so it survives edits to the region's
+own file. An edit to the spec does not invalidate it either; the
+allow-list comes from the recorded claim, not from the spec as it is
+now, so a changed spec has no effect until `sese_check` is run again.
 
 If the model asks for a check that already ran on the same tree with the
-same settings, the gateway returns the recorded result instead of
-running the check again. This is by design: repeating an identical
-request cannot produce a fresh chance at a different verdict.
+same settings, the gateway answers with the recorded claim instead of
+running again. Repeating an identical request cannot produce a fresh
+chance at a different verdict. Timing is the exception: it always runs
+again, and the newest measurement is the one that counts.
 
 ## Reading what comes back
 
-**A pass or fail** looks like this in the transcript:
+**A pass or fail** is a claim:
 
     build_replay: pass (c-0007)
 
-The identifier in parentheses is the claim id. You can look up the full
-record for any claim id in the ledger.
+The id in parentheses names the record in the ledger. A `fail` is a real
+verdict — the check ran and the code did not meet it — and the tool's
+result carries the detail: the compiler log, the sanitizer's findings,
+the cases that missed tolerance. The fix is to edit, submit, and run the
+check again. Failed claims stay in the ledger; they are history, not
+something to erase.
 
 **A refusal** means the check's prerequisites are not met. It is a
-normal answer, not an error, and it says exactly what to do:
+normal answer, not an error, and it says what to do:
 
     refused: 'build_replay' requires:
       - sese/verified is missing; run sese_check to produce it.
 
-The model reads this and is expected to run the missing check. If the
-prerequisite exists but failed, the refusal names the failing claim, so
-you can tell "never ran" apart from "ran and failed".
+If the prerequisite ran and failed, `/status` shows the failing claim's
+id beside the requirement, so "never ran" and "ran and failed" are
+distinguishable.
 
-**A failure** is a real verdict: the check ran and the code did not meet
-it. The detail explains why, for example the compiler log for a build
-failure or the list of violations for a control-flow failure. The fix is
-to edit, submit, and run the check again. Failed claims stay in the
-ledger; they are part of the history, not something to erase.
-
-**An error** means the check itself could not run, for example because
-the builder service is not reachable. No claim is recorded for an error.
-Errors are infrastructure problems for the person to fix, not something
-the model can edit its way around.
+**An error** means the check itself could not run — the builder is
+unreachable, or its compiled workspace is gone after a restart. No claim
+is recorded. Errors are for the person to fix; the model cannot edit its
+way around one.
 
 ## Watching from outside the session
 
-You do not have to go through the model to see where things stand. The
-`/status` command inside `pi` prints the current tree, each required
-check with its verdict and claim id, each missing check with the action
-that would produce it, and whether the region is accepted.
+`/status` inside `pi` shows the region's state. From a shell on the
+host, the `ledger` command reads the same records directly, without
+going through the gateway or the model. With `deploy/state/gateway.host.yaml`
+as the configuration:
 
-From a shell with access to the ledger directory, the ledger command
-reads the same records directly:
+    ledger status   --config <yaml> --region-id ch04:step     # current tree, each requirement
+    ledger history  --config <yaml> --region-id ch04:step     # every tree, with its claims
+    ledger show     <ledger-dir> c-0007                       # one claim, full detail
+    ledger requests <ledger-dir>                              # every request, in order
+    ledger session  <session-id> --config <yaml> --region-id ch04:step
 
-    python -m equivalent.cli.main status   <ledger-dir>   # current state
-    python -m equivalent.cli.main history  <ledger-dir>   # every tree, with its claims
-    python -m equivalent.cli.main show     <ledger-dir> c-0007   # one claim, full detail
-    python -m equivalent.cli.main requests <ledger-dir>   # every request, as a timeline
+`show` prints the complete record, including detail withheld from the
+session, because the ledger is for people. `requests` lists every
+request the gateway received — refused and repeated ones too — with the
+session that made it.
 
-`show` always prints the complete record, including detail that was
-withheld from the session, because the ledger is for people. The
-request log includes refused and repeated requests, each tagged with the
-session that made it, so you can reconstruct exactly what a session
-asked for and when.
+`session` is the review tool. It reads the gateway's request log and
+`pi`'s transcript of the session and prints them as one timeline: what
+you said, what the model said, each tool it called, and what the gateway
+answered, paired call by call. A tool call in the transcript with no
+matching request line, and a request line with no tool call, are both
+reported rather than hidden. It ends with a summary: submits, refusals,
+claims per check, failed verdicts, how many trees the session went
+through, and the time from the first request to acceptance. The session
+id is shown by `pi` and is the suffix of the transcript's filename under
+`deploy/state/sessions`.
 
 ## Things worth knowing
 
-- Work done in the working copy is invisible to the gateway until it is
-  submitted. If the model reports success but `status` shows checks
-  missing, the evidence does not exist yet.
-- Only files on the allow-list reach the gateway. The submit answer
-  names anything that was sent and ignored. If an intended change keeps
-  being ignored, the file is outside the allow-list, which usually means
-  the change does not belong in this region.
-- The gateway's builder keeps its compiled work between checks. If the
-  builder is restarted between a build and a later check, that check may
-  report that the binary is missing. Running `build_replay` again
-  rebuilds it; nothing is lost, because the code itself is in the
-  gateway's repository.
-- Timing runs are not repeatable in the way other checks are. Asking to
-  time again always runs again, and the newest measurement is the one
-  that counts.
+- Work in the working copy is invisible to the gateway until submitted.
+  If the model reports success but `/status` shows checks missing, the
+  evidence does not exist yet.
+- The model can compile and run in the working copy, and should. That
+  is exploration; only submitted checks count.
+- The spec decides which one source file is unfrozen, and the model
+  wrote the spec. Read it. The strategy caps what it can name, and
+  submitting always starts from the baseline, so pointing the spec at a
+  different file drops the edits to the first — but the choice of file
+  is the model's, and it is visible in the tree.
+- `status` calls leave no line in the request log; every other tool
+  does. The `session` timeline shows them as unlogged, which is
+  expected.
+- The builder keeps compiled work between checks. After a builder
+  restart, run `build_replay` again; the code is safe in the gateway's
+  repository.
+- Timing on a workstation that is also driving a display will report
+  the GPU as not exclusively yours. The numbers are still recorded;
+  read them knowing that.
