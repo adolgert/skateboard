@@ -166,7 +166,7 @@ python3 tools/fmutate/fmutate.py tools/fmutate/targets/tsunami.json --checked
 six operators — arithmetic (AOR), relational (ROR), logical (LCR), constant (CRP), **array
 section bound (SBR)**, and statement deletion (SDL). Each mutant: rebuild
 the replay driver against the mutated module, replay the 5 visible cases, and compare to
-`programs/tsunami/captures/visible` using the real `services/oracle/compare.py` and
+`programs/tsunami/captures/visible` using the real comparator (now `equivalent/capture/compare.py`) and
 `programs/tsunami/tolerances.json`, scored
 both under the tolerance policy and under bitwise equality. Mutants on lines a coverage
 prepass shows are never executed are not built at all.

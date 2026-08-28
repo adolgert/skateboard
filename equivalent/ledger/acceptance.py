@@ -47,6 +47,7 @@ ACCEPTANCE_REQUIREMENTS = (
     Requirement("sanitize/racecheck", "tree", "sanitize"),
     Requirement("regression/visible", "tree", "regression_visible"),
     Requirement("regression/holdout", "tree", "regression_holdout"),
+    Requirement("program/regression", "tree", "program_regression"),
     Requirement("timing/port", "tree", "time_port"),
 )
 

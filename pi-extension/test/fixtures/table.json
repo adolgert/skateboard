@@ -5,7 +5,8 @@
   { "name": "sanitize", "emits": ["sanitize/memcheck", "sanitize/racecheck", "sanitize/initcheck"], "requires": [["gpu/executed", "tree"]], "deterministic": true, "component": "builder:/v1/sanitize" },
   { "name": "regression_visible", "emits": ["regression/visible"], "requires": [["sanitize/memcheck", "tree"], ["sanitize/racecheck", "tree"]], "deterministic": true, "component": "oracle:/v1/compare" },
   { "name": "regression_holdout", "emits": ["regression/holdout"], "requires": [["regression/visible", "tree"]], "deterministic": true, "component": "oracle:/v1/compare" },
-  { "name": "time_port", "emits": ["timing/port"], "requires": [["regression/holdout", "tree"]], "deterministic": false, "component": "builder:/v1/time" },
+  { "name": "program_regression", "emits": ["program/regression"], "requires": [["regression/holdout", "tree"]], "deterministic": true, "component": "builder:/v1/time" },
+  { "name": "time_port", "emits": ["timing/port"], "requires": [["program/regression", "tree"]], "deterministic": false, "component": "builder:/v1/time" },
   { "name": "time_baseline", "emits": ["timing/baseline"], "requires": [], "deterministic": false, "component": "builder:/v1/time" },
   {
     "name": "accept",
@@ -18,6 +19,7 @@
       ["sanitize/racecheck", "tree"],
       ["regression/visible", "tree"],
       ["regression/holdout", "tree"],
+      ["program/regression", "tree"],
       ["timing/port", "tree"]
     ],
     "deterministic": true,

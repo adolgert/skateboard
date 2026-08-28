@@ -24,11 +24,8 @@ that compares the region's.
 """
 from __future__ import annotations
 
-import base64
-
-from equivalent.capture import npy
 from equivalent.gateway.submit import attempt_id_for_strategy
-from equivalent.ledger.capture_sets import store_capture_set
+from equivalent.ledger.capture_sets import PROGRAM_SET, program_arrays, store_program_set
 from equivalent.ledger.store import LedgerStore
 from equivalent.strategy.schema import Strategy
 
@@ -37,8 +34,6 @@ from .errors import ComponentError
 
 # The manifest role of the program a timing run measures.
 TIMING_ROLE = "timing"
-# What the program's own outputs are stored as: one dataset, one case.
-PROGRAM_SET = "program"
 # How many times the program is run. Two is what the question needs: one
 # run to measure and a second to disagree with it.
 REPEATS = 2
@@ -46,16 +41,6 @@ REPEATS = 2
 
 def _fail(problems: list, detail=None) -> dict:
     return {"verdict": "fail", "detail": {**(detail or {}), "problems": problems}}
-
-
-def _variable_name(path: str) -> str:
-    """The variable a written file is stored under: its path without the suffix.
-
-    A file in a directory of the program's own keeps that directory in
-    its name, so two files called `rho.npy` in different directories stay
-    two variables.
-    """
-    return path[: -len(npy.INPUT_SUFFIX)] if path.endswith(npy.INPUT_SUFFIX) else path
 
 
 def _drifted(first: dict, second: dict, declared) -> list:
@@ -68,21 +53,6 @@ def _drifted(first: dict, second: dict, declared) -> list:
                 f"whose outputs drift from run to run cannot be a reference"
             )
     return problems
-
-
-def _arrays(written: dict, declared) -> tuple:
-    """The written files as arrays, and whatever could not be read as one."""
-    arrays = {}
-    problems = []
-    for path in declared:
-        try:
-            arrays[_variable_name(path)] = npy.decode(base64.b64decode(written[path]))
-        except Exception as exc:
-            problems.append(
-                f"the timing run's '{path}' does not read as an array ({exc}); the "
-                f"program's outputs are compared as arrays, like the region's"
-            )
-    return arrays, problems
 
 
 def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
@@ -141,14 +111,12 @@ def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
         )
 
     problems = _drifted(runs[0], runs[1], timing.outputs)
-    arrays, unreadable = _arrays(runs[-1], timing.outputs)
-    problems.extend(unreadable)
+    arrays, unreadable = program_arrays(runs[-1], timing.outputs)
+    problems.extend(unreadable.values())
     if problems:
         return _fail(problems, measured)
 
-    subject = store_capture_set(
-        store, PROGRAM_SET, {PROGRAM_SET: {"inputs": {}, "outputs": arrays}},
-    )
+    subject = store_program_set(store, arrays)
     return {
         "verdict": "pass",
         "detail": {

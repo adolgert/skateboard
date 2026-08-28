@@ -10,6 +10,8 @@ regression_visible: Runs 'regression_visible' via oracle:/v1/compare. Records: r
 
 regression_holdout: Runs 'regression_holdout' via oracle:/v1/compare. Records: regression/holdout. Requires: regression/visible = pass for the submitted tree.
 
-time_port: Runs 'time_port' via builder:/v1/time. Records: timing/port. Requires: regression/holdout = pass for the submitted tree.
+program_regression: Runs 'program_regression' via builder:/v1/time. Records: program/regression. Requires: regression/holdout = pass for the submitted tree.
+
+time_port: Runs 'time_port' via builder:/v1/time. Records: timing/port. Requires: program/regression = pass for the submitted tree.
 
 time_baseline: Runs 'time_baseline' via builder:/v1/time. Records: timing/baseline.

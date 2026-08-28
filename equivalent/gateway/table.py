@@ -65,7 +65,11 @@ ACTION_TABLE = (
         "regression_holdout", ("regression/holdout",),
         (("regression/visible", "tree"),), True, "oracle:/v1/compare", PORTING,
     ),
-    ActionRow("time_port", ("timing/port",), (("regression/holdout", "tree"),), False,
+    ActionRow(
+        "program_regression", ("program/regression",),
+        (("regression/holdout", "tree"),), True, "builder:/v1/time", PORTING,
+    ),
+    ActionRow("time_port", ("timing/port",), (("program/regression", "tree"),), False,
               "builder:/v1/time", PORTING, config_keys=("repeats",)),
     ActionRow("time_baseline", ("timing/baseline",), (), False, "builder:/v1/time", PORTING,
               config_keys=("repeats",)),

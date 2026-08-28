@@ -130,7 +130,7 @@ root. See `targets/tsunami.json`.
     "raw_dtype": "<f8"                           // only for corpora that are not .npy
   },
   "comparator": {
-    "module":     "services/oracle/compare.py",       // must expose compare_variable()
+    "module":     "equivalent/capture/compare.py",       // must expose compare_variable()
     "tolerances": "programs/tsunami/tolerances.json"  // must have a "variables" key
   }
 }

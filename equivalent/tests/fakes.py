@@ -78,11 +78,19 @@ PROGRAM_MANIFEST = {
     "properties": None,
 }
 
-# Bands wide enough that the fixture's arrays compare equal to themselves
+# A band wide enough that the fixture's arrays compare equal to themselves
 # under any of the three metrics.
+FIXTURE_BAND = {"abs": 1e-6, "rel": 1e-5, "ulp": 16}
+
+# What is compared under a band, in the policy's two maps: the region's
+# output variables, and the files the timing program writes, keyed by the
+# paths the manifest declares. A code bands the two separately because
+# one call of a region and a whole run of the program are different
+# measurements.
 PROGRAM_TOLERANCES = {
     "policy_version": "fixture-v1",
-    "variables": {v["name"]: {"abs": 1e-6, "rel": 1e-5, "ulp": 16} for v in FIXTURE_VARIABLES},
+    "variables": {v["name"]: dict(FIXTURE_BAND) for v in FIXTURE_VARIABLES},
+    "files": {path: dict(FIXTURE_BAND) for path in PROGRAM_MANIFEST["timing"]["outputs"]},
 }
 
 VISIBLE_CASE = "case0000"

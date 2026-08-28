@@ -3,19 +3,22 @@ dispatch, run against fakes standing in for the builder and oracle (see
 equivalent/tests/fakes.py for why: no nvfortran/compute-sanitizer/GPU in
 this environment).
 """
+import base64
 import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from equivalent.capture import npy
 from equivalent.gateway.app import create_app
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import init_baseline_repo
 from equivalent.ledger.acceptance import PORTING
+from equivalent.ledger.capture_sets import program_variable
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
-from equivalent.tests.fakes import FakeBuilder, FakeOracle, write_program
+from equivalent.tests.fakes import FakeBuilder, FakeOracle, timing_array, write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
@@ -76,6 +79,18 @@ def _run(client, cfg, action):
     return r.json()
 
 
+# Every gate of a port, in the order each one's evidence becomes the next
+# one's precondition. time_baseline comes before program_regression
+# because it is what stores the baseline program's outputs, and
+# program_regression before time_port because a timing measurement of a
+# program that computes the wrong thing measures nothing.
+GATES = (
+    "sese_check", "build_replay", "run_replay", "sanitize",
+    "regression_visible", "regression_holdout", "time_baseline",
+    "program_regression", "time_port",
+)
+
+
 def test_full_pipeline_reaches_acceptance(tmp_path):
     client, cfg, store, builder, oracle = _client(tmp_path)
 
@@ -84,10 +99,7 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
     (working / SPEC_PATH).write_text(SPEC)
     client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
 
-    for action in (
-        "sese_check", "build_replay", "run_replay", "sanitize",
-        "regression_visible", "regression_holdout", "time_port", "time_baseline",
-    ):
+    for action in GATES:
         body = _run(client, cfg, action)
         assert "error" not in body, f"{action}: {body}"
         assert body.get("refused") is not True, f"{action}: {body}"
@@ -119,6 +131,16 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
     for predicate_type in ("regression/visible", "regression/holdout"):
         claim = next(c for c in store.all_claims() if c.predicateType == predicate_type)
         assert any(m.kind == "policy" and m.sha256 == "policyabc" for m in claim.materials)
+
+    # The port's own program run was compared against the set the
+    # baseline's run stored, and the claim names both that set and the
+    # bands it was judged within.
+    baseline_claim = next(c for c in store.all_claims() if c.predicateType == "timing/baseline")
+    program_set = baseline_claim.predicate.detail["program_set"]
+    program_claim = next(c for c in store.all_claims() if c.predicateType == "program/regression")
+    assert program_claim.predicate.detail["program_set"] == program_set
+    assert any(m.kind == "capture_set" and m.sha256 == program_set for m in program_claim.materials)
+    assert any(m.kind == "policy" for m in program_claim.materials)
 
     # The build claim records the strategy's own flags as what was
     # compiled, and the timing claim carries the same flags read back
@@ -189,3 +211,41 @@ def test_time_baseline_is_filed_against_the_baseline_tree_not_the_current_tree(t
     status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
     claim = store.get_claim(result["claim_id"])
     assert claim.subject[0].sha256 != status["tree"]
+
+
+def test_a_port_that_is_wrong_at_the_timing_size_cannot_be_timed(tmp_path):
+    # Fast and wrong is the failure the region's own regression checks
+    # cannot see: they replay one captured case, and this is the whole
+    # program at the size the speedup is claimed for.
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in GATES[: GATES.index("program_regression")]:
+        _run(client, cfg, action)
+
+    # From here the timing program writes something else. The baseline's
+    # run, and so the stored reference, is already behind us.
+    drifted = cfg.manifest.timing.outputs[0]
+
+    def wrong_at_scale(outputs, run):
+        return {
+            name: base64.b64encode(
+                npy.encode(timing_array(name) + (1.0 if name == drifted else 0.0))
+            ).decode()
+            for name in outputs
+        }
+
+    builder.timing_outputs = wrong_at_scale
+
+    body = _run(client, cfg, "program_regression")
+    assert body["verdict"] == "fail"
+    assert not body["detail"]["per_var"][program_variable(drifted)]["pass"]
+
+    refused = _run(client, cfg, "time_port")
+    assert refused["refused"] is True
+    assert [item["predicateType"] for item in refused["missing"]] == ["program/regression"]
+
+    status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+    assert status["accepted"] is False

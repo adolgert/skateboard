@@ -291,8 +291,9 @@ def test_a_session_whose_claims_finish_a_tree_reports_how_long_it_took(tmp_path)
     assert summary.trees == (tree,)
     assert summary.claims_by_predicate == {req.predicate_type: 1 for req in ACCEPTANCE_REQUIREMENTS}
     assert summary.fail_verdicts == 0
-    # The last requirement lands eight seconds after the first request.
-    assert summary.time_to_acceptance == "8s"
+    # The last requirement lands one second per requirement after the
+    # first request, which is when the tree became acceptable.
+    assert summary.time_to_acceptance == f"{len(ACCEPTANCE_REQUIREMENTS)}s"
 
 
 def test_a_session_that_never_finishes_a_tree_says_it_is_not_accepted(tmp_path):

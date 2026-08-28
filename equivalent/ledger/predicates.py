@@ -73,12 +73,20 @@ _register(
     "Oracle comparison against the held-out capture set, on the tree; no per-case detail ever leaves the oracle.",
 )
 _register(
+    "program/regression", True, DetailLevel.FULL,
+    "The code's own program, run at the size its manifest declares, wrote what the "
+    "baseline program wrote, under the code's tolerance policy; detail is the "
+    "per-output breakdown. On the tree.",
+)
+_register(
     "timing/port", False, DetailLevel.FULL,
     "Wall-clock timing of the ported binary, on the tree.",
 )
 _register(
     "timing/baseline", False, DetailLevel.FULL,
-    "Wall-clock timing of the pristine baseline build, on the baseline tree.",
+    "Wall-clock timing of the pristine baseline build, on the baseline tree; its "
+    "program's own outputs are stored as the capture set a port's program run is "
+    "compared against.",
 )
 
 # What an onboarding session files. All of it is the agent's own work

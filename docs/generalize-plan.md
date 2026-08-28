@@ -482,6 +482,28 @@ when the working copy differs from the passing tree.
 
 ## Step 6 — Program-level regression and timing without the tiling trick
 
+*Settled during execution (2026-08-28).* The program dataset is not
+checked in and not baked into the oracle. A promoted tsunami program
+output is 8 MB per promotion, and every code at a real timing size is
+the same order, so the reference for program-level regression is the
+deployment's own `time_baseline` run: that claim stores the baseline
+program's declared outputs as a capture set in the ledger, and
+`program_regression` compares the port's run against it with the code's
+tolerance policy. The comparator moves to `equivalent/capture/compare.py`
+and the oracle image copies that one file, so there is one comparator.
+`harness_timing` still stores the onboarding run's program set in the
+onboarding ledger as the evidence the timing target works; `promote` no
+longer writes `captures/program`.
+
+*Found during execution.* A whole-program run drifts far more than a
+single region call: two CPU compilations of the unported tsunami disagree
+by 3.6e-06 absolute after 5000 float32 steps at the timing size, where
+the single-call spread was exactly zero. So the tolerance file gains a
+`files:` section, one band per file the timing run writes, calibrated
+the same way as the region bands, and `program_regression` reads that
+section rather than `variables:`.
+
+
 **Goal.** D21: correctness at the timing size is checked, and the timing
 problem size is data, not source.
 

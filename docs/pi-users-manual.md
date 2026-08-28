@@ -224,19 +224,45 @@ the session never sees. The answer is pass or fail only, so a port
 cannot be tuned to the held-out set. The full comparison stays in the
 ledger for a person.
 
-**`time_port`** — The code's own program is timed, five runs by default,
-with the arguments and environment the manifest declares and a budget it
-declares too. This is the last requirement for acceptance. The claim
-records the flags, the run times, what the program was given, which
-files it wrote and their digests, and whether the GPU was otherwise
-idle, which on a shared workstation it usually is not.
-
-**`time_baseline`** — The unmodified program is timed the same way, for
-comparison, built with the region's baseline strategy: a strategy file
+**`time_baseline`** — The unmodified program is timed the same way a
+port will be, built with the region's baseline strategy: a strategy file
 like any other, naming the compiler and flags the comparison floor is
 compiled with. It has no prerequisites, runs against the baseline tree
-rather than the submission, and is not required for acceptance; once
-per region is enough.
+rather than the submission, and is not itself required for acceptance;
+once per region is enough.
+
+It does one more thing than measure. The files its last run wrote are kept
+in the region's ledger as a capture set — `h.npy` becomes the variable
+`h` — and that set is what the next check compares a port against. So
+`time_baseline` has to have run before `program_regression` can, and if
+it has not, `program_regression` answers with an error saying so rather
+than a verdict.
+
+**`program_regression`** — The port's own program is run once, at the
+size the manifest declares, and every file it writes is compared against
+the file the baseline program wrote. The band comes from the same
+tolerance file the oracle reads, but from its `files` section rather than
+its `variables` section: a whole-program run accumulates over every step
+whatever two compilations of the same source disagree about, and the band
+that fits one call of a region is far too tight for it. A missing file, a
+different shape or element type, or one element outside its band is a
+`fail` naming the output. The claim carries the per-output comparison,
+and names both the policy and the baseline capture set it was judged
+against.
+
+This is the check that a port is still the same code at the size its
+speedup is claimed for: the regression checks above it replay one
+captured call of one region, and a port can be wrong at scale and right
+on those.
+
+**`time_port`** — The code's own program is timed, five runs by default,
+with the arguments and environment the manifest declares and a budget it
+declares too. It requires `program/regression`, so a program that
+computes the wrong thing at the timing size cannot be timed at all. This
+is the last requirement for acceptance. The claim records the flags, the
+run times, what the program was given, which files it wrote and their
+digests, and whether the GPU was otherwise idle, which on a shared
+workstation it usually is not.
 
 The two timing checks accept a `repeats` setting; nothing else takes
 any configuration.
@@ -254,7 +280,8 @@ When every required check has passed on one tree, `/status` ends with
       sanitize/racecheck  pass  c-0005
       regression/visible  pass  c-0007
       regression/holdout  pass  c-0008
-      timing/port  pass  c-0009
+      program/regression  pass  c-0009
+      timing/port  pass  c-0010
     ACCEPTED
 
 There is no accept action. Acceptance is a fact about the ledger, not a
@@ -367,7 +394,7 @@ which point `status` ends with `ONBOARDED` rather than `ACCEPTED`:
 
 | check | what it establishes |
 | --- | --- |
-| `manifest_check` | the manifest is there, complete, names only files the tree holds, gives every floating-point output a tolerance band, and has the visible and held-out runs differ |
+| `manifest_check` | the manifest is there, complete, names only files the tree holds, gives every floating-point output a tolerance band and every file the timing run writes one of its own, and has the visible and held-out runs differ |
 | `harness_build` | every target the manifest declares builds under both the baseline strategy and the port strategy, with each strategy's flags proven to have reached every compile |
 | `harness_capture` | the capture program writes every declared dataset, each case matching the declared interface, and the visible and held-out inputs differ |
 | `harness_replay` | the replay driver reproduces the captured outputs bitwise from the captured inputs |
@@ -393,8 +420,11 @@ so what is promoted has to be what you read. It then writes the code's
 directory: the manifest, with its source root rewritten from the tree
 itself to the `baseline` beside it; the tree minus that manifest as the
 new `baseline/`; the visible dataset's inputs under `datasets/visible/`;
-and the answers — the visible outputs, the whole held-out set, and the
-program's own timing outputs — under `captures/`. A destination that
+and the answers — the visible outputs and the whole held-out set —
+under `captures/`. The program's own timing outputs are not among them:
+a whole-program run at a real timing size writes megabytes, and what a
+port is compared against is the deployment's own `time_baseline` run,
+which stays in the region's ledger. A destination that
 already holds something is refused unless you pass `--replace`, and
 `--programs` writes the whole thing somewhere else if you would rather
 compare before committing. It ends by printing the steps that stay

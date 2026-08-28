@@ -1,4 +1,4 @@
-"""Numerical comparator for the oracle. Pure numpy over whatever arrays it is given.
+"""Numerical comparator. Pure numpy over whatever arrays it is given.
 
 Acceptance policy for a floating-point variable, per case: an element is
 acceptable if ANY of its three metrics is within tolerance -- absolute,
@@ -11,9 +11,18 @@ Nothing here knows a variable's name, its element type, or its rank in
 advance: both arrays come from files that say what they are, and this
 module compares them or refuses to.
 
+Trust role: this is the last word on every comparison the harness makes,
+and there is one of it. The oracle asks it whether a replay reproduced
+the captured answers; the gateway asks it whether a port's whole-program
+run reproduced the baseline program's files. Two comparators would be
+two definitions of "the same answer", and a port could pass under one of
+them and not the other.
+
 This module executes nothing supplied by the agent; it only reads arrays.
-It is installed in the sealed oracle image, which holds numpy and yaml
-and nothing else of this project, so it imports neither.
+It lives here, beside the capture format whose files it compares, and is
+copied into the sealed oracle image, which holds numpy and yaml and
+nothing else of this project -- so it imports neither, and imports
+nothing of this package either.
 """
 import numpy as np
 

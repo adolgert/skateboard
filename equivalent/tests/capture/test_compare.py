@@ -1,8 +1,9 @@
-"""How the oracle decides whether two arrays are the same answer.
+"""How the harness decides whether two arrays are the same answer.
 
-The comparator is the last word on every regression verdict, so these
-read as the statement of what "close enough" means: floating-point
-variables pass on any one of three metrics under the code's own
+There is one comparator, asked by the oracle about a replay's outputs and
+by the gateway about a ported program's whole-program outputs, so these
+read as the statement of what "close enough" means everywhere: floating-
+point variables pass on any one of three metrics under the code's own
 tolerances, and integer and logical variables have to match exactly.
 """
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from services.oracle import compare
+from equivalent.capture import compare
 
 # What a code's tolerances.json holds for one floating-point variable.
 LOOSE = {"abs": 1e-6, "rel": 1e-5, "ulp": 16}

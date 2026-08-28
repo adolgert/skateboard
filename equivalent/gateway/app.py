@@ -34,6 +34,7 @@ from equivalent.components import (
     harness_replay,
     harness_timing,
     manifest_check,
+    program_regression,
     regression,
     run_replay,
     sanitize,
@@ -436,6 +437,26 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 log("claim", claim_id=claim.id)
                 return _claim_response(claim)
 
+            if req.action == "program_regression":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                result = program_regression.check(
+                    store, Subject(kind="tree", sha256=baseline_tree_sha(cfg.repo_dir)),
+                    cfg.region_id, tree_sha, cfg.manifest, builder,
+                )
+                # The two things this verdict rests on, as formal
+                # materials: the bands it was judged within, and the
+                # baseline run it was judged against.
+                claim = record(
+                    "program/regression", subjects_by_kind["tree"], "builder", result,
+                    materials=[
+                        Subject(kind="policy", sha256=result["detail"]["policy_sha256"]),
+                        Subject(kind="capture_set", sha256=result["detail"]["program_set"]),
+                    ],
+                )
+                log("claim", claim_id=claim.id)
+                return _claim_response(claim)
+
             if req.action == "time_port":
                 if builder is None:
                     raise ComponentError("builder not configured")
@@ -455,11 +476,20 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 # file of the region's own choosing, loaded here so the
                 # claim says which one it was.
                 result = timing.check_baseline(
-                    cfg.repo_dir, cfg.region_id, base_tree, cfg.manifest,
+                    store, cfg.repo_dir, cfg.region_id, base_tree, cfg.manifest,
                     load_strategy(cfg.baseline_strategy_path), builder,
                     repeats=int(req.config.get("repeats", 5)),
                 )
-                claim = record("timing/baseline", Subject(kind="tree", sha256=base_tree), "builder", result)
+                # The program set this run stored is what a port's own
+                # program run is compared against, so it is a formal
+                # material rather than a note in the detail.
+                program_set = result["detail"].get("program_set")
+                claim = record(
+                    "timing/baseline", Subject(kind="tree", sha256=base_tree), "builder", result,
+                    materials=(
+                        [Subject(kind="capture_set", sha256=program_set)] if program_set else []
+                    ),
+                )
                 log("claim", claim_id=claim.id)
                 return _claim_response(claim)
 

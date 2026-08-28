@@ -23,8 +23,8 @@ point: the alternative is a container that will not start, in a
 deployment whose whole purpose is to produce the thing it is missing.
 
 This image installs numpy, yaml, and the web server, and nothing else of this
-project -- so this file and compare.py import nothing from `equivalent`, and
-read the capture format's few conventions directly.
+project -- so this file and the comparator copied in beside it import nothing
+from `equivalent`, and read the capture format's few conventions directly.
 """
 import base64
 import hashlib
@@ -38,7 +38,16 @@ import yaml
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from . import compare as cmp
+# The comparator is one file: equivalent/capture/compare.py, which the
+# gateway uses for the same job on the program's own outputs. This image
+# copies it in beside this module rather than installing the package, so
+# in the container it is `services.oracle.compare`; in a checkout, where
+# nothing has copied it, it is imported from where it lives. Both
+# branches load the same source, so which one runs decides nothing.
+try:
+    from . import compare as cmp
+except ImportError:
+    from equivalent.capture import compare as cmp
 
 # The capture format, spelled out because this service cannot import the
 # package that defines it. One directory per case; `case.json` names the

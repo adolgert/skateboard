@@ -154,8 +154,12 @@ def test_promote_writes_the_layout_a_code_directory_holds(tmp_path, capsys):
     # description, and inside the tree it would be a second copy.
     assert not (code_dir / "baseline" / IN_TREE_MANIFEST).exists()
     assert (code_dir / "datasets" / "visible" / npy.CASES_FILE).is_file()
-    for name in ("visible", "holdout", "program"):
+    for name in ("visible", "holdout"):
         assert (code_dir / "captures" / name / npy.CASES_FILE).is_file()
+    # Not the program's own outputs. They are megabytes at a real timing
+    # size, and what a port is compared against is the deployment's own
+    # baseline timing run, which stays in the region's ledger.
+    assert not (code_dir / "captures" / "program").exists()
     # And the person is told what to do with what was written.
     assert f"git add {code_dir}" in out
 
@@ -183,7 +187,6 @@ def test_the_promoted_datasets_are_the_capture_sets_the_claims_named(tmp_path):
         "datasets/visible": npy.load_dataset(code_dir / "datasets" / "visible"),
         "captures/visible": npy.load_dataset(code_dir / "captures" / "visible"),
         "captures/holdout": npy.load_dataset(code_dir / "captures" / "holdout"),
-        "captures/program": npy.load_dataset(code_dir / "captures" / "program"),
     }
 
     # The visible set is split across the trust boundary: the agent's side
@@ -197,8 +200,6 @@ def test_the_promoted_datasets_are_the_capture_sets_the_claims_named(tmp_path):
     for half in ("inputs", "outputs"):
         for name, array in holdout["case0000"][half].items():
             assert (seen["captures/holdout"]["case0000"][half][name] == array).all()
-    assert (seen["captures/program"]["program"]["outputs"]["field"]
-            == timing_array(TIMING_OUTPUT)).all()
 
 
 def test_it_refuses_when_a_claim_the_region_needs_is_missing_and_names_it(tmp_path, capsys):

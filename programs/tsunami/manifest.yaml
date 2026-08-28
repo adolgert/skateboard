@@ -35,8 +35,19 @@ datasets:
   visible: {args: ["100", "5000", "25", "0.02"]}
   holdout: {args: ["100", "5000", "60", "0.01"]}
 timing:
-  args: []                  # the program takes its size from its own source today
-  outputs: [h.npy]          # files the run writes, compared against the baseline's
+  # The problem size, as the program's own first argument. It is the same
+  # number the program defaults to, written here so that changing what is
+  # timed is an edit to this file rather than to a source file.
+  args: ["20000"]
+  # Files the run writes, compared element by element against the files
+  # the baseline program wrote. Each has its own band in the tolerance
+  # file, under `files` and keyed by the path spelled here -- not the
+  # band the region variable `h` is compared within, even though the file
+  # holds the same quantity. One call of the region reproduces its answer
+  # exactly; 5000 steps of it do not, because two compilations of the
+  # same source drift apart over that many float32 updates. The two bands
+  # measure different things and the tolerance file says which is which.
+  outputs: [h.npy]
   budget_s: 300
   env:
     # The pristine kernel returns difference arrays by value, so the CPU

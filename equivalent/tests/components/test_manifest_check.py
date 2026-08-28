@@ -131,6 +131,18 @@ def test_a_timing_output_that_is_not_an_npy_file_fails_and_names_it(tmp_path):
     assert any("run.log" in problem for problem in result["detail"]["problems"])
 
 
+def test_a_timing_output_with_no_tolerance_band_fails_and_names_it(tmp_path):
+    # Nothing declares what a file the timing run writes holds, so every
+    # one of them is compared within a band or not at all.
+    tolerances = copy.deepcopy(PROGRAM_TOLERANCES)
+    del tolerances["files"]["results/flux.npy"]
+
+    result = manifest_check.check(_repo(tmp_path, tolerances=tolerances), "main")
+
+    assert result["verdict"] == "fail"
+    assert any("results/flux.npy" in problem for problem in result["detail"]["problems"])
+
+
 def test_a_manifest_that_is_not_yaml_at_all_is_a_verdict_and_not_an_error(tmp_path):
     # The file is the agent's submission, so its being wrong is an answer
     # about the code, not a failure of the harness.

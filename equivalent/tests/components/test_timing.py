@@ -5,12 +5,13 @@ import pytest
 from equivalent.components import timing
 from equivalent.components.errors import ComponentError
 from equivalent.gateway.submit import init_baseline_repo
+from equivalent.ledger.capture_sets import capture_sets_dir, load_capture_set
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
-from equivalent.tests.fakes import FakeBuilder, write_program
+from equivalent.tests.fakes import FakeBuilder, timing_array, write_program
 
 TREE = Subject(kind="tree", sha256="1" * 64)
 BASELINE_STRATEGY_PATH = (
@@ -135,7 +136,8 @@ def test_baseline_builds_the_pristine_tree_with_the_regions_baseline_strategy(tm
     builder = FakeBuilder()
 
     result = timing.check_baseline(
-        repo_dir, "ch04:step", "basetree123", _manifest(tmp_path), baseline_strategy, builder,
+        LedgerStore(tmp_path / "region"), repo_dir, "ch04:step", "basetree123",
+        _manifest(tmp_path), baseline_strategy, builder,
     )
 
     assert result["verdict"] == "pass"
@@ -154,9 +156,51 @@ def test_baseline_fail_when_the_baseline_itself_does_not_build(tmp_path):
     builder.build_ok = False
 
     result = timing.check_baseline(
-        repo_dir, "ch04:step", "basetree123", _manifest(tmp_path),
-        load_strategy(BASELINE_STRATEGY_PATH), builder,
+        LedgerStore(tmp_path / "region"), repo_dir, "ch04:step", "basetree123",
+        _manifest(tmp_path), load_strategy(BASELINE_STRATEGY_PATH), builder,
     )
 
     assert result["verdict"] == "fail"
     assert builder.time_calls == []
+
+
+def test_the_baseline_keeps_what_its_program_wrote_as_the_ports_reference(tmp_path):
+    # This is where the reference for a port's own whole-program run comes
+    # from: not a file checked in beside the code, but this deployment's
+    # own baseline run.
+    repo_dir = _baseline_repo(tmp_path)
+    store = LedgerStore(tmp_path / "region")
+    manifest = _manifest(tmp_path)
+
+    result = timing.check_baseline(
+        store, repo_dir, "ch04:step", "basetree123", manifest,
+        load_strategy(BASELINE_STRATEGY_PATH), FakeBuilder(),
+    )
+
+    assert result["verdict"] == "pass"
+    stored = load_capture_set(store, result["detail"]["program_set"])
+    # One case, whose variables are the files the program wrote, named by
+    # their paths without the suffix.
+    assert list(stored) == ["program"]
+    assert sorted(stored["program"]["outputs"]) == ["field", "results/flux"]
+    assert (stored["program"]["outputs"]["field"] == timing_array("field.npy")).all()
+
+
+def test_a_code_that_declares_no_timing_outputs_stores_no_set_and_says_so(tmp_path):
+    import yaml
+    directory = write_program(tmp_path)
+    raw = yaml.safe_load((directory / "manifest.yaml").read_text())
+    raw["timing"]["outputs"] = []
+    (directory / "manifest.yaml").write_text(yaml.safe_dump(raw, sort_keys=False))
+    store = LedgerStore(tmp_path / "region")
+
+    result = timing.check_baseline(
+        store, _baseline_repo(tmp_path), "ch04:step", "basetree123",
+        load_manifest(directory / "manifest.yaml"),
+        load_strategy(BASELINE_STRATEGY_PATH), FakeBuilder(),
+    )
+
+    assert result["verdict"] == "pass"
+    assert result["detail"]["program_set"] is None
+    assert "no timing outputs" in result["detail"]["program_set_absent"]
+    assert not list(capture_sets_dir(store).iterdir())

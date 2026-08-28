@@ -59,14 +59,19 @@ BAD_KERNEL = "sonnet-attempt01-mod_kernel.f90"
 
 # In order, after the region has a passing analyzer verdict and a submitted
 # port. Each one's preconditions are the claims the ones before it filed.
+# time_baseline comes before program_regression because it is the run that
+# stores the baseline program's own outputs, and program_regression comes
+# before time_port because timing a program that computes the wrong thing
+# at the timing size measures nothing.
 GATES = (
     "build_replay",
     "run_replay",
     "sanitize",
     "regression_visible",
     "regression_holdout",
-    "time_port",
     "time_baseline",
+    "program_regression",
+    "time_port",
 )
 
 

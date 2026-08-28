@@ -54,7 +54,7 @@
     }
   },
   "comparator": {
-    "module": "services/oracle/compare.py",
+    "module": "equivalent/capture/compare.py",
     "tolerances": "programs/tsunami/tolerances.json"
   }
 }

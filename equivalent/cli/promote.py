@@ -28,7 +28,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from equivalent.components import harness_capture, harness_timing
+from equivalent.components import harness_capture
 from equivalent.gateway.config import DATASETS_DIR, GatewayConfig
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import (
@@ -56,9 +56,6 @@ MANIFEST_NAME = "manifest.yaml"
 # What the promoted manifest says its source root is: the directory the
 # tree is written into, beside the manifest.
 BASELINE_DIR = "baseline"
-# The claim that stores the program's own outputs, which are promoted as
-# one more capture set beside the region's.
-TIMED_PREDICATE = "harness/times"
 
 # The `source:` mapping of a manifest, and a line inside it saying what
 # the source root is. The rewrite is a line replacement rather than a
@@ -156,14 +153,20 @@ def first_difference(tree: dict, working: dict) -> str | None:
     return None
 
 
-def promoted_sets(sets: dict, program: str | None) -> list[PromotedSet]:
+def promoted_sets(sets: dict) -> list[PromotedSet]:
     """Where each stored capture set is written under the code's directory.
 
     The visible set is the one that is split: the agent is given its
     inputs and the oracle keeps its answers, which is what makes a
     regression check a question rather than a lookup. Every other set --
-    the held-out one, anything else the manifest declared, and the
-    program's own outputs -- stays whole on the oracle's side.
+    the held-out one, and anything else the manifest declared -- stays
+    whole on the oracle's side.
+
+    The program's own outputs are not among these. A whole-program run at
+    a real timing size writes megabytes, and the run a port is compared
+    against is the deployment's own `time_baseline` run, kept in the
+    region's ledger -- so promoting one would check a large file into the
+    repository that nothing later reads.
     """
     promoted = []
     for name in sorted(sets):
@@ -178,10 +181,6 @@ def promoted_sets(sets: dict, program: str | None) -> list[PromotedSet]:
             promoted.append(PromotedSet(
                 f"{CAPTURES_DIR}/{name}", sets[name], inputs=True, outputs=True,
             ))
-    if program is not None:
-        promoted.append(PromotedSet(
-            f"{CAPTURES_DIR}/{harness_timing.PROGRAM_SET}", program, inputs=True, outputs=True,
-        ))
     return promoted
 
 
@@ -294,12 +293,7 @@ def promote(config: GatewayConfig, cfg: RegionConfig, programs=None, replace: bo
         raise PromoteRefused(f"the tree that passed holds no manifest at {IN_TREE_MANIFEST}")
     manifest_text = promoted_manifest_text(tree[IN_TREE_MANIFEST].decode("utf-8"))
 
-    sets = promoted_sets(
-        harness_capture.captured_sets(store, subject),
-        harness_capture.captured_sets(store, subject, TIMED_PREDICATE).get(
-            harness_timing.PROGRAM_SET
-        ),
-    )
+    sets = promoted_sets(harness_capture.captured_sets(store, subject))
 
     code_dir = Path(config.paths.programs if programs is None else programs) / cfg.code
     destinations = [
