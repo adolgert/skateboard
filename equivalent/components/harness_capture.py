@@ -37,6 +37,9 @@ from .errors import ComponentError
 
 # The manifest role of the program that writes a dataset.
 CAPTURE_ROLE = "capture"
+# The claim that says which capture set each declared dataset was stored
+# under. Spelled here because this is where it is written and read.
+CAPTURED_PREDICATE = "harness/captured"
 # The two datasets a port is judged by, and the pair that must not be the
 # same run. A code may declare more; nothing is held back in those.
 VISIBLE, HOLDOUT = "visible", "holdout"
@@ -45,7 +48,7 @@ VISIBLE, HOLDOUT = "visible", "holdout"
 SECTIONS = (("inputs", "input"), ("outputs", "output"))
 
 
-def captured_sets(store: LedgerStore, tree) -> dict:
+def captured_sets(store: LedgerStore, tree, predicate_type: str = CAPTURED_PREDICATE) -> dict:
     """The capture set each dataset was stored under, from the tree's own claim.
 
     The checks that follow this one compare against the sets this one
@@ -54,10 +57,15 @@ def captured_sets(store: LedgerStore, tree) -> dict:
     A tree with no passing capture claim is an error, not a verdict --
     the gateway's own precondition table is what should have stopped the
     request before it got here.
+
+    `predicate_type` is for the other claim that stores a set the same
+    way: the timing check keeps the program's own outputs under
+    `harness/times`. One reader for both, so a set is found by the same
+    rule wherever it was written.
     """
-    claim = store.latest("harness/captured", tree)
+    claim = store.latest(predicate_type, tree)
     if claim is None or claim.predicate.verdict != "pass":
-        raise ComponentError(f"no passing harness/captured claim for tree {tree.sha256}")
+        raise ComponentError(f"no passing {predicate_type} claim for tree {tree.sha256}")
     sets = {
         name: entry["capture_set"]
         for name, entry in claim.predicate.detail.get("datasets", {}).items()
@@ -65,7 +73,7 @@ def captured_sets(store: LedgerStore, tree) -> dict:
     }
     if not sets:
         raise ComponentError(
-            f"the harness/captured claim for tree {tree.sha256} names no capture set"
+            f"the {predicate_type} claim for tree {tree.sha256} names no capture set"
         )
     return sets
 

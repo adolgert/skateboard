@@ -37,6 +37,7 @@ def _client(tmp_path):
     program = write_program(tmp_path, minimal=True)
     cfg = RegionConfig(
         region_id=REGION,
+        code="tsunami",
         phase=ONBOARDING,
         repo_dir=repo_dir,
         spec_path=None,

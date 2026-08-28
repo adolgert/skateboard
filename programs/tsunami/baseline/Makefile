@@ -40,8 +40,10 @@ replay: $(NPY_IO) $(KERNEL) harness/replay.f90
 
 timing: tsunami
 
-tsunami: $(PROGRAM)
-	$(FC) $(FFLAGS) $(MODFLAG) . -o $@ $(PROGRAM) $(LDFLAGS)
+# The whole program writes its final state as an array file, so it needs
+# the capture format's Fortran side the way the other two targets do.
+tsunami: $(NPY_IO) $(PROGRAM)
+	$(FC) $(FFLAGS) $(MODFLAG) . -o $@ $(NPY_IO) $(PROGRAM) $(LDFLAGS)
 
 capture: gen_reference
 
@@ -52,6 +54,6 @@ run: tsunami
 	./tsunami
 
 clean:
-	rm -f replay tsunami gen_reference *.mod
+	rm -f replay tsunami gen_reference *.mod h.npy
 
 .PHONY: timing capture run clean

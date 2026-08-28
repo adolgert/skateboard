@@ -16,6 +16,7 @@ program tsunami
   use iso_fortran_env, only: int32, real32
   use mod_initial, only: set_gaussian
   use mod_kernel, only: step
+  use npy_io, only: npy_save
 
   implicit none
 
@@ -50,5 +51,12 @@ program tsunami
 
   ! mean(h) is conserved per tile; print as a cheap smoke check
   print '(a,i0,a,es15.8e2)', 'num_tiles=', num_tiles, ' mean_h=', sum(h) / grid_size
+
+  ! The final water height, as an array file. A timing run is only honest
+  ! if the fast program computed the same thing as the slow one, and the
+  ! comparison is made between files rather than between printed lines --
+  ! the same NPY files, read by the same comparator, as the region's own
+  ! captures. The manifest declares this file under timing.outputs.
+  call npy_save('h.npy', h)
 
 end program tsunami

@@ -253,7 +253,7 @@ def test_a_baseline_strategy_whose_file_is_not_there_fails_at_startup(tmp_path):
     assert "ch04:step" in str(excinfo.value)
 
 
-def test_the_deployments_own_config_names_a_checked_in_spec_for_every_region():
+def test_the_deployments_own_config_names_a_checked_in_spec_for_every_porting_region():
     # The deployment file cannot be loaded here -- its paths are the
     # gateway container's mount points. What is worth checking from
     # outside the container is that each region it names has the spec
@@ -261,9 +261,13 @@ def test_the_deployments_own_config_names_a_checked_in_spec_for_every_region():
     # region id with its colon written as a dash.
     config = yaml.safe_load(DEPLOYMENT_CONFIG.read_text())
 
-    assert sorted(config["regions"]) == ["ch04:step", "ch04:step-stencil"]
-    for region_id, region in config["regions"].items():
-        assert region["phase"] == "porting"
+    assert sorted(config["regions"]) == ["ch04:step", "ch04:step-stencil", "tsunami:onboard"]
+    porting = {
+        region_id: region for region_id, region in config["regions"].items()
+        if region["phase"] == "porting"
+    }
+    assert sorted(porting) == ["ch04:step", "ch04:step-stencil"]
+    for region_id, region in porting.items():
         code = region["code"]
         spec = REPO_ROOT / "programs" / code / "regions" / f"{region_slug(region_id)}.sese.yaml"
         assert spec.is_file(), f"{region_id} has no checked-in spec at {spec}"
@@ -272,6 +276,17 @@ def test_the_deployments_own_config_names_a_checked_in_spec_for_every_region():
         # derives from the region id alone, so the two spellings have to
         # agree or the gateway would read a spec nobody wrote.
         assert region["spec_path"] == f"notes/regions/{region_slug(region_id)}.sese.yaml"
+
+
+def test_the_deployments_onboarding_region_names_nothing_a_port_would_need():
+    # A code is being brought in there, so the spec and the dataset a
+    # porting region names are what that session produces rather than
+    # what it starts from.
+    region = yaml.safe_load(DEPLOYMENT_CONFIG.read_text())["regions"]["tsunami:onboard"]
+
+    assert region["phase"] == "onboarding"
+    assert region["strategy"] == "onboarding"
+    assert "spec_path" not in region and "visible_dataset" not in region
 
 
 ONBOARDING_REGION = {

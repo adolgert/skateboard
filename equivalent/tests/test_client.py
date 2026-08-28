@@ -24,7 +24,7 @@ def _client_pair(tmp_path):
     working = tmp_path / "working"
     working.mkdir()
     cfg = RegionConfig(
-        region_id="ch04:step", phase=PORTING, repo_dir=repo_dir,
+        region_id="ch04:step", code="tsunami", phase=PORTING, repo_dir=repo_dir,
         spec_path="notes/regions/ch04-step.sese.yaml", ledger_dir=tmp_path / "ledger",
         strategy_path=STRATEGY_PATH, baseline_strategy_path=BASELINE_STRATEGY_PATH,
         working_copy_dir=working,

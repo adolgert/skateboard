@@ -15,6 +15,11 @@ from equivalent.manifest.schema import Manifest
 @dataclass(frozen=True)
 class RegionConfig:
     region_id: str
+    # Which code this region belongs to, as the deployment's own
+    # configuration names it. It is the name of the code's directory
+    # under `programs`, which is where anything written about the code as
+    # a whole -- rather than about one submission -- belongs.
+    code: str
     # Which kind of session this region is for: bringing a code in, or
     # porting a region of one that has been brought in. It decides which
     # action rows the region has, which requirement list its status is

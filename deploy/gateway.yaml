@@ -30,3 +30,12 @@ regions:
     strategy: stdpar_managed
     baseline_strategy: cpu_reference
     visible_dataset: visible
+  # The same code brought in from its bare baseline. No region has been
+  # chosen, so there is no spec and no dataset to name: what an
+  # onboarding session produces is the description the porting regions
+  # above are checked against.
+  "tsunami:onboard":
+    code: tsunami
+    phase: onboarding
+    strategy: onboarding            # -> <strategies>/onboarding.yaml ; allows the whole tree
+    baseline_strategy: cpu_reference

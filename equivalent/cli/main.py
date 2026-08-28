@@ -43,6 +43,7 @@ from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.strategy.schema import load_strategy
 
+from . import promote as promote_module
 from . import render, session
 
 CONFIG_HELP = "gateway configuration file, read with --region-id to show the repository's current tree"
@@ -74,6 +75,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_requests = sub.add_parser("requests", help="the request log as a timeline")
     p_requests.add_argument("region_dir")
+
+    p_promote = sub.add_parser(
+        "promote",
+        help="copy what an onboarding session proved into the code's own directory",
+    )
+    p_promote.add_argument("--config", required=True, help=CONFIG_HELP)
+    p_promote.add_argument(
+        "--region-id", required=True, help="which onboarding region in --config to promote",
+    )
+    p_promote.add_argument(
+        "--programs", default=None,
+        help="where the code's directory is written (default: the config's paths.programs)",
+    )
+    p_promote.add_argument(
+        "--replace", action="store_true",
+        help="empty the destinations that already hold something, rather than refusing",
+    )
 
     p_session = sub.add_parser(
         "session", help="one agent session beside the request log it produced",
@@ -179,6 +197,26 @@ def _run_session(parser: argparse.ArgumentParser, args) -> int:
     return 0
 
 
+def _run_promote(parser: argparse.ArgumentParser, args) -> int:
+    """Promote one onboarding region, or say why it was refused.
+
+    A refusal is the expected answer to a session that is not finished or
+    a working copy that has moved on, so it is a message and a non-zero
+    exit rather than a traceback.
+    """
+    config, cfg = _named_region(parser, args.config, args.region_id)
+    try:
+        lines = promote_module.promote(
+            config, cfg, programs=args.programs, replace=args.replace,
+        )
+    except promote_module.PromoteRefused as refusal:
+        print(f"refused: {refusal}", file=sys.stderr)
+        return 1
+    for line in lines:
+        print(line)
+    return 0
+
+
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -200,6 +238,9 @@ def main(argv=None) -> int:
         else:
             print(render.render_history(history), end="")
         return 0
+
+    if args.command == "promote":
+        return _run_promote(parser, args)
 
     if args.command == "session":
         return _run_session(parser, args)

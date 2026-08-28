@@ -30,6 +30,7 @@ def _region(tmp_path, region_id="ch04:step", phase=PORTING):
     working.mkdir()
     cfg = RegionConfig(
         region_id=region_id,
+        code="tsunami",
         phase=phase,
         repo_dir=repo_dir,
         spec_path="notes/regions/ch04-step.sese.yaml",

@@ -250,6 +250,7 @@ def _load_region(
 
     return RegionConfig(
         region_id=region_id,
+        code=code.name,
         phase=phase,
         repo_dir=paths.repo,
         spec_path=spec_path,

@@ -3,8 +3,9 @@
 Everything in this directory is deployment: container definitions, the
 gateway's configuration, and the scripts that start and check a running
 stack. The only code here is `seed.py`, which writes the baseline, and
-`walkthrough.py`, which drives one region end to end. Neither decides
-anything.
+the two walkthroughs, which drive one region end to end — `walkthrough.py`
+a port, `onboard_walkthrough.py` a code being brought in. None of them
+decides anything.
 
 What is deployed comes from two directories above this one: `programs/`,
 one directory per code, holding that code's manifest, baseline sources
@@ -32,6 +33,7 @@ answering every comparison with the name of what is missing.
 | `up.sh` | prepare state, seed, build, start, wait for health |
 | `pi.sh` | open an interactive session in the agent container |
 | `walkthrough.sh`, `walkthrough.py` | drive one region from nothing to accepted; the region is `EQUIVALENT_REGION` |
+| `onboard_walkthrough.sh`, `onboard_walkthrough.py` | bring a code in from its bare baseline to onboarded; the region is `--region`, defaulting to `tsunami:onboard` |
 | `isolation_check.sh` | assert the isolation from inside the agent |
 | `isolation_check_gateway.sh` | assert the gateway's half of it, from here |
 | `down.sh` | stop; with `--reset`, discard state after asking |
@@ -54,8 +56,12 @@ Every call also carries a bearer token.
 cp .env.example .env          # then set EQUIVALENT_TOKEN to something of your own
 ./up.sh                       # state directories, baseline seed, build, start
 ./walkthrough.sh              # optional: prove the whole path works, end to end
+./onboard_walkthrough.sh      # optional: the same for bringing a code in
 ./pi.sh                       # an interactive session
 ```
+
+Both walkthroughs write into `state/working`, so run them one after the
+other rather than at once.
 
 `up.sh` is safe to run again. It creates what is missing, seeds the baseline
 into `state/seed`, copies that into `state/working` only if the working copy is
@@ -82,6 +88,22 @@ reports, name the configuration instead:
 ```sh
 ledger status --config deploy/state/gateway.host.yaml --region-id ch04:step
 ```
+
+The same file names the region an onboarding session is promoted from,
+once its six checks have passed and you have read them:
+
+```sh
+ledger promote --config deploy/state/gateway.host.yaml --region-id tsunami:onboard
+```
+
+That writes `programs/<code>/` — the manifest, the baseline, the visible
+dataset, and the captures — and prints the steps that stay yours: the
+commit, a `phase: porting` region in `gateway.yaml`, and `down.sh` /
+`up.sh`, because the oracle bakes the captures into its image. It
+refuses rather than writing over what is already there; `--replace`
+empties the destinations first and `--programs` writes somewhere else
+entirely, which is how to compare a promotion against what is checked
+in.
 
 `up.sh` writes `state/gateway.host.yaml`: the same deployment as `gateway.yaml`,
 with the paths of this machine rather than the container's mount points. Both

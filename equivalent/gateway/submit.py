@@ -104,7 +104,15 @@ def tracked_files(repo_dir, ref: str = "main") -> list[dict]:
     return files
 
 
-def _read_working_copy(working_copy_dir) -> dict[str, bytes]:
+def working_copy_files(working_copy_dir) -> dict[str, bytes]:
+    """Every file in the agent's working copy, as {path: bytes}.
+
+    What counts as a file of the working copy is decided here and read
+    from here by everyone: a submit lays these over the baseline, and
+    `promote` asks whether these are the tree that passed. Two readers
+    with two ideas of which files count would let a promotion write
+    something the person never reviewed.
+    """
     working_copy_dir = Path(working_copy_dir)
     out = {}
     for p in sorted(working_copy_dir.rglob("*")):
@@ -185,7 +193,7 @@ def submit(repo_dir, region_id: str, working_copy_dir, allow_globs: list[str], s
     agent's own working copy), not sent as request content.
     """
     baseline = {f["path"]: f["content"] for f in tracked_files(repo_dir, "main")}
-    working = _read_working_copy(working_copy_dir)
+    working = working_copy_files(working_copy_dir)
 
     applied = {}
     rejected = []

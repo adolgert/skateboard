@@ -1,7 +1,10 @@
 version: 1
 name: tsunami
 source:
-  root: baseline            # the tracked tree that becomes the gateway's baseline
+  # The tracked tree that becomes the gateway's baseline. Written on a
+  # line of its own: promoting a code rewrites this one line, and reads
+  # nothing else in the file.
+  root: baseline
   patterns:                 # files that count as source; sent to the builder
     - "**/*.f90"
     - "**/*.F90"
@@ -33,7 +36,7 @@ datasets:
   holdout: {args: ["100", "5000", "60", "0.01"]}
 timing:
   args: []                  # the program takes its size from its own source today
-  outputs: []               # files the run writes, compared against the baseline's
+  outputs: [h.npy]          # files the run writes, compared against the baseline's
   budget_s: 300
   env:
     # The pristine kernel returns difference arrays by value, so the CPU

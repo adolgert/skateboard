@@ -376,10 +376,38 @@ which point `status` ends with `ONBOARDED` rather than `ACCEPTED`:
 
 The datasets a capture writes are kept in the region's ledger, under a
 name that is a hash of their own bytes, and every claim that was reached
-by comparing against one names it. Promoting what passed — copying the
-manifest and the datasets out of the tree and making the tree the new
-baseline — is a person's step, not a gateway action, and is still to
-come.
+by comparing against one names it.
+
+### Promoting what passed
+
+Promoting is a person's step, not a gateway action. Read the claims
+first — `ledger status` for the region, `ledger show` for anything you
+want the detail of — and then:
+
+    ledger promote --config deploy/state/gateway.host.yaml --region-id tsunami:onboard
+
+It refuses unless the region is one being onboarded, unless every
+onboarding check has passed on the region's current tree, and unless the
+working copy is that tree byte for byte — you review the working copy,
+so what is promoted has to be what you read. It then writes the code's
+directory: the manifest, with its source root rewritten from the tree
+itself to the `baseline` beside it; the tree minus that manifest as the
+new `baseline/`; the visible dataset's inputs under `datasets/visible/`;
+and the answers — the visible outputs, the whole held-out set, and the
+program's own timing outputs — under `captures/`. A destination that
+already holds something is refused unless you pass `--replace`, and
+`--programs` writes the whole thing somewhere else if you would rather
+compare before committing. It ends by printing the steps that stay
+yours: `git add`, a commit, a `phase: porting` region for the code in
+`deploy/gateway.yaml`, `EQUIVALENT_CODE`, and `down.sh`/`up.sh` so the
+oracle image is built again around the new captures.
+
+`deploy/onboard_walkthrough.sh` drives the whole of this against a
+running stack without a model in the loop: it lays the code's bare
+baseline into the working copy, writes the manifest, submits, runs the
+six checks in order, and stops at the `ledger promote` command. It is
+the onboarding half of `walkthrough.sh`, and it is the quickest way to
+see whether a deployment can bring a code in at all.
 
 ## Things worth knowing
 

@@ -45,11 +45,22 @@ def capture_set_dir(store: LedgerStore, sha256: str) -> Path:
     return capture_sets_dir(store) / sha256
 
 
-def _write_set(directory: Path, cases: dict) -> None:
-    """The dataset layout for these cases: every case, then the list of them."""
+def write_dataset(directory: Path, cases: dict, *, inputs: bool = True, outputs: bool = True) -> None:
+    """The dataset layout for these cases: every case, then the list of them.
+
+    `inputs` and `outputs` say which half of each case is written. A
+    stored capture set holds both; a dataset the agent is given holds the
+    inputs alone, and the answers it is judged against hold the outputs
+    alone. Writing a half leaves a case that says it holds only that
+    half, which is what the reader expects to find there.
+    """
     for name in sorted(cases):
         case = cases[name]
-        npy.write_case(directory / name, case.get("inputs", {}), case.get("outputs", {}))
+        npy.write_case(
+            directory / name,
+            case.get("inputs", {}) if inputs else {},
+            case.get("outputs", {}) if outputs else {},
+        )
     (directory / npy.CASES_FILE).write_text(
         json.dumps({"cases": sorted(cases)}, indent=2) + "\n"
     )
@@ -78,7 +89,7 @@ def store_capture_set(store: LedgerStore, name: str, cases: dict) -> Subject:
     """
     staging = Path(tempfile.mkdtemp(dir=capture_sets_dir(store), prefix=".staging-"))
     try:
-        _write_set(staging, cases)
+        write_dataset(staging, cases)
         subject = Subject(kind="capture_set", sha256=hash_files(_files_under(staging)))
         destination = capture_set_dir(store, subject.sha256)
         if not destination.exists():

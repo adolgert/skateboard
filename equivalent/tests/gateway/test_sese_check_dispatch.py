@@ -90,7 +90,8 @@ def _client(tmp_path, source, hi):
     working = tmp_path / "working"
     working.mkdir()
     cfg = RegionConfig(
-        region_id="ch04:step", phase=PORTING, repo_dir=repo_dir, spec_path=SPEC_PATH,
+        region_id="ch04:step", code="tsunami", phase=PORTING, repo_dir=repo_dir,
+        spec_path=SPEC_PATH,
         ledger_dir=tmp_path / "ledger", strategy_path=STRATEGY_PATH,
         baseline_strategy_path=BASELINE_STRATEGY_PATH,
         working_copy_dir=working,
