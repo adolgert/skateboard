@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 
 from . import contract
@@ -50,11 +51,24 @@ SANITIZE_TIMEOUT_S = 600
 # dataset's arguments ask for, which is longer than a replay and shorter
 # than a build.
 CAPTURE_TIMEOUT_S = 600
+# A property run makes one process per drawn example, so its ceiling is a
+# whole search rather than a single call. Long enough for a few thousand
+# invocations of a region, short enough that a driver that hangs on some
+# drawn input ends the run instead of the service.
+PROPERTIES_TIMEOUT_S = 900
+
+# The interpreter a code's property module is run under: this service's
+# own. It is the same one /healthz imports pytest and Hypothesis with, so
+# what the gateway was told is installed is what the run gets.
+PYTHON = sys.executable or "python3"
 
 # What a case directory says it holds. The builder reads this file for the
 # variable names and nothing else -- no name and no element type is
 # written down in this service.
 CASE_FILE = "case.json"
+# And what a directory of cases says it holds. A property module reads a
+# whole dataset rather than one case, so it needs the listing too.
+CASES_FILE = "cases.json"
 
 
 def _workspace(attempt_id, work_root):
@@ -455,6 +469,130 @@ def sanitize(attempt_id, executable, cases, tools, *, work_root=WORK_ROOT,
             # failure rather than whatever the last case happened to print.
             per_tool[tool] = {"ok": not failed, "errors": errors, "log_tail": failing_log or last_log}
     return {"ok": all(t.get("ok") in (True, None) for t in per_tool.values()), "stage": "sanitize", "per_tool": per_tool}
+
+
+def _write_dataset(directory, cases):
+    """A directory of cases in the layout a property module reads.
+
+    The same case directories `run` writes, plus the two listings that
+    turn them into a dataset: `case.json` per case and `cases.json` for
+    the set. No outputs are written -- what a property module is given is
+    inputs, and what the region does with them is the thing under test.
+    """
+    shutil.rmtree(directory, ignore_errors=True)
+    os.makedirs(directory, exist_ok=True)
+    for name, arrs in cases.items():
+        case_dir = _write_case(os.path.join(directory, name), arrs)
+        with open(os.path.join(case_dir, CASE_FILE), "w") as f:
+            json.dump({"inputs": sorted(arrs), "outputs": []}, f, indent=2)
+    with open(os.path.join(directory, CASES_FILE), "w") as f:
+        json.dump({"cases": sorted(cases)}, f, indent=2)
+    return directory
+
+
+# How pytest's own summary line spells what happened. The counts are read
+# from it rather than from an exit code alone, so a claim can say how much
+# ran and not only whether all of it passed.
+COUNT_PATTERN = re.compile(r"(\d+)\s+(passed|failed|errors?)\b")
+
+
+def pytest_counts(text) -> dict:
+    """{passed, failed, errors} as pytest's summary reported them.
+
+    The last figure for each word wins: pytest writes its summary at the
+    end, and a failing test's own captured output can hold anything.
+    """
+    counts = {"passed": 0, "failed": 0, "errors": 0}
+    for match in COUNT_PATTERN.finditer(text):
+        word = match.group(2)
+        counts["errors" if word.startswith("error") else word] = int(match.group(1))
+    return counts
+
+
+def _in_tree(tree_dir, relative):
+    """The absolute path of a file the manifest named, or None if it left the tree.
+
+    A properties module is a path out of the code's own manifest, so it
+    gets the same treatment as a submitted tree path: one that climbs out
+    of the tree, or is absolute, names a file this service will not run.
+    """
+    tree_dir = os.path.abspath(tree_dir)
+    path = os.path.normpath(os.path.join(tree_dir, relative))
+    if path != tree_dir and not path.startswith(tree_dir + os.sep):
+        return None
+    return path
+
+
+def properties(attempt_id, executable, module, cases, seed, max_examples,
+               *, work_root=WORK_ROOT, harness_dir=HARNESS,
+               timeout=PROPERTIES_TIMEOUT_S) -> dict:
+    """Run the code's own module of invariants against its replay binary.
+
+    The module is a pytest file inside the tree, named by the code's
+    manifest. It is run with the baked property library on PYTHONPATH and
+    told, through the environment, which executable to invoke, which cases
+    to draw from, where to write them, which seed to use, and how many
+    examples to draw -- so the module itself names none of those.
+
+    The seed and the example count come back with the counts pytest
+    reported, because a property run is only repeatable if the claim says
+    what it was: the same seed searches the same way, and a different one
+    is a different search rather than a repeat.
+    """
+    tree_dir, replay = _executable(attempt_id, executable, work_root)
+    if replay is None:
+        return {
+            "ok": False, "stage": "properties", "seed": seed, "max_examples": max_examples,
+            "passed": 0, "failed": 0, "errors": 0,
+            "log_tail": f"the tree holds no executable '{executable}'; build it first",
+        }
+
+    module_path = _in_tree(tree_dir, module)
+    if module_path is None or not os.path.isfile(module_path):
+        where = "does not stay inside the tree" if module_path is None else "is not in the tree"
+        return {
+            "ok": False, "stage": "properties", "seed": seed, "max_examples": max_examples,
+            "passed": 0, "failed": 0, "errors": 0,
+            "log_tail": f"the properties module '{module}' {where}",
+        }
+
+    workspace = _workspace(attempt_id, work_root)
+    cases_dir = _write_dataset(os.path.join(workspace, "property_cases"), cases)
+    scratch = os.path.join(workspace, "property_scratch")
+    shutil.rmtree(scratch, ignore_errors=True)
+    os.makedirs(scratch, exist_ok=True)
+
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            [str(harness_dir), *([os.environ["PYTHONPATH"]] if os.environ.get("PYTHONPATH") else [])]
+        ),
+        "HARNESS_REPLAY": replay,
+        "HARNESS_CASES": cases_dir,
+        "HARNESS_SCRATCH": scratch,
+        "HARNESS_SEED": str(seed),
+        "HARNESS_MAX_EXAMPLES": str(max_examples),
+    }
+    # -p no:cacheprovider: the tree is a submission, not a checkout, and a
+    # .pytest_cache written into it would be a file nobody sent.
+    command = [PYTHON, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--tb=short", module_path]
+    try:
+        rc, out, err = _run(command, cwd=tree_dir, env=env, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False, "stage": "properties", "seed": seed, "max_examples": max_examples,
+            "passed": 0, "failed": 0, "errors": 0,
+            "log_tail": f"the property run did not finish within {timeout} seconds",
+        }
+
+    output = out + err
+    return {
+        "ok": rc == 0, "stage": "properties", "seed": seed, "max_examples": max_examples,
+        **pytest_counts(output),
+        # Long enough to hold Hypothesis's minimized falsifying example,
+        # which is the whole value of a failed property run.
+        "log_tail": output[-4000:],
+    }
 
 
 def time_run(attempt_id, executable, args=(), env=None, outputs=(), repeats=5,

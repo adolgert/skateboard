@@ -24,9 +24,10 @@ still serves the table, status, submits, and the analyzer's own check,
 and the actions that need a service it hasn't been given answer with the
 same "not configured" response they already give.
 
-When there is a builder, startup asks it which executables it has and
-refuses to serve if a strategy needs one it lacks, so a deployment that
-could never pass its own gates says so before the first request.
+When there is a builder, startup asks it what it has -- executables, and
+the modules a property run imports -- and refuses to serve if a strategy
+needs something it lacks, so a deployment that could never pass its own
+gates says so before the first request.
 """
 from __future__ import annotations
 
@@ -47,6 +48,13 @@ BACKEND_TOKEN_VAR = "EQUIVALENT_BACKEND_TOKEN"
 PORT_VAR = "EQUIVALENT_PORT"
 DEFAULT_PORT = 8000
 
+# How a strategy asks for something the builder imports rather than
+# something it runs. `python:pytest` is answered from the builder's
+# python_modules report; anything without the prefix is an executable and
+# is answered from its tools report. Two ways of looking, because a module
+# on the interpreter's path and a binary on PATH are not the same thing.
+MODULE_PREFIX = "python:"
+
 
 def _required(env, name: str) -> str:
     value = (env.get(name) or "").strip()
@@ -56,13 +64,18 @@ def _required(env, name: str) -> str:
 
 
 def check_required_tools(regions, builder) -> None:
-    """Stop startup if a region's strategy needs an executable the builder lacks.
+    """Stop startup if a region's strategy needs something the builder lacks.
 
     The strategy names the tools its build and its gates need; the builder
     is the machine that would run them. Comparing the two here means a
     deployment whose builder image is missing a compiler says so on the
     first line of its log, instead of accepting requests and failing them
     one at a time in a way that reads like the agent's fault.
+
+    An entry spelled `python:<module>` is not an executable but something
+    the builder's own interpreter has to import -- pytest and Hypothesis,
+    which the property check runs a code's invariants with. The builder
+    reports those separately, and they are looked up separately.
     """
     try:
         report = builder.healthz()
@@ -72,6 +85,18 @@ def check_required_tools(regions, builder) -> None:
             f"against the strategies: {exc}"
         ) from exc
     present = report.get("tools", {})
+    importable = report.get("python_modules", {})
+
+    def has(tool: str) -> bool:
+        if tool.startswith(MODULE_PREFIX):
+            return bool(importable.get(tool[len(MODULE_PREFIX):]))
+        return bool(present.get(tool))
+
+    def available() -> list:
+        return sorted(
+            [name for name, have in present.items() if have]
+            + [f"{MODULE_PREFIX}{name}" for name, have in importable.items() if have]
+        )
 
     for region_id in sorted(regions):
         region = regions[region_id]
@@ -79,12 +104,11 @@ def check_required_tools(regions, builder) -> None:
         # its port is compiled with, and the one its baseline is.
         for path in (region.strategy_path, region.baseline_strategy_path):
             strategy = load_strategy(path)
-            missing = [tool for tool in strategy.required_tools if not present.get(tool)]
+            missing = [tool for tool in strategy.required_tools if not has(tool)]
             if missing:
                 raise ValueError(
                     f"strategy '{strategy.name}' (region '{region_id}') requires {missing}, "
-                    f"which the builder does not have; it reports "
-                    f"{sorted(name for name, have in present.items() if have)}"
+                    f"which the builder does not have; it reports {available()}"
                 )
 
 

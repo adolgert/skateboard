@@ -44,6 +44,10 @@ FIXTURE_SHAPES = {"field": (4,), "flux": (2, 3)}
 # manifest names other than the source root is read from there, so the
 # fixture keeps its policy where a real code keeps one.
 TOLERANCES_IN_TREE = "harness/tolerances.json"
+# And where a code that has one keeps its property module. The fixture
+# writes one only when a test asks for it, because a code declaring no
+# invariants is the ordinary case.
+PROPERTIES_IN_TREE = "harness/properties.py"
 
 # A code small enough to read here, with every field the manifest schema
 # requires. The visible dataset holds one case, which is what the
@@ -77,6 +81,21 @@ PROGRAM_MANIFEST = {
     "tolerances": TOLERANCES_IN_TREE,
     "properties": None,
 }
+
+# The fixture code's property module. It is never executed in these tests --
+# only the builder runs one -- but the manifest loader insists every path a
+# manifest names is a file, so there has to be something here, and what is
+# here should read like the real thing.
+FIXTURE_PROPERTIES = '''"""Invariants of the fixture code's region, run by the builder."""
+import harness_properties as harness
+
+
+def test_the_same_inputs_give_the_same_outputs():
+    for inputs in harness.corpus():
+        first = harness.run_replay(inputs)
+        second = harness.run_replay(inputs)
+        assert set(first) == set(second)
+'''
 
 # A band wide enough that the fixture's arrays compare equal to themselves
 # under any of the three metrics.
@@ -175,7 +194,8 @@ def program_tolerances(directory) -> Path:
     return Path(directory) / "baseline" / TOLERANCES_IN_TREE
 
 
-def write_program(root, name: str = "tsunami", *, minimal: bool = False) -> Path:
+def write_program(root, name: str = "tsunami", *, minimal: bool = False,
+                  properties: bool = False) -> Path:
     """Write `<root>/programs/<name>/` and return that code's directory.
 
     The programs directory a deployment mounts is its parent, and the
@@ -183,7 +203,9 @@ def write_program(root, name: str = "tsunami", *, minimal: bool = False) -> Path
     thing told to it.
 
     `minimal` writes the form a code starts in: the tree and its name,
-    and none of what onboarding produces.
+    and none of what onboarding produces. `properties` writes a code that
+    declares a property module, which is what makes the property check
+    part of what its ports are judged by.
     """
     directory = Path(root) / "programs" / name
     (directory / "baseline" / "src").mkdir(parents=True, exist_ok=True)
@@ -200,6 +222,9 @@ def write_program(root, name: str = "tsunami", *, minimal: bool = False) -> Path
     (visible / npy.CASES_FILE).write_text(json.dumps({"cases": [VISIBLE_CASE]}))
 
     manifest = {**PROGRAM_MANIFEST, "name": name}
+    if properties:
+        (directory / "baseline" / PROPERTIES_IN_TREE).write_text(FIXTURE_PROPERTIES)
+        manifest["properties"] = PROPERTIES_IN_TREE
     if minimal:
         manifest = {key: manifest[key] for key in ("version", "name", "source")}
     (directory / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
@@ -284,9 +309,22 @@ class FakeBuilder:
             name: True for name in
             ("nvfortran", "compute-sanitizer", "nsys", "make", "cmake", "fpm", "gfortran")
         }
+        # The importable modules the real builder reports beside them,
+        # which is how a strategy asks for pytest: an executable and an
+        # importable module are looked for in different ways.
+        self.python_modules = {name: True for name in ("pytest", "hypothesis", "numpy")}
+        self.properties_calls = []
+        self.properties_ok = True
+        # What pytest's summary line said, as the real builder parses it.
+        # A test that wants a property to have failed sets both.
+        self.properties_counts = {"passed": 3, "failed": 0, "errors": 0}
+        self.properties_log = ""
 
     def healthz(self):
-        return {"ok": True, "tools": dict(self.tools)}
+        return {
+            "ok": True, "tools": dict(self.tools),
+            "python_modules": dict(self.python_modules),
+        }
 
     def build(self, attempt_id, tree, makefile, targets, compiler, flags, link_flags,
               source_patterns):
@@ -338,6 +376,17 @@ class FakeBuilder:
             outputs = {name: dict(self.run_outputs) for name in cases}
         return {"ok": True, "stage": "run", "outputs": outputs, "kernels_launched": self.run_kernels,
                 "launches": self.run_launches, "log_tail": ""}
+
+    def properties(self, attempt_id, executable, module, cases, seed, max_examples):
+        self.properties_calls.append({
+            "attempt_id": attempt_id, "executable": executable, "module": module,
+            "cases": cases, "seed": seed, "max_examples": max_examples,
+        })
+        return {
+            "ok": self.properties_ok, "stage": "properties", "seed": seed,
+            "max_examples": max_examples, **self.properties_counts,
+            "log_tail": self.properties_log,
+        }
 
     def capture(self, attempt_id, executable, args, run_name):
         self.capture_calls.append({

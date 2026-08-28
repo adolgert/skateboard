@@ -10,8 +10,12 @@ FROM nvcr.io/nvidia/nvhpc:25.9-devel-cuda13.0-ubuntu24.04
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-pip make cmake curl \
  && rm -rf /var/lib/apt/lists/*
+# pytest, hypothesis and numpy are here for the property stage: a code's own
+# module of invariants is a pytest file, run by this interpreter against the
+# replay binary. Pinned by major version like the service's own dependencies.
 RUN pip3 install --break-system-packages --no-cache-dir \
-      "fastapi==0.115.*" "uvicorn[standard]==0.30.*" "pydantic==2.*"
+      "fastapi==0.115.*" "uvicorn[standard]==0.30.*" "pydantic==2.*" \
+      "pytest==8.*" "hypothesis==6.*" "numpy==2.*"
 
 # fpm ships as one static binary. Pinned by version and checked by digest: the
 # builder runs it on submitted code, so what lands here is not whatever the
@@ -28,7 +32,12 @@ RUN mkdir -p /opt/harness /work
 # The trusted, baked harness -- NOT from the agent's payload. fc-shim is the
 # compiler a submitted makefile is handed; npy_io.f90 is the capture format's
 # Fortran side, which a code's own replay driver compiles against.
-COPY services/builder/harness/npy_io.f90 services/builder/harness/fc-shim /opt/harness/
+# harness_properties.py is the third: the library a code's property module
+# imports, which turns "run the region on these inputs" into an invocation of
+# the replay binary. It is baked rather than sent with the code, so what that
+# phrase means cannot be redefined by the thing under test.
+COPY services/builder/harness/npy_io.f90 services/builder/harness/fc-shim \
+     services/builder/harness/harness_properties.py /opt/harness/
 RUN chmod +x /opt/harness/fc-shim
 # Service code (the build contract and the gate command lines live here).
 COPY services/builder /app/services/builder

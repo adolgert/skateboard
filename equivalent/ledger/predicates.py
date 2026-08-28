@@ -79,6 +79,13 @@ _register(
     "per-output breakdown. On the tree.",
 )
 _register(
+    "regression/property", True, DetailLevel.FULL,
+    "The code's own property module passed, on the tree, at the recorded seed. Where the "
+    "regression checks compare a port against captured answers, this one searches for an "
+    "input on which an invariant the code states does not hold; detail is the seed, how "
+    "many examples were drawn, and what the run printed.",
+)
+_register(
     "timing/port", False, DetailLevel.FULL,
     "Wall-clock timing of the ported binary, on the tree.",
 )

@@ -8,6 +8,8 @@ sanitize: Runs 'sanitize' via builder:/v1/sanitize. Records: sanitize/memcheck, 
 
 regression_visible: Runs 'regression_visible' via oracle:/v1/compare. Records: regression/visible. Requires: sanitize/memcheck = pass for the submitted tree; sanitize/racecheck = pass for the submitted tree.
 
+property_check: Runs 'property_check' via builder:/v1/properties. Records: regression/property. Requires: regression/visible = pass for the submitted tree.
+
 regression_holdout: Runs 'regression_holdout' via oracle:/v1/compare. Records: regression/holdout. Requires: regression/visible = pass for the submitted tree.
 
 program_regression: Runs 'program_regression' via builder:/v1/time. Records: program/regression. Requires: regression/holdout = pass for the submitted tree.

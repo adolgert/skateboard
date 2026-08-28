@@ -7,9 +7,12 @@ what says whether it obeyed. They are skipped where no gfortran is
 installed, so the suite still runs on a machine with no compiler.
 """
 import base64
+import importlib.util
+import io
 import shutil
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from services.builder import stages
@@ -268,11 +271,27 @@ def test_time_run_repeats_the_program_and_returns_the_files_it_declared(tmp_path
     assert b"done" in base64.b64decode(result["outputs"][-1]["result.dat"])
 
 
+# A program whose declared output really is different every run. It counts
+# its own runs in a file beside the output rather than reading a clock:
+# two runs a few milliseconds apart can land on the same tick, and then
+# the test below would fail for a reason that has nothing to do with what
+# it is asking.
 DRIFTING_TIMER = """program drifting
-  integer :: c
-  call system_clock(c)
+  integer :: n
+  logical :: there
+  n = 0
+  inquire(file='runs.dat', exist=there)
+  if (there) then
+    open(unit=11, file='runs.dat', status='old')
+    read(11, *) n
+    close(11)
+  end if
+  n = n + 1
+  open(unit=11, file='runs.dat', status='replace')
+  write(11, *) n
+  close(11)
   open(unit=10, file='result.dat')
-  write(10, *) c
+  write(10, *) n
   close(10)
 end program drifting
 """
@@ -425,3 +444,169 @@ def test_capture_reports_the_executable_the_manifest_named_when_it_is_missing(tm
 
     assert result["ok"] is False
     assert "no_such_program" in result["stdout_tail"]
+
+
+# A replay driver written in Python rather than Fortran, so the property
+# stage can be exercised where no compiler is installed. It does what the
+# fixture region does: one step, adding one to what it was given.
+REPLAY_SCRIPT = """#!/bin/sh
+exec "PYTHON" - "$1" <<'PYEOF'
+import sys
+from pathlib import Path
+import numpy as np
+case = Path(sys.argv[1])
+np.save(case / "h.out.npy", np.load(case / "h.npy") + 1)
+PYEOF
+"""
+
+# One property this replay has and one it does not. The failing one is
+# wrong on purpose: what the stage has to report is which of the two
+# failed and how many ran, not that everything was fine.
+PROPERTIES_MODULE = '''"""Invariants of a code, run against its own replay binary."""
+from hypothesis import given, strategies as st
+
+import harness_properties as harness
+
+
+@harness.settings()
+@given(st.integers(min_value=0, max_value=3))
+def test_the_same_inputs_replay_to_the_same_outputs(offset):
+    inputs = {"h": harness.corpus()[0]["h"] + offset}
+    first = harness.run_replay(inputs)["h"]
+    second = harness.run_replay(inputs)["h"]
+    assert (first == second).all()
+
+
+def test_the_replay_hands_back_what_it_was_given():
+    inputs = harness.corpus()[0]
+    assert (harness.run_replay(inputs)["h"] == inputs["h"]).all()
+
+
+def test_the_seed_reached_the_module():
+    assert harness.seed() == 4242
+'''
+
+def _npy(values) -> bytes:
+    """One array as the bytes of an NPY file, which is how a case travels."""
+    buffer = io.BytesIO()
+    np.save(buffer, np.asarray(values, dtype="<f4"), allow_pickle=False)
+    return buffer.getvalue()
+
+
+PROPERTY_CASES = {"case0000": {"h": base64.b64encode(_npy([1.0, 2.0, 3.0])).decode()}}
+
+
+def _property_tree(tmp_path, files=None):
+    """A workspace holding a replay binary and whatever else the test wants."""
+    import os
+    import sys
+
+    written = {"replay": REPLAY_SCRIPT.replace("PYTHON", sys.executable)}
+    written.update(files or {"harness/properties.py": PROPERTIES_MODULE})
+    tree_dir = stages.write_tree(tmp_path / "attempt-1" / "tree", tree_of(written))
+    os.chmod(Path(tree_dir) / "replay", 0o755)
+    return tree_dir
+
+
+needs_hypothesis = pytest.mark.skipif(
+    importlib.util.find_spec("hypothesis") is None,
+    reason="running a code's property module needs Hypothesis",
+)
+
+
+@needs_hypothesis
+def test_properties_runs_the_module_and_reports_what_passed_and_what_failed(tmp_path):
+    _property_tree(tmp_path)
+
+    result = stages.properties(
+        "attempt-1", "replay", "harness/properties.py", PROPERTY_CASES,
+        seed=4242, max_examples=5, work_root=tmp_path, harness_dir=HARNESS,
+    )
+
+    assert result["ok"] is False  # one of the three properties does not hold
+    assert result["passed"] == 2
+    assert result["failed"] == 1
+    assert result["errors"] == 0
+    assert result["seed"] == 4242
+    assert result["max_examples"] == 5
+    assert "test_the_replay_hands_back_what_it_was_given" in result["log_tail"]
+
+
+@needs_hypothesis
+def test_properties_passes_when_every_property_holds(tmp_path):
+    _property_tree(tmp_path, files={"harness/properties.py": (
+        "import harness_properties as harness\n"
+        "\n"
+        "\n"
+        "def test_one_step_adds_one():\n"
+        "    inputs = harness.corpus()[0]\n"
+        "    assert (harness.run_replay(inputs)['h'] == inputs['h'] + 1).all()\n"
+    )})
+
+    result = stages.properties(
+        "attempt-1", "replay", "harness/properties.py", PROPERTY_CASES,
+        seed=7, max_examples=5, work_root=tmp_path, harness_dir=HARNESS,
+    )
+
+    assert result["ok"] is True
+    assert result["passed"] == 1
+    assert result["failed"] == 0
+
+
+@needs_hypothesis
+def test_the_cases_reach_the_module_as_the_corpus_it_reads(tmp_path):
+    # The property module never sees the wire format: it asks for the
+    # corpus and gets arrays, which is the whole point of the library.
+    _property_tree(tmp_path, files={"harness/properties.py": (
+        "import harness_properties as harness\n"
+        "\n"
+        "\n"
+        "def test_the_corpus_is_the_visible_cases():\n"
+        "    corpus = harness.corpus()\n"
+        "    assert len(corpus) == 1\n"
+        "    assert list(corpus[0]['h']) == [1.0, 2.0, 3.0]\n"
+    )})
+
+    result = stages.properties(
+        "attempt-1", "replay", "harness/properties.py", PROPERTY_CASES,
+        seed=7, max_examples=5, work_root=tmp_path, harness_dir=HARNESS,
+    )
+
+    assert result["ok"] is True, result["log_tail"]
+
+
+@pytest.mark.parametrize("module", ["../elsewhere/properties.py", "/etc/properties.py"])
+def test_a_properties_module_outside_the_tree_is_refused_by_name(tmp_path, module):
+    _property_tree(tmp_path)
+
+    result = stages.properties(
+        "attempt-1", "replay", module, PROPERTY_CASES,
+        seed=1, max_examples=5, work_root=tmp_path, harness_dir=HARNESS,
+    )
+
+    assert result["ok"] is False
+    assert module in result["log_tail"]
+
+
+def test_a_properties_module_the_tree_does_not_hold_is_refused_by_name(tmp_path):
+    _property_tree(tmp_path)
+
+    result = stages.properties(
+        "attempt-1", "replay", "harness/nothing_here.py", PROPERTY_CASES,
+        seed=1, max_examples=5, work_root=tmp_path, harness_dir=HARNESS,
+    )
+
+    assert result["ok"] is False
+    assert "harness/nothing_here.py" in result["log_tail"]
+
+
+def test_properties_reports_the_replay_executable_when_it_is_missing(tmp_path):
+    _property_tree(tmp_path)
+
+    result = stages.properties(
+        "attempt-1", "some_other_binary", "harness/properties.py", PROPERTY_CASES,
+        seed=1, max_examples=5, work_root=tmp_path, harness_dir=HARNESS,
+    )
+
+    assert result["ok"] is False
+    assert "some_other_binary" in result["log_tail"]

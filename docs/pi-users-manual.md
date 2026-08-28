@@ -66,7 +66,8 @@ when a speedup is measured.
 **The manifest.** A configuration file per code, also fixed before the
 session, saying what the code is: which tree, which makefile and build
 targets, which variables the region reads and writes, which datasets,
-and what the timing run is. It is why the harness needs to be taught
+what the timing run is, and whether the code carries a module of
+invariants of its own. It is why the harness needs to be taught
 nothing about a code in order to build and run it. Every claim records
 it too.
 
@@ -219,6 +220,30 @@ compared against the reference outputs for the visible test cases,
 under the oracle's tolerance policy. The answer includes the per-case
 comparison, and the claim names the policy's hash.
 
+**`property_check`** — The code's own module of invariants is run
+against the port's replay binary, inside the builder. Where every
+regression check compares a port against recorded answers, this one
+searches for an input where something the code says is always true of
+it is not: for `tsunami`, that one step of the region is a function of
+its inputs alone, that it conserves the total water, and that rotating
+its periodic grid rotates the answer bitwise. The inputs are drawn by
+perturbing the visible cases, so a drawn state is one the code is meant
+to be run on.
+
+The search is random, so the claim records the seed it used and how many
+examples it drew. Ask for a particular `seed` to make exactly the search
+that failed happen again — same seed, same search, and the gateway
+answers with the claim already filed rather than running it twice; a
+different seed is a different search and gets a claim of its own.
+`max_examples` says how hard to look, and defaults to 100. When a
+property fails, the claim carries what the run printed, which is where
+Hypothesis writes the smallest input it could find that breaks it.
+
+This check exists only for a code that declares a properties module in
+its manifest. A code that declares none is not asked for it and is not
+held back by it; a code that does declares it must pass before the port
+is accepted.
+
 **`regression_holdout`** — The same comparison on a second set of cases
 the session never sees. The answer is pass or fail only, so a port
 cannot be tuned to the held-out set. The full comparison stays in the
@@ -264,8 +289,8 @@ run times, what the program was given, which files it wrote and their
 digests, and whether the GPU was otherwise idle, which on a shared
 workstation it usually is not.
 
-The two timing checks accept a `repeats` setting; nothing else takes
-any configuration.
+The two timing checks accept a `repeats` setting, and `property_check`
+accepts `seed` and `max_examples`; nothing else takes any configuration.
 
 ### 5. Acceptance
 
@@ -384,7 +409,10 @@ capture program, a tolerance policy, and a **manifest** at
 `harness/manifest.yaml` that names all of them. The manifest is the
 code's description of itself — its source tree, its build targets, the
 region's variables and their types, the runs that make the visible and
-held-out datasets, the timing run, and where the tolerance policy is.
+held-out datasets, the timing run, where the tolerance policy is, and —
+optionally — a `properties` module of invariants the code states about
+itself. A code with none writes `properties: null`, and its ports are
+never asked for a property claim.
 Beside the code it is written once more, as `programs/<code>/manifest.yaml`;
 a code that has not been onboarded yet has only the first three fields
 of it, and a region cannot be ported until the rest exists.

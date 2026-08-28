@@ -94,7 +94,9 @@ def test_the_tsunami_manifest_loads_and_resolves_its_paths():
     ]
     assert manifest.datasets["visible"].args == ("100", "5000", "25", "0.02")
     assert manifest.timing.budget_s == 300
-    assert manifest.properties is None
+    # The code carries its own invariants, and the path resolves inside
+    # the tree the same way the tolerance policy's does.
+    assert manifest.properties == TSUNAMI.parent / "baseline" / "harness" / "properties.py"
 
 
 def test_a_loaded_manifest_names_itself_as_a_subject(tmp_path):

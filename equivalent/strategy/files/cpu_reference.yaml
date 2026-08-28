@@ -34,6 +34,12 @@ link_flags: []
 
 required_tools:
   - nvfortran
+  # A code may carry its own module of invariants, and the property check
+  # runs it with pytest and Hypothesis inside the builder. Every strategy
+  # asks for them, not only the porting ones: which strategy a code with
+  # properties is ported under is the region's choice, not the code's.
+  - "python:pytest"
+  - "python:hypothesis"
 
 # Nothing is offloaded here, so there is no kernel launch to count and a
 # host fallback is the whole point rather than an error.

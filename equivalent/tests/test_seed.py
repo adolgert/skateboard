@@ -12,18 +12,19 @@ from equivalent.ledger.subjects import tree_subject
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CODE = "tsunami"
 
-# The baseline is these eight files and nothing else. Naming them here is
+# The baseline is these nine files and nothing else. Naming them here is
 # the point of the test: the directory they are read from also holds
 # compiler output, and a seed that grew a .mod file or a binary would
 # change the baseline hash without anyone choosing to.
 #
-# The ones under harness/ are the replay driver, the capture program, and
-# the tolerance policy. They are the code's own, built or read by the
+# The ones under harness/ are the replay driver, the capture program, the
+# property module, and the tolerance policy. They are the code's own, built or read by the
 # code's own makefile and frozen while a region of it is ported -- no
 # strategy allows them to be edited.
 BASELINE = [
     "Makefile",
     "harness/gen_reference.f90",
+    "harness/properties.py",
     "harness/replay.f90",
     "harness/tolerances.json",
     "src/mod_diff.f90",

@@ -114,14 +114,17 @@ def _named_region(parser: argparse.ArgumentParser, config_path, region_id):
 
 
 def _open_region(parser: argparse.ArgumentParser, args):
-    """The store, the current tree and frozen subjects if knowable, the phase, and a display name.
+    """The store, the current tree and frozen subjects if knowable, the phase, a display name, and the code.
 
     The tree and frozen subjects come back as None when only a directory
     was named: the ledger alone cannot say what the region's current tree
     is, and guessing is the status computation's own documented fallback.
     A directory named on its own says nothing about the phase either, and
     a ledger directory holding a port's claims is by far the common case,
-    so that reading is what a bare directory gets.
+    so that reading is what a bare directory gets. It says nothing about
+    the code either, so there is no manifest to read the property
+    requirement out of, and the fixed acceptance list is what it is judged
+    by.
     """
     named_config = args.config is not None or args.region_id is not None
     if named_config and (args.config is None or args.region_id is None):
@@ -132,7 +135,7 @@ def _open_region(parser: argparse.ArgumentParser, args):
         parser.error("name a region directory, or --config with --region-id")
 
     if args.region_dir is not None:
-        return LedgerStore(args.region_dir), None, None, PORTING, Path(args.region_dir).name
+        return LedgerStore(args.region_dir), None, None, PORTING, Path(args.region_dir).name, None
 
     _, cfg = _named_region(parser, args.config, args.region_id)
     store = LedgerStore(cfg.ledger_dir)
@@ -146,6 +149,7 @@ def _open_region(parser: argparse.ArgumentParser, args):
         Subject(kind="frozen", sha256=frozen_sha),
         cfg.phase,
         cfg.region_id,
+        cfg.manifest,
     )
 
 
@@ -222,8 +226,10 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "status":
-        store, tree, frozen, phase, name = _open_region(parser, args)
-        status = compute_status(store, requirements_for(phase), phase, tree=tree, frozen=frozen)
+        store, tree, frozen, phase, name, manifest = _open_region(parser, args)
+        status = compute_status(
+            store, requirements_for(phase, manifest), phase, tree=tree, frozen=frozen,
+        )
         if args.json:
             print(json.dumps(status, indent=2, sort_keys=True))
         else:
@@ -231,7 +237,7 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "history":
-        store, _, _, _, _ = _open_region(parser, args)
+        store, _, _, _, _, _ = _open_region(parser, args)
         history = compute_history(store)
         if args.json:
             print(json.dumps(history, indent=2, sort_keys=True))

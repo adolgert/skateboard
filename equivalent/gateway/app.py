@@ -35,6 +35,7 @@ from equivalent.components import (
     harness_timing,
     manifest_check,
     program_regression,
+    property_check,
     regression,
     run_replay,
     sanitize,
@@ -45,6 +46,7 @@ from equivalent.components.errors import ComponentError
 from equivalent.gateway.datasets import load_visible_cases
 from equivalent.ledger.acceptance import (
     ACCEPTANCE_REQUIREMENTS,
+    CONDITIONAL_REQUIREMENTS,
     ONBOARDING_REQUIREMENTS,
     requirements_for,
 )
@@ -64,7 +66,7 @@ from .submit import (
     resolve_allow_globs,
 )
 from .submit import submit as do_submit
-from .table import ACTION_TABLE, rows_for
+from .table import ACTION_TABLE, requires_for, rows_for
 
 ROWS_BY_NAME = {row.name: row for row in ACTION_TABLE}
 PRODUCERS = {predicate_type: row.name for row in ACTION_TABLE for predicate_type in row.emits}
@@ -77,7 +79,7 @@ PRODUCERS = {predicate_type: row.name for row in ACTION_TABLE for predicate_type
 # "tree", which is what the fallback says).
 SUBJECT_KIND_OF = {
     req.predicate_type: req.subject_kind
-    for req in (*ACCEPTANCE_REQUIREMENTS, *ONBOARDING_REQUIREMENTS)
+    for req in (*ACCEPTANCE_REQUIREMENTS, *CONDITIONAL_REQUIREMENTS, *ONBOARDING_REQUIREMENTS)
 }
 
 
@@ -227,15 +229,16 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 detail="GET /table needs a region: the actions a session has are the "
                        "actions of its region's phase",
             )
+        cfg = _region(region)
         return [
             {
                 "name": row.name,
                 "emits": list(row.emits),
-                "requires": [list(pair) for pair in row.requires],
+                "requires": [list(pair) for pair in requires_for(row, cfg.manifest)],
                 "deterministic": row.deterministic,
                 "component": row.component,
             }
-            for row in rows_for(_region(region).phase)
+            for row in rows_for(cfg.phase)
         ]
 
     @app.get("/status")
@@ -245,7 +248,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         store = _store(region)
         tree_sha, frozen_sha = _current(cfg, store, load_strategy(cfg.strategy_path))
         return compute_status(
-            store, requirements_for(cfg.phase), cfg.phase,
+            store, requirements_for(cfg.phase, cfg.manifest), cfg.phase,
             tree=Subject(kind="tree", sha256=tree_sha),
             frozen=Subject(kind="frozen", sha256=frozen_sha),
         )
@@ -423,6 +426,26 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 # formal material, not just a note in detail.
                 policy = Subject(kind="policy", sha256=result["detail"]["policy_sha256"])
                 claim = record("regression/visible", subjects_by_kind["tree"], "oracle", result, materials=[policy])
+                log("claim", claim_id=claim.id)
+                return _claim_response(claim)
+
+            if req.action == "property_check":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                # A seed the request names is the same search again, and
+                # the config hash carries it, so a repeat at that seed
+                # comes back as the claim already filed. A request that
+                # names none has one drawn in the component and written
+                # into the claim, which is how a person reads back the
+                # search that failed and asks for it again.
+                result = property_check.check(
+                    cfg.region_id, tree_sha, cfg.manifest, _visible_cases(cfg), builder,
+                    seed=req.config.get("seed"),
+                    max_examples=req.config.get(
+                        "max_examples", property_check.DEFAULT_MAX_EXAMPLES,
+                    ),
+                )
+                claim = record("regression/property", subjects_by_kind["tree"], "builder", result)
                 log("claim", claim_id=claim.id)
                 return _claim_response(claim)
 

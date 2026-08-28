@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -38,7 +39,10 @@ def _region(tmp_path, region_id="ch04:step", phase=PORTING):
         strategy_path=STRATEGY_PATH,
         baseline_strategy_path=BASELINE_STRATEGY_PATH,
         working_copy_dir=working,
-        manifest=load_manifest(write_program(tmp_path) / "manifest.yaml"),
+        # A code that declares its own invariants: the accept row's
+        # preconditions are the longest list a porting region can have,
+        # which is what the table fixture below is a copy of.
+        manifest=load_manifest(write_program(tmp_path, properties=True) / "manifest.yaml"),
     )
     return cfg
 
@@ -104,6 +108,33 @@ def test_get_table_matches_the_pi_extension_fixture(tmp_path):
     assert r.json() == fixture
 
 
+def test_the_accept_row_asks_for_the_property_claim_only_from_a_code_that_has_one(tmp_path):
+    # The table is the same rows for every porting region, but what
+    # finishes a port is not: a code with no module of invariants has none
+    # to pass.
+    with_properties = _region(tmp_path / "with")
+    without = _region(tmp_path / "without")
+    without = replace(
+        without,
+        manifest=load_manifest(write_program(tmp_path / "without") / "manifest.yaml"),
+    )
+
+    def accept_row(cfg):
+        client = TestClient(create_app({cfg.region_id: cfg}, TOKEN))
+        rows = client.get("/table", params={"region": cfg.region_id}, headers=HEADERS).json()
+        return next(row for row in rows if row["name"] == "accept")
+
+    assert ["regression/property", "tree"] in accept_row(with_properties)["requires"]
+    assert ["regression/property", "tree"] not in accept_row(without)["requires"]
+    # The action itself is offered either way: the table is one list per
+    # phase, and the gateway's own answer is what says it was not needed.
+    assert "property_check" in [
+        row["name"] for row in TestClient(
+            create_app({without.region_id: without}, TOKEN)
+        ).get("/table", params={"region": without.region_id}, headers=HEADERS).json()
+    ]
+
+
 def test_get_status_reports_the_real_current_tree_before_any_check_has_run(tmp_path):
     client, cfg = _client(tmp_path)
     store = LedgerStore(cfg.ledger_dir)
@@ -125,7 +156,7 @@ def test_get_status_reports_the_real_current_tree_before_any_check_has_run(tmp_p
         load_strategy(cfg.strategy_path),
     )
     expected = compute_status(
-        store, requirements_for(cfg.phase), cfg.phase,
+        store, requirements_for(cfg.phase, cfg.manifest), cfg.phase,
         tree=Subject(kind="tree", sha256=tree_sha), frozen=Subject(kind="frozen", sha256=frozen_sha),
     )
     assert body == expected

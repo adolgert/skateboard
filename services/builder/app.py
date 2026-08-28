@@ -7,6 +7,7 @@ the makefile, the targets, the compiler, the flags, and the executables
 all come from the gateway, which read them from the code's hashed
 manifest and the hashed strategy file. Bearer token required.
 """
+import importlib.util
 import os
 import shutil
 
@@ -22,6 +23,13 @@ TOKEN = os.environ.get("SKATEBOARD_TOKEN", "")
 # and the gateway refuses to start against a builder that is missing
 # something a strategy needs.
 TOOLS = ("nvfortran", "compute-sanitizer", "nsys", "make", "cmake", "fpm", "gfortran")
+
+# The importable modules a strategy may ask for, spelled `python:<module>`
+# in its `required_tools`. They are reported separately from TOOLS because
+# they are found differently: pytest is a module this service imports, not
+# an executable on PATH, and looking for a `pytest` binary would answer a
+# different question from the one the property stage asks.
+PYTHON_MODULES = ("pytest", "hypothesis", "numpy")
 app = FastAPI(title="skateboard-builder")
 
 
@@ -89,6 +97,17 @@ class SanitizeReq(BaseModel):
     tools: list = ["memcheck", "racecheck"]
 
 
+class PropertiesReq(BaseModel):
+    attempt_id: str
+    executable: str  # the manifest's replay target, which the properties call
+    module: str      # the manifest's properties module, relative to the tree root
+    # The visible cases, shaped like RunReq.cases. They become the corpus
+    # the code's own properties draw from.
+    cases: dict
+    seed: int
+    max_examples: int
+
+
 class TimeReq(BaseModel):
     attempt_id: str
     executable: str  # the manifest's timing target
@@ -130,6 +149,14 @@ def sanitize(req: SanitizeReq, authorization: str | None = Header(default=None))
     return stages.sanitize(req.attempt_id, req.executable, req.cases, req.tools)
 
 
+@app.post("/v1/properties")
+def properties(req: PropertiesReq, authorization: str | None = Header(default=None)):
+    _auth(authorization)
+    return stages.properties(
+        req.attempt_id, req.executable, req.module, req.cases, req.seed, req.max_examples,
+    )
+
+
 @app.post("/v1/time")
 def time_run(req: TimeReq, authorization: str | None = Header(default=None)):
     _auth(authorization)
@@ -141,10 +168,29 @@ def time_run(req: TimeReq, authorization: str | None = Header(default=None)):
 
 @app.get("/healthz")
 def healthz():
-    """Liveness, plus which of the known executables this image actually has.
+    """Liveness, plus what this image can actually run.
 
-    The keys are the executable names exactly as a strategy's
+    The tool keys are the executable names exactly as a strategy's
     `required_tools` spells them, so the gateway can compare the two
-    without translating between two vocabularies.
+    without translating between two vocabularies. The module keys are the
+    same idea for what a property run imports: a strategy asks for one by
+    writing `python:pytest`, and this says whether the interpreter that
+    would run it can import it.
     """
-    return {"ok": True, "tools": {name: shutil.which(name) is not None for name in TOOLS}}
+    return {
+        "ok": True,
+        "tools": {name: shutil.which(name) is not None for name in TOOLS},
+        "python_modules": {name: _importable(name) for name in PYTHON_MODULES},
+    }
+
+
+def _importable(name: str) -> bool:
+    """Can this service's own interpreter import that module.
+
+    It is the interpreter the property stage runs pytest with, so this
+    answers the question the gateway is actually asking.
+    """
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False

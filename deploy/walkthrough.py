@@ -59,6 +59,9 @@ BAD_KERNEL = "sonnet-attempt01-mod_kernel.f90"
 
 # In order, after the region has a passing analyzer verdict and a submitted
 # port. Each one's preconditions are the claims the ones before it filed.
+# property_check runs the code's own module of invariants; it is on this
+# list because tsunami declares one, and a code that does not would refuse
+# it with an error saying so.
 # time_baseline comes before program_regression because it is the run that
 # stores the baseline program's own outputs, and program_regression comes
 # before time_port because timing a program that computes the wrong thing
@@ -68,6 +71,7 @@ GATES = (
     "run_replay",
     "sanitize",
     "regression_visible",
+    "property_check",
     "regression_holdout",
     "time_baseline",
     "program_regression",

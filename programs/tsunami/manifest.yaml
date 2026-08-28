@@ -56,4 +56,7 @@ timing:
     MALLOC_TRIM_THRESHOLD_: "-1"
     MALLOC_MMAP_THRESHOLD_: "1073741824"
 tolerances: harness/tolerances.json   # relative to the source tree root
-properties: null            # or a path to a pytest module
+# This code's own invariants, as a pytest module the property check runs
+# against the replay binary. Relative to the source tree root, like the
+# tolerances above. A code with none writes `properties: null`.
+properties: harness/properties.py

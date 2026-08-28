@@ -19,7 +19,13 @@ from equivalent.ledger.acceptance import (
     ONBOARDING,
     ONBOARDING_REQUIREMENTS,
     PORTING,
+    acceptance_requirements,
 )
+
+# The row that names a phase's whole requirement list rather than an
+# action to dispatch. The porting one is the only row whose preconditions
+# depend on the code, so it is spelled here for `requires_for` to find.
+ACCEPT = "accept"
 
 
 @dataclass(frozen=True)
@@ -38,10 +44,7 @@ class ActionRow:
     # The config keys POST /run accepts for this action; anything else is
     # rejected before dispatch. This keeps the config canonical, so
     # duplicate detection (which hashes the config) can't be defeated by
-    # padding a request with junk keys until it hashes differently. Every
-    # row is empty today -- no component reads its config yet. When a row
-    # gains keys, also expose them through GET /table so the extension can
-    # generate tool parameters from them.
+    # padding a request with junk keys until it hashes differently.
     config_keys: tuple = ()
 
 
@@ -60,6 +63,11 @@ ACTION_TABLE = (
         "regression_visible", ("regression/visible",),
         (("sanitize/memcheck", "tree"), ("sanitize/racecheck", "tree")), True,
         "oracle:/v1/compare", PORTING,
+    ),
+    ActionRow(
+        "property_check", ("regression/property",),
+        (("regression/visible", "tree"),), True, "builder:/v1/properties", PORTING,
+        config_keys=("seed", "max_examples"),
     ),
     ActionRow(
         "regression_holdout", ("regression/holdout",),
@@ -101,3 +109,18 @@ ACTION_TABLE = (
 def rows_for(phase: str) -> tuple:
     """The rows a region in this phase may run, in the order they are listed."""
     return tuple(row for row in ACTION_TABLE if row.phase == phase)
+
+
+def requires_for(row: ActionRow, manifest=None) -> tuple:
+    """One row's preconditions for a particular code.
+
+    Every row but one has the preconditions written on it. The `accept`
+    row is the exception: what finishes a port depends on whether the code
+    declares a module of invariants, so its list is read from the code's
+    manifest rather than frozen into the table.
+    """
+    if row.name != ACCEPT:
+        return row.requires
+    return tuple(
+        (req.predicate_type, req.subject_kind) for req in acceptance_requirements(manifest)
+    )

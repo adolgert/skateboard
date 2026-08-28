@@ -93,6 +93,22 @@ class BuilderClient:
         r.raise_for_status()
         return r.json()
 
+    def properties(self, attempt_id: str, executable: str, module: str, cases: dict,
+                   seed: int, max_examples: int) -> dict:
+        """Run the code's own module of invariants against its replay binary.
+
+        `module` is the path the manifest names, relative to the tree
+        root; `cases` is shaped as for run() and becomes the corpus the
+        properties draw from. The seed and the example count go out so
+        that the claim can say what search was made.
+        """
+        r = self._http.post("/v1/properties", json={
+            "attempt_id": attempt_id, "executable": executable, "module": module,
+            "cases": cases, "seed": seed, "max_examples": max_examples,
+        })
+        r.raise_for_status()
+        return r.json()
+
     def time(self, attempt_id: str, executable: str, args: list[str], env: dict,
              outputs: list[str], repeats: int = 5, budget_s: int = 300) -> dict:
         """Time the manifest's timing executable and collect the files it declares.

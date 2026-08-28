@@ -58,7 +58,9 @@ def _client(tmp_path):
     init_baseline_repo(repo_dir, seed)
     working = tmp_path / "working"
     working.mkdir()
-    program = write_program(tmp_path)
+    # A code that declares its own invariants, so the property check is
+    # part of what this port is judged by.
+    program = write_program(tmp_path, properties=True)
     cfg = RegionConfig(
         region_id="ch04:step", code="tsunami", phase=PORTING, repo_dir=repo_dir,
         spec_path=SPEC_PATH,
@@ -86,7 +88,7 @@ def _run(client, cfg, action):
 # program that computes the wrong thing measures nothing.
 GATES = (
     "sese_check", "build_replay", "run_replay", "sanitize",
-    "regression_visible", "regression_holdout", "time_baseline",
+    "regression_visible", "property_check", "regression_holdout", "time_baseline",
     "program_regression", "time_port",
 )
 
@@ -141,6 +143,13 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
     assert program_claim.predicate.detail["program_set"] == program_set
     assert any(m.kind == "capture_set" and m.sha256 == program_set for m in program_claim.materials)
     assert any(m.kind == "policy" for m in program_claim.materials)
+
+    # The property claim says which search was made, so a person can ask
+    # for the same one again.
+    property_claim = next(c for c in store.all_claims() if c.predicateType == "regression/property")
+    assert property_claim.predicate.detail["module"] == "harness/properties.py"
+    assert property_claim.predicate.detail["seed"] == builder.properties_calls[0]["seed"]
+    assert property_claim.predicate.detail["max_examples"] == 100
 
     # The build claim records the strategy's own flags as what was
     # compiled, and the timing claim carries the same flags read back
@@ -249,3 +258,78 @@ def test_a_port_that_is_wrong_at_the_timing_size_cannot_be_timed(tmp_path):
 
     status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
     assert status["accepted"] is False
+
+
+def test_a_port_whose_invariants_do_not_hold_cannot_be_accepted(tmp_path):
+    # A port can reproduce every captured answer and still break something
+    # the code says is always true of it. That is what this claim is for,
+    # and a code that declares invariants is not accepted without it.
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in GATES[: GATES.index("property_check")]:
+        _run(client, cfg, action)
+
+    builder.properties_ok = False
+    builder.properties_counts = {"passed": 2, "failed": 1, "errors": 0}
+    builder.properties_log = "Falsifying example: test_mass_is_conserved(k=1)"
+
+    body = _run(client, cfg, "property_check")
+    assert body["verdict"] == "fail"
+    assert "Falsifying example" in body["detail"]["log_tail"]
+
+    for action in GATES[GATES.index("property_check") + 1:]:
+        _run(client, cfg, action)
+    status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+    assert status["accepted"] is False
+    assert [row["status"] for row in status["rows"] if row["predicateType"] == "regression/property"] == ["missing"]
+
+
+def test_the_same_seed_is_the_same_search_and_a_new_seed_is_a_new_claim(tmp_path):
+    # Repeating a search that already ran costs minutes and says nothing
+    # new; searching from somewhere else is a different question and gets
+    # its own claim.
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in GATES[: GATES.index("property_check")]:
+        _run(client, cfg, action)
+
+    def run_with(config):
+        r = client.post(
+            "/run", json={"action": "property_check", "region": cfg.region_id, "config": config},
+            headers=HEADERS,
+        )
+        return r.json()
+
+    first = run_with({"seed": 11})
+    again = run_with({"seed": 11})
+    other = run_with({"seed": 12})
+
+    assert again["claim_id"] == first["claim_id"]
+    assert other["claim_id"] != first["claim_id"]
+    assert [call["seed"] for call in builder.properties_calls] == [11, 12]
+    assert store.get_claim(other["claim_id"]).predicate.detail["seed"] == 12
+
+
+def test_how_many_examples_a_search_draws_can_be_asked_for(tmp_path):
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in GATES[: GATES.index("property_check")]:
+        _run(client, cfg, action)
+
+    client.post(
+        "/run",
+        json={"action": "property_check", "region": cfg.region_id,
+              "config": {"seed": 5, "max_examples": 20}},
+        headers=HEADERS,
+    )
+
+    assert builder.properties_calls[0]["max_examples"] == 20
