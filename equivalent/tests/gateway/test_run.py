@@ -196,13 +196,15 @@ def test_unknown_action_and_the_componentless_accept_row_are_rejected(tmp_path):
     assert r2.status_code == 400
 
 
-def test_ready_action_with_no_component_yet_reports_that_plainly(tmp_path):
-    # time_baseline requires nothing and is real in the table, but its
-    # builder component isn't wired up until a later 6-series step.
+def test_ready_action_without_a_configured_builder_reports_that_plainly(tmp_path):
+    # time_baseline requires nothing and is fully wired up as of Step 6f,
+    # but this gateway (like this test's _client()) was never given a
+    # builder client -- a real deployment shape where the ledger/analyzer
+    # side works before the builder or oracle are reachable.
     client, cfg, store = _client(tmp_path)
 
     r = client.post("/run", json={"action": "time_baseline", "region": cfg.region_id, "config": {}}, headers=HEADERS)
     body = r.json()
 
-    assert "not implemented" in body["error"]
+    assert body["error"] == "builder not configured"
     assert store.all_requests()[-1].outcome == "error"

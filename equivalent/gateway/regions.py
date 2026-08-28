@@ -17,3 +17,4 @@ class RegionConfig:
     spec_path: str
     ledger_dir: Path
     strategy_path: Path
+    visible_dataset_dir: Path | None = None

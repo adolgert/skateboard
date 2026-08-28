@@ -1,0 +1,139 @@
+"""One region, start to acceptance, through every real 6a-6f dispatch --
+the same shape as the architecture doc's own worked example (section 6),
+run against fakes standing in for the builder and oracle (see
+equivalent/tests/fakes.py for why: no nvfortran/compute-sanitizer/GPU in
+this environment).
+"""
+import json
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from equivalent.gateway.app import create_app
+from equivalent.gateway.regions import RegionConfig
+from equivalent.gateway.submit import init_baseline_repo
+from equivalent.ledger.store import LedgerStore
+from equivalent.tests.fakes import FakeBuilder, FakeOracle
+
+TOKEN = "test-token"
+HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
+STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
+SPEC_PATH = "notes/regions/ch04-step.sese.yaml"
+
+CLEAN_SOURCE = """\
+module mod_kernel
+contains
+subroutine step(h, u)
+  real :: h, u
+  h = h + u
+end subroutine step
+end module mod_kernel
+"""
+
+SPEC = (
+    "region: ch04:step\n"
+    "anchor:\n"
+    "  file: src/mod_kernel.f90\n"
+    '  pst_node: "step@3-5"\n'
+    "  entry_symbol: step\n"
+)
+
+
+def _visible_dataset(tmp_path):
+    d = tmp_path / "visible"
+    (d / "case0000").mkdir(parents=True)
+    (d / "cases.json").write_text(json.dumps({"cases": ["case0000"]}))
+    (d / "case0000" / "h_in.bin").write_bytes(b"\x00" * 16)
+    (d / "case0000" / "u_in.bin").write_bytes(b"\x00" * 16)
+    return d
+
+
+def _client(tmp_path):
+    seed = tmp_path / "seed"
+    (seed / "src").mkdir(parents=True)
+    (seed / "src" / "mod_kernel.f90").write_text(CLEAN_SOURCE)
+    (seed / "notes" / "regions").mkdir(parents=True)
+    (seed / SPEC_PATH).write_text(SPEC)
+
+    repo_dir = tmp_path / "repo"
+    init_baseline_repo(repo_dir, seed)
+    cfg = RegionConfig(
+        region_id="ch04:step", repo_dir=repo_dir, spec_path=SPEC_PATH,
+        ledger_dir=tmp_path / "ledger", strategy_path=STRATEGY_PATH,
+        visible_dataset_dir=_visible_dataset(tmp_path),
+    )
+    builder, oracle = FakeBuilder(), FakeOracle()
+    client = TestClient(create_app({cfg.region_id: cfg}, TOKEN, builder=builder, oracle=oracle))
+    store = LedgerStore(cfg.ledger_dir)
+    return client, cfg, store, builder, oracle
+
+
+def _run(client, cfg, action):
+    r = client.post("/run", json={"action": action, "region": cfg.region_id, "config": {}}, headers=HEADERS)
+    return r.json()
+
+
+def test_full_pipeline_reaches_acceptance(tmp_path):
+    client, cfg, store, builder, oracle = _client(tmp_path)
+
+    working = tmp_path / "working"
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+
+    for action in (
+        "sese_check", "build_replay", "run_replay", "sanitize",
+        "regression_visible", "regression_holdout", "time_port", "time_baseline",
+    ):
+        body = _run(client, cfg, action)
+        assert "error" not in body, f"{action}: {body}"
+        assert body.get("refused") is not True, f"{action}: {body}"
+        verdicts = [c["verdict"] for c in body["claims"]] if "claims" in body else [body["verdict"]]
+        assert all(v == "pass" for v in verdicts), f"{action}: {body}"
+
+    status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+    assert status["accepted"] is True
+
+    # regression_visible must not have re-run the replay binary -- one run
+    # call for run_replay's own visible execution, one more for holdout.
+    assert len(builder.run_calls) == 2
+    assert len(oracle.compare_calls) == 2
+
+
+def test_sanitize_dispatch_writes_three_claims_and_is_a_duplicate_on_repeat(tmp_path):
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = tmp_path / "working"
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+    _run(client, cfg, "sese_check")
+    _run(client, cfg, "build_replay")
+    _run(client, cfg, "run_replay")
+
+    first = _run(client, cfg, "sanitize")
+    assert len(first["claims"]) == 3
+    assert len(store.all_claims()) == 6  # sese + build + run + 3 sanitize
+
+    second = _run(client, cfg, "sanitize")
+    assert second["claims"] == first["claims"]
+    assert len(builder.sanitize_calls) == 1  # not called again
+    assert store.all_requests()[-1].outcome == "duplicate"
+
+
+def test_time_baseline_is_filed_against_the_baseline_tree_not_the_current_tree(tmp_path):
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = tmp_path / "working"
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+    _run(client, cfg, "sese_check")  # widens the allow-list to include mod_kernel.f90
+
+    (working / "src").mkdir(parents=True)
+    (working / "src" / "mod_kernel.f90").write_text(CLEAN_SOURCE.replace("h + u", "h + u + 0"))
+    client.post("/submit", json={"region": cfg.region_id, "working_copy_dir": str(working)}, headers=HEADERS)
+
+    result = _run(client, cfg, "time_baseline")
+
+    status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+    claim = store.get_claim(result["claim_id"])
+    assert claim.subject[0].sha256 != status["tree"]

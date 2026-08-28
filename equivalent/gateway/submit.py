@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -204,6 +205,40 @@ def materialize_tree(repo_dir, ref: str, dest_dir) -> None:
         path = dest_dir / f["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f["content"])
+
+
+def attempt_id_for(region_id: str, tree_sha: str) -> str:
+    """A stable workspace key the builder can reuse across build/run/sanitize/time.
+
+    demo/builder/stages.py keeps a workspace on disk per attempt_id and
+    never checks a tree hash itself; deriving the id from (region, tree)
+    means every action against the same tree reuses the same workspace
+    without the gateway needing to remember anything extra. See the 6b
+    Establish note in the pi-ledger-plan-progress memory for why this
+    follows the builder's real (stateful) behavior instead of the
+    architecture doc's "nothing kept between calls" description.
+    """
+    safe_region = re.sub(r"[^A-Za-z0-9._-]", "-", region_id)
+    return f"{safe_region}-{tree_sha[:16]}"
+
+
+def fortran_files_at(repo_dir, ref: str) -> list[dict]:
+    """Every .f90/.F90 file tracked at `ref`, sorted by path.
+
+    Sent as-is to the builder: demo/builder/stages.py picks its own fixed
+    basenames out of whatever it's given and compiles them in its own
+    fixed order, so neither the set's precision nor its order matters here
+    -- only that everything the builder might want is present. See the 6b
+    Establish note in memory for why this is simpler than deriving a
+    precise per-region dependency closure.
+    """
+    files = [f for f in tracked_files(repo_dir, ref) if f["path"].lower().endswith(".f90")]
+    return sorted(files, key=lambda f: f["path"])
+
+
+def baseline_tree_sha(repo_dir) -> str:
+    """The pristine baseline's own tree hash -- what timing/baseline is filed against."""
+    return tree_subject(tracked_files(repo_dir, "main")).sha256
 
 
 def current_tree_and_frozen(repo_dir, region_id: str, store: LedgerStore, spec_path: str) -> tuple[str, str]:

@@ -26,10 +26,12 @@ from pathlib import Path
 from equivalent.gateway.submit import materialize_tree
 from equivalent.strategy.schema import Strategy
 
+from .errors import ComponentError
+
 DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-class AnalyzerError(Exception):
+class AnalyzerError(ComponentError):
     """The analyzer subprocess produced no usable verdict.
 
     This is an infrastructure failure (bad path, crash, malformed output),

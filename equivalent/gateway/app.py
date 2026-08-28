@@ -8,9 +8,11 @@ here can make a bad port look accepted.
 All four endpoints are built now: GET /table, GET /status, POST /submit,
 POST /run. POST /run refuses a request whose required claims are missing,
 returns an existing claim for a repeated deterministic request, and
-otherwise dispatches to the action's component. Step 6 wires those up one
-action at a time; `sese_check` (6a) is the first. Anything not yet wired
-still reports that its component isn't implemented.
+otherwise dispatches to the action's component. Every row in
+equivalent.gateway.table.ACTION_TABLE now has real dispatch (Step 6a-6f);
+an action whose builder or oracle client isn't configured for this
+gateway instance still falls back to the "not implemented" response
+rather than crashing.
 """
 from __future__ import annotations
 
@@ -20,7 +22,9 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from equivalent.components import sese_check
+from equivalent.components import build_replay, regression, run_replay, sanitize, sese_check, timing
+from equivalent.components.errors import ComponentError
+from equivalent.gateway.datasets import load_visible_cases
 from equivalent.ledger.acceptance import ACCEPTANCE_REQUIREMENTS
 from equivalent.ledger.records import Predicate, RequestLogLine
 from equivalent.ledger.status import compute_status, requirement_status
@@ -29,7 +33,13 @@ from equivalent.ledger.subjects import Subject, hash_bytes
 from equivalent.strategy.schema import load_strategy
 
 from .regions import RegionConfig
-from .submit import current_ref, current_tree_and_frozen, frozen_for_allow_globs, resolve_allow_globs
+from .submit import (
+    baseline_tree_sha,
+    current_ref,
+    current_tree_and_frozen,
+    frozen_for_allow_globs,
+    resolve_allow_globs,
+)
 from .submit import submit as do_submit
 from .table import ACTION_TABLE
 
@@ -63,9 +73,17 @@ class RunRequest(BaseModel):
     config: dict = {}
 
 
-def create_app(regions: dict[str, RegionConfig], token: str) -> FastAPI:
+def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, oracle=None) -> FastAPI:
+    """`builder` and `oracle` are BuilderClient/OracleClient-shaped objects
+    (equivalent.gateway.backend_client), or None. An action whose
+    component needs one that isn't configured falls through to the same
+    "not implemented yet" response as an action with no component wiring
+    at all -- a gateway can be brought up with the ledger/analyzer side
+    working before the builder or oracle are reachable.
+    """
     app = FastAPI(title="skateboard-gateway")
     stores: dict[str, LedgerStore] = {}
+    visible_cases: dict[str, dict] = {}
 
     def _auth(authorization):
         if token and authorization != f"Bearer {token}":
@@ -81,6 +99,13 @@ def create_app(regions: dict[str, RegionConfig], token: str) -> FastAPI:
         if region_id not in stores:
             stores[region_id] = LedgerStore(regions[region_id].ledger_dir)
         return stores[region_id]
+
+    def _visible_cases(cfg: RegionConfig) -> dict:
+        if cfg.region_id not in visible_cases:
+            if cfg.visible_dataset_dir is None:
+                raise ComponentError(f"no visible dataset configured for region {cfg.region_id}")
+            visible_cases[cfg.region_id] = load_visible_cases(cfg.visible_dataset_dir)
+        return visible_cases[cfg.region_id]
 
     @app.get("/table")
     def get_table(authorization: str | None = Header(default=None)):
@@ -173,42 +198,123 @@ def create_app(regions: dict[str, RegionConfig], token: str) -> FastAPI:
             log("refused", missing=missing)
             return {"refused": True, "action": req.action, "tree": tree_sha, "missing": missing}
 
-        duplicate = None
         if row.deterministic:
-            emitted = row.emits[0]
-            duplicate_subject = subjects_by_kind[SUBJECT_KIND_OF.get(emitted, "tree")]
-            duplicate = store.find_duplicate(emitted, duplicate_subject, cfg_hash)
-        if duplicate is not None:
-            log("duplicate", claim_id=duplicate.id)
-            return {"claim_id": duplicate.id, "verdict": duplicate.predicate.verdict, "detail": duplicate.predicate.detail}
+            # All of a multi-emit row's claims are written together in one
+            # dispatch (see sanitize, 6d), so an existing claim for any one
+            # of them means all of them exist -- checking just the first
+            # would also do, but checking every one is no more expensive
+            # and doesn't rely on that invariant holding forever.
+            existing = [
+                store.find_duplicate(emitted, subjects_by_kind[SUBJECT_KIND_OF.get(emitted, "tree")], cfg_hash)
+                for emitted in row.emits
+            ]
+            if existing and all(existing):
+                duplicate = existing[0] if len(existing) == 1 else None
+                if duplicate is not None:
+                    log("duplicate", claim_id=duplicate.id)
+                    return {"claim_id": duplicate.id, "verdict": duplicate.predicate.verdict, "detail": duplicate.predicate.detail}
+                log("duplicate")
+                return {"claims": [
+                    {"predicateType": c.predicateType, "claim_id": c.id, "verdict": c.predicate.verdict, "detail": c.predicate.detail}
+                    for c in existing
+                ]}
 
-        if row.component == "analyzer:check_sese":
-            try:
-                strategy = load_strategy(cfg.strategy_path)
-                result = sese_check.check(cfg.repo_dir, current_ref(cfg.repo_dir, cfg.region_id), cfg.spec_path, strategy)
-            except sese_check.AnalyzerError as exc:
-                log("error")
-                return {"error": str(exc)}
+        def record(predicate_type: str, subject: Subject, tool: str, result: dict, materials=()):
+            return store.record_claim(
+                [subject], predicate_type,
+                Predicate(tool=tool, version="0.1", configHash=cfg_hash, verdict=result["verdict"], detail=result["detail"]),
+                materials, x_session_id,
+            )
 
-            # A pass widens the region's allow-list, which changes its own
-            # frozen value (D5). The claim must be filed against that new
-            # frozen value, not the one computed before this check ran --
-            # otherwise resolve_allow_globs would report the claim's own
-            # existence as changing "current frozen" out from under it, and
-            # the claim would immediately look missing again. See the
-            # pi-ledger-plan-progress memory note this resolves.
-            subject_sha = (
-                frozen_for_allow_globs(cfg.repo_dir, result["allow_globs"])
-                if result["allow_globs"] is not None else frozen_sha
-            )
-            claim = store.record_claim(
-                [Subject(kind="frozen", sha256=subject_sha)], "sese/verified",
-                Predicate(tool="sese_check", version="0.1", configHash=cfg_hash,
-                          verdict=result["verdict"], detail=result["detail"]),
-                [], x_session_id,
-            )
-            log("claim", claim_id=claim.id)
-            return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+        try:
+            # row.component is never None here -- that case already raised
+            # above -- so every action reaching this point has a strategy.
+            strategy = load_strategy(cfg.strategy_path)
+            ref = current_ref(cfg.repo_dir, cfg.region_id)
+
+            if req.action == "sese_check":
+                result = sese_check.check(cfg.repo_dir, ref, cfg.spec_path, strategy)
+                # A pass widens the region's allow-list, which changes its
+                # own frozen value (D5). The claim must be filed against
+                # that new frozen value, not the one computed before this
+                # check ran -- otherwise resolve_allow_globs would report
+                # the claim's own existence as changing "current frozen"
+                # out from under it, and the claim would immediately look
+                # missing again. See the pi-ledger-plan-progress memory
+                # note this resolves.
+                subject_sha = (
+                    frozen_for_allow_globs(cfg.repo_dir, result["allow_globs"])
+                    if result["allow_globs"] is not None else frozen_sha
+                )
+                claim = record("sese/verified", Subject(kind="frozen", sha256=subject_sha), "sese_check", result)
+                log("claim", claim_id=claim.id)
+                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+
+            if req.action == "build_replay":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                result = build_replay.check(cfg.repo_dir, ref, cfg.region_id, tree_sha, strategy, builder)
+                claim = record("build/replay", subjects_by_kind["tree"], "builder", result, materials=[strategy.as_subject()])
+                log("claim", claim_id=claim.id)
+                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+
+            if req.action == "run_replay":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                result = run_replay.check(cfg.region_id, tree_sha, strategy, _visible_cases(cfg), builder)
+                claim = record("gpu/executed", subjects_by_kind["tree"], "builder", result, materials=[strategy.as_subject()])
+                log("claim", claim_id=claim.id)
+                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+
+            if req.action == "sanitize":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                results = sanitize.check(cfg.region_id, tree_sha, strategy, _visible_cases(cfg), builder)
+                claims = [
+                    record(f"sanitize/{tool}", subjects_by_kind["tree"], "compute-sanitizer", result, materials=[strategy.as_subject()])
+                    for tool, result in results.items()
+                ]
+                log("claim", claim_id=claims[0].id if len(claims) == 1 else None)
+                return {"claims": [
+                    {"predicateType": c.predicateType, "claim_id": c.id, "verdict": c.predicate.verdict, "detail": c.predicate.detail}
+                    for c in claims
+                ]}
+
+            if req.action == "regression_visible":
+                if oracle is None:
+                    raise ComponentError("oracle not configured")
+                result = regression.check_visible(store, subjects_by_kind["tree"], oracle)
+                claim = record("regression/visible", subjects_by_kind["tree"], "oracle", result, materials=[strategy.as_subject()])
+                log("claim", claim_id=claim.id)
+                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+
+            if req.action == "regression_holdout":
+                if builder is None or oracle is None:
+                    raise ComponentError("builder or oracle not configured")
+                result = regression.check_holdout(cfg.region_id, tree_sha, strategy, oracle, builder)
+                claim = record("regression/holdout", subjects_by_kind["tree"], "oracle", result, materials=[strategy.as_subject()])
+                log("claim", claim_id=claim.id)
+                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+
+            if req.action == "time_port":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                result = timing.check_port(cfg.region_id, tree_sha, builder)
+                claim = record("timing/port", subjects_by_kind["tree"], "builder", result)
+                log("claim", claim_id=claim.id)
+                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+
+            if req.action == "time_baseline":
+                if builder is None:
+                    raise ComponentError("builder not configured")
+                base_tree = baseline_tree_sha(cfg.repo_dir)
+                result = timing.check_baseline(cfg.repo_dir, cfg.region_id, base_tree, builder)
+                claim = record("timing/baseline", Subject(kind="tree", sha256=base_tree), "builder", result)
+                log("claim", claim_id=claim.id)
+                return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+        except ComponentError as exc:
+            log("error")
+            return {"error": str(exc)}
 
         log("error")
         return {"error": f"component '{row.component}' for action '{req.action}' is not implemented yet"}
