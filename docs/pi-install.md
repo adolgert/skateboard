@@ -3,9 +3,10 @@
 This document takes a machine with a GPU from a fresh checkout to an
 interactive `pi` session that can port a region and record its evidence.
 The companion document, `pi-users-manual.md`, explains what to do inside
-that session. This one is about getting there and about the commands
-that surround the session: starting the services, checking them, reading
-the ledger, and shutting down.
+that session, and `onboarding.md` what to do inside a session that is
+bringing a code the harness has never seen. This one is about getting
+there and about the commands that surround a session: starting the
+services, checking them, reading the ledger, and shutting down.
 
 Everything here lives in `deploy/`. Each script is short and safe to read
 before running.
@@ -16,10 +17,15 @@ Four containers, on four networks, all defined in `deploy/docker-compose.yml`:
 
 | container | what it holds | can reach |
 | --- | --- | --- |
-| `agent` | `pi`, the extension, the NVIDIA HPC compilers, the GPU, the working copy | the gateway, and the model provider on the internet |
-| `gateway` | the git repository of submitted code, the ledger, the analyzer | the builder and the oracle; no internet |
-| `builder` | `nvfortran`, `compute-sanitizer`, the GPU | nothing; it only answers |
-| `oracle` | the reference outputs and the tolerance policy, baked in | nothing; it only answers |
+| `agent` | `pi`, the extension, the NVIDIA HPC compilers, the GPU, the working copy, and `docs/onboarding.md` at `/docs` | the gateway, and the model provider on the internet |
+| `gateway` | the git repository of submitted code, the ledger, the analyzer, and the codes under `programs/` read-only | the builder and the oracle; no internet |
+| `builder` | `nvfortran`, `compute-sanitizer`, `make`, `cmake`, `fpm`, the GPU | nothing; it only answers |
+| `oracle` | one code's whole directory — manifest, captures, tolerance policy — baked into the image | nothing; it only answers |
+
+Two more services are defined and are started only on demand, by
+`walkthrough.sh` and `onboard_walkthrough.sh`. They run on the agent's
+network with the agent's token, so they reach nothing the agent could
+not reach.
 
 The agent shares no network with the builder or the oracle; those are
 missing routes, not blocked ones. Everything that persists is a plain
@@ -33,6 +39,10 @@ directory under `deploy/state/` on the host, owned by you:
 | `state/sessions` | `pi`'s transcripts, one file per session | `pi` |
 | `state/seed` | the baseline files the repository starts from | `up.sh` |
 | `state/pi-home` | `pi`'s own settings and login, so you log in once | `pi` |
+
+`up.sh` also writes the file `state/gateway.host.yaml`, which is the
+deployment's configuration with the paths of this machine instead of the
+container's mount points. Every host-side `ledger` command reads it.
 
 ## Prerequisites
 
@@ -72,13 +82,23 @@ Then set up the deployment:
 present it to the gateway; the gateway presents it to the builder and the
 oracle. `.env` is ignored by git.
 
+Two more settings in the same file say what the deployment is built
+around. `EQUIVALENT_CODE` names the code: it picks
+`deploy/gateway.<code>.yaml` as the gateway's configuration, chooses the
+directory under `programs/` the baseline is seeded from, and is the
+build argument the oracle image bakes that code's answers in with. One
+deployment holds one code, because its repository is seeded from one
+baseline. `EQUIVALENT_REGION` names which region of that code a session
+works on; the shipped defaults are `tsunami` and `ch04:step`.
+
 ## Start the services
 
     ./up.sh
 
-This creates the `state/` directories, writes the baseline seed (the six
-files git tracks under the source tree the code's manifest names, which
-for tsunami is `programs/tsunami/baseline`), copies the seed into the working
+This creates the `state/` directories, writes the baseline seed (exactly
+the files git tracks under the source tree the code's manifest names,
+read out of the commit rather than copied off disk — for `tsunami` that
+tree is `programs/tsunami/baseline`), copies the seed into the working
 copy if the working copy is empty, builds the gateway, builder, and
 oracle images, starts them, and waits for the gateway to report healthy.
 It ends by printing the baseline commit, the ledger directory, and the
@@ -92,21 +112,33 @@ one. `pi.sh` builds it the first time it is needed.
 
     ./walkthrough.sh
 
-This drives the region from nothing to acceptance without a model: it
-writes the region spec, submits, runs the analyzer, submits a port that
-is known to pass, runs every check in order, confirms `accepted`, and
-then submits a port that is known not to compile and confirms that the
-failure lands as a claim. It runs in a container on the agent's network,
-because the gateway is reachable from nowhere else. It takes a few
-minutes; the timing checks run the full-size program repeatedly.
+This drives one region from nothing to acceptance without a model: it
+lays the code's checked-in region spec into the working copy, submits,
+runs the analyzer, submits a port that is known to pass, runs every
+check in order, confirms `accepted`, and then submits a port that is
+known not to compile and confirms that the failure lands as a claim. It
+runs in a container on the agent's network, because the gateway is
+reachable from nowhere else. It takes a few minutes; the timing checks
+run the full-size program repeatedly. It needs the code to have been
+onboarded already — a recorded good port and bad port under
+`docs/examples`, and captures to compare against — so it is a check of
+the deployment, not something a new code has on its first day.
 
 It drives the region named in `EQUIVALENT_REGION`, so a deployment
 holding more than one is checked a region at a time:
 
     EQUIVALENT_REGION=ch04:step-stencil ./walkthrough.sh
 
-The regions in the shipped `gateway.tsunami.yaml` share one working copy, so
-run them one after the other rather than at the same time.
+The other half is the same run for a code being brought in:
+
+    ./onboard_walkthrough.sh
+
+That resets the working copy to the code's bare baseline, writes the
+in-tree manifest, submits the whole tree, runs the eight onboarding
+checks in order, and stops at the `ledger promote` command, which is a
+person's step. It drives `--region`, defaulting to `tsunami:onboard`.
+Both walkthroughs write into the same working copy as a session does, so
+run them one after another rather than at the same time.
 
 Read what it left behind:
 
@@ -148,7 +180,7 @@ The first run builds the agent image (several minutes on top of the
 container with `/working` as its directory and the extension loaded. The
 extension prints one line when it has connected:
 
-    equivalent: registered 10 tools for region ch04:step
+    equivalent: registered 12 tools for region ch04:step
 
 An argument to `pi.sh` that begins with a dash is added to the session's
 own command line (`./pi.sh --model ollama/devstral-small-2:24b`).
@@ -219,7 +251,8 @@ with the provider and model you want:
 
 Within a session, Ctrl+P cycles models.
 
-From here, `pi-users-manual.md` takes over.
+From here, `pi-users-manual.md` takes over — or `onboarding.md`, if the
+session is bringing a new code in.
 
 ## Read the ledger while a session is running
 
@@ -254,41 +287,62 @@ on the host.
 ## Changing the code, the region, or the strategy
 
 `programs/` holds one directory per code: its `manifest.yaml`, the
-baseline sources, the datasets, the reference captures, the tolerance
-policy, and the region specs. The baseline sources include the code's
-own makefile, its replay driver, and its capture program -- the builder
+baseline sources, the datasets, the reference captures, and the region
+specs. The baseline sources include the code's own makefile, its replay
+driver, its capture program, and its tolerance policy — the builder
 builds a code by running that makefile, so nothing about how a code is
-built lives in the harness. `deploy/gateway.<code>.yaml` names the code in
-its `codes:` section and each region in its `regions:` section, where a
-region gives its code, its spec file path, its strategy, the baseline
-strategy its speedup is measured against, and its visible dataset.
-`equivalent/strategy/files/` holds the strategies (`stdpar_managed`,
-`omp_target`, and `cpu_reference`, which is the usual comparison floor).
+built lives in the harness. `deploy/gateway.<code>.yaml` names the code
+in its `codes:` section and each region in its `regions:` section, where
+a region gives its code, its phase, its spec file path, its strategy,
+the baseline strategy its speedup is measured against, and its visible
+dataset. `equivalent/strategy/files/` holds the strategies:
+`stdpar_managed` and `omp_target` to port under, `cpu_reference` as the
+usual comparison floor, and `onboarding`, which allows the whole tree
+while a code is being brought in.
 
-A new region is a new entry in that file -- naming its `phase`,
-`porting` for a region of a code that has been brought in -- a spec file
-checked in at
-`programs/<code>/regions/<region id with the colon as a dash>.sese.yaml`,
-and `EQUIVALENT_REGION` in `.env`; a new strategy is a new YAML file; a new code is a new directory
-under `programs/` holding a tree that builds itself, a new `codes:`
-entry, and `EQUIVALENT_CODE` in `.env`. The manifest's `build:` section
-names the makefile and, per role, the `make` target and the executable
-it must leave: `replay` is required, `timing` and `capture` are built
-when they are declared. Changing the code also means rebuilding the oracle image, which
-bakes in the whole of `programs/<code>/` — its manifest, its captures,
-and the tolerance policy inside its source tree. A code that has not
-been onboarded yet has only some of those, and the oracle starts anyway
-and reports that it is not ready.
+**A new region** of a code that is already in is a new entry in
+`gateway.<code>.yaml` with `phase: porting`, a spec checked in at
+`programs/<code>/regions/<region id with the colon written as a dash>.sese.yaml`,
+and `EQUIVALENT_REGION` in `.env`. The configuration file is a bind
+mount, so the gateway reads the new entry when it restarts; re-run
+`up.sh` afterwards so the host copy of the configuration is regenerated
+with it.
+
+**A new strategy** is a new YAML file in `equivalent/strategy/files/`,
+named by a region as its `strategy` or its `baseline_strategy`. The
+gateway image copies that directory in when it is built, so re-run
+`up.sh` — which rebuilds — rather than only restarting the gateway.
+
+**A new code** is what `docs/onboarding.md` is for, from end to end. In
+outline: a new directory `programs/<code>/` holding the source tree
+under `baseline/` and a `manifest.yaml` with only `version`, `name`, and
+`source`; a new `deploy/gateway.<code>.yaml` with a `codes:` entry and a
+`phase: onboarding` region; `EQUIVALENT_CODE` and `EQUIVALENT_REGION` in
+`.env`; a session that writes the makefile, the replay driver, the
+capture program, the tolerance policy, and the rest of the manifest
+until `status` says `ONBOARDED`; and `ledger promote` to write what
+passed back into `programs/<code>/`. The manifest's `build:` section is
+what connects the two halves: it names the makefile and, per role, the
+`make` target and the executable that target must leave behind. `replay`
+is required of every code; `timing` and `capture` are named the same
+way.
+
+Changing which code a deployment is built around means rebuilding the
+oracle image, which bakes in the whole of `programs/<code>/` — its
+manifest, its captures, and the tolerance policy inside its source tree.
+`./down.sh` then `./up.sh` does it. A code that has not been onboarded
+yet has only some of those; the oracle starts anyway and answers every
+comparison with the name of what is missing, which is what lets a
+deployment be brought up for the session that produces them.
 
 A dataset directory holds a `cases.json` naming its cases and one
 directory per case. Inside a case, each variable is a NumPy `.npy` file
--- `<variable>.npy` for an input, `<variable>.out.npy` for an output --
+— `<variable>.npy` for an input, `<variable>.out.npy` for an output —
 and a `case.json` names exactly what that directory holds. The `.npy`
 file carries its own element type, shape, and element order, so a
 variable's name is the only thing written down anywhere; the code's
 manifest is what says which names the region has and what type and rank
-each one is. Restart the gateway after editing
-the file, and re-run `up.sh` so the host copy is regenerated.
+each one is.
 
 ## When something is wrong
 

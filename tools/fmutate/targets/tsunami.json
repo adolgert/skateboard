@@ -15,7 +15,7 @@
     ],
     "extra_sources": [
       "services/builder/harness/npy_io.f90",
-      "services/builder/harness/replay.f90"
+      "programs/tsunami/baseline/harness/replay.f90"
     ],
     "exe": "replay",
     "run_args": [
@@ -55,6 +55,6 @@
   },
   "comparator": {
     "module": "equivalent/capture/compare.py",
-    "tolerances": "programs/tsunami/tolerances.json"
+    "tolerances": "programs/tsunami/baseline/harness/tolerances.json"
   }
 }

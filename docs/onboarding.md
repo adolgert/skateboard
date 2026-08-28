@@ -35,6 +35,35 @@ The session writes, inside the working copy:
 
 ## Before you start (the person)
 
+### Is this code ready?
+
+Check these before spending a session on the code. Each one is a reason
+a session stalls if it is not true.
+
+- **It builds unmodified with a compiler the builder has.** That is
+  `nvfortran` from the NVIDIA HPC SDK, optionally reached through the
+  code's own CMake or fpm build. Any external library it needs has to be
+  one that image already holds.
+- **It is deterministic.** The same build, run twice on the same input,
+  writes the same bytes. Onboarding checks this twice -- once on the
+  region and once on the whole program -- because a code that disagrees
+  with itself cannot be the reference a port is compared against.
+- **A region of it can be a procedure with an explicit interface**, with
+  one way in and one way out: no `goto` out of it, no `return` before
+  the end, no `stop`, and everything it reads and writes reachable as an
+  argument or as a module variable a driver can set. It need not be that
+  shape today -- refactoring it into that shape is part of onboarding --
+  but the program's own behaviour has to survive the refactoring.
+- **There is a run long enough to be worth timing and short enough to
+  iterate on**: large enough that a GPU could matter, small enough that
+  the CPU baseline finishes inside a budget you are willing to wait for
+  twice.
+- **There is behaviour to check the port against**: a validation case, a
+  test suite, or an output the code is known to produce, so that a wrong
+  port shows up as a wrong answer and not only as changed bits.
+
+### Setting the deployment up
+
 1. Put the code's files under `programs/<code>/baseline/` (a `src/`
    directory is conventional; the porting strategies allow edits under
    `src/`). Note where they came from in `NOTICE`.
@@ -61,8 +90,12 @@ The session writes, inside the working copy:
 
 4. In `deploy/.env` set `EQUIVALENT_CODE=<code>` and
    `EQUIVALENT_REGION=<code>:onboard`, then `deploy/up.sh` and
-   `deploy/pi.sh`. The oracle image starts without captures; that is
-   expected until promotion.
+   `deploy/pi.sh`. `EQUIVALENT_CODE` is what picks
+   `gateway.<code>.yaml`, seeds the baseline from this code's tree, and
+   builds the oracle around this code's directory: one deployment holds
+   one code. The oracle image starts without captures, answering every
+   comparison with the name of what is missing; that is expected until
+   promotion.
 5. Open the session with a message that points at this document and
    states the region, for example:
 
@@ -89,40 +122,54 @@ Every check is filed as a claim on the tree you last submitted; `status`
 lists which claims the current tree has and which it lacks. A check that
 refuses tells you which claim it needs first. A check that fails tells
 you why in its detail. Work in this order, submitting after every change
-to the tree:
+to the tree -- it is one order that satisfies every check's own
+preconditions, and the gateway enforces those, not the numbering:
 
 1. Make the region a module procedure with an explicit interface, if it
    is not one. Read the code first. Keep the program's behaviour
    identical: the program's own output at the timing size is compared
    later, and the whole-program run must still pass its own assertions.
-2. Write `Makefile`, `harness/replay.f90`, the capture program, and
-   `harness/manifest.yaml`. Build by hand in your own container first
+2. Write `Makefile`, `harness/replay.f90`, the capture program,
+   `harness/tolerances.json`, and `harness/manifest.yaml`. All five
+   before the first check: the manifest names the tolerance file, and a
+   manifest naming a file that is not in the tree does not load at all.
+   Build by hand in your own container first
    (`make FC=nvfortran FFLAGS="-O2" MODFLAG=-module HARNESS=/opt/harness
    replay timing capture` -- `/opt/harness` holds `npy_io.f90` in your
    container as it does in the builder's).
-3. `submit`, then `manifest_check`. Fix what it names. Repeat until it
+3. `submit`, then `manifest_check`: the manifest loads, is complete,
+   names only files the tree holds, gives every floating-point output a
+   band and every timing output a band of its own, and makes the visible
+   and held-out runs different runs. Fix what it names. Repeat until it
    passes.
-4. `harness_build`: every target builds under both the CPU baseline
-   strategy and the port strategy, and the compiler log shows the
-   strategy's flags on every compile of tree source.
-5. `harness_capture`: the capture program writes the visible and held-out
-   datasets; every case holds exactly the declared variables at the
-   declared type and rank; the two datasets' inputs differ.
+4. `harness_build`: every target builds under both the region's baseline
+   strategy and its port strategy, and the compiler log shows each
+   strategy's flags on every compile and nothing compiled from outside
+   the tree.
+5. `harness_capture`: the capture program writes at least one case for
+   every dataset the manifest declares; every case holds exactly the
+   declared variables -- none missing, none extra -- at the declared
+   type and rank; and the visible and held-out inputs are not the same
+   arrays.
 6. `harness_replay`: the replay driver reproduces every captured output
-   bitwise from the captured inputs, under the CPU baseline strategy.
+   bitwise from the captured inputs, built the way the baseline is
+   built.
 7. `harness_determinism`: capturing and replaying again gives the same
-   bytes.
-8. `harness_timing`: the timing target runs twice within its budget and
-   writes the same declared `.npy` outputs both times.
-9. Write `harness/tolerances.json` (bands, below), then
-   `harness_self_check`: mutants of the region's files are built and
-   replayed; every mutant that changes an output must fall outside the
-   bands. A mutant that changes an output *within* the bands is the
-   tolerance-blind gap and fails the check: tighten the band. Survivors
-   that change nothing are listed for the person; you need not kill
-   them.
-10. `harness_property` (optional module): the properties pass on the
-    baseline. If the code declares none, the check records that.
+   bytes as what was stored.
+8. `harness_timing`: the timing target runs twice, each run inside the
+   budget the manifest declares, and writes the same declared `.npy`
+   outputs both times.
+9. `harness_self_check`: mutants of the files the manifest lists under
+   `interface.files` are built and replayed the way the baseline is, and
+   scored with the harness's own comparator against your bands. At least
+   one mutant must be caught. A mutant that changes an output but stays
+   *inside* the bands is the tolerance-blind gap and fails the check:
+   the bands are what to change, not the check. Survivors -- mutants no
+   output changed at all for -- are listed for the person and are not
+   counted against you.
+10. `harness_property` (optional module): the properties pass against
+    the baseline build. If the code declares none, the check records
+    that it declares none, which is still a claim.
 11. `status` reports `ONBOARDED`. Stop; promotion is the person's step.
 
 When a check fails, read its detail before changing anything. The detail
@@ -160,12 +207,24 @@ names the file, case, variable, or compile line it objected to.
       args: [...]                  # the timing program's arguments, e.g. the problem size
       outputs: [<file>.npy, ...]   # what the timing run writes; compared against the baseline's run
       budget_s: <seconds per run>
-      env: {}                      # optional environment for the timing run
+      env: {"NAME": "value"}       # optional; values are strings, so quote numbers
     tolerances: harness/tolerances.json
     properties: harness/properties.py   # or null
 
 Types are `f32`, `f64`, `i32`, `i64`, `l` (logical); rank is 0 to 4. A
-variable that is both read and written appears in both lists.
+variable that is both read and written appears in both lists. What the
+loader insists on, beyond the shapes above: `version` is 1; unknown keys
+are refused rather than ignored; `interface.files` may not be empty and
+every path in it, the makefile, the tolerance file, and the properties
+module must exist in the tree; the `replay` build target is required and
+the other roles are not; `visible` and `holdout` are required and a code
+may declare further datasets beside them; `budget_s` is a positive
+number; and `timing.env` values are written as strings, because the ones
+that matter here look like numbers and must reach the program exactly as
+written. A manifest either says only `version`, `name`, and `source` --
+the minimal form, enough to seed a baseline and start a session -- or
+says all six of the rest as well. Anything in between is refused, naming
+what is absent.
 
 ### The build contract
 
@@ -181,12 +240,22 @@ invocation, then runs the strategy's compiler), `FFLAGS`, `LDFLAGS`,
 - pass `$(FFLAGS)` to every compile and `$(LDFLAGS)` to every link --
   the shim log is read afterwards, and a compile without the strategy's
   flags fails `harness_build`;
-- compile only files from the tree and `$(HARNESS)/npy_io.f90`;
-- leave each target's executable at the path the manifest names;
-- provide `replay`, `timing`, and `capture` targets (and `clean`).
+- compile only files from the tree and `$(HARNESS)/npy_io.f90`; a
+  compile that reaches anywhere else fails the same check, naming the
+  file;
+- leave each target's executable at the path the manifest names, in the
+  tree root -- `make` reporting success while leaving no executable is a
+  failure that usually means the manifest and the rule disagree;
+- provide `replay`, `timing`, and `capture` targets. A `clean` target is
+  a convenience for hand builds; nothing in the harness runs it, because
+  every build starts from a workspace written fresh from the submitted
+  tree.
 
-Never set `FFLAGS` with `=` in the Makefile; `?=` gives a default for
-hand builds and lets the builder's value through. If the code has its
+`MODFLAG` is filled in from the compiler the strategy names, and is
+empty for a compiler the builder has no spelling for, so the rule that
+uses it has to work either way. Never set `FFLAGS` with `=` in the
+Makefile; `?=` gives a default for hand builds and lets the builder's
+value through. If the code has its
 own CMake or fpm build, the Makefile may drive it, provided the flags
 still reach every compile (`-DCMAKE_Fortran_FLAGS="$(FFLAGS)"`,
 `fpm build --flag "$(FFLAGS)"`).
@@ -216,8 +285,13 @@ parameters; their inputs must differ.
 
 ### The timing contract
 
-`<timing program> <args...>`, run in the tree root, must finish within
-`budget_s`, and must write each file named in `timing.outputs` as NPY.
+`<timing program> <args...>`, run in the tree root with `timing.env`
+added to its environment, must finish within `budget_s` -- that is the
+budget for one run, and onboarding makes two of them and requires the
+declared outputs to be identical both times. Each file named in
+`timing.outputs` must be written as NPY, and the check refuses a name
+that does not end in `.npy`: the timing outputs are compared as arrays,
+the same way the region's are.
 The port's run is compared against the baseline's run file by file, so
 make the size large enough that a GPU matters and small enough that the
 CPU baseline finishes in the budget. A program that prints results
@@ -239,8 +313,12 @@ arrays.
 
 `variables` bands one call of the region; `files` bands one
 whole-program run and is keyed by the paths in `timing.outputs`. Every
-floating-point output needs a `variables` entry and every timing output
-a `files` entry. Calibrate rather than guess: build the unported code
+`f32` or `f64` region output needs a `variables` entry and every timing
+output a `files` entry, each saying all three of `abs`, `rel`, and
+`ulp`; integers and logicals are compared exactly and are not banded.
+A timing output needs a band whatever it holds, because nothing declares
+its element type until it is read. `manifest_check` is what refuses a
+policy that is missing one. Calibrate rather than guess: build the unported code
 twice with different flags (`-O2` and `-O3 -ffast-math`, say), replay
 the visible cases and run the program under both, measure the spread,
 and set each band at several times the observed spread with a floor at
@@ -249,24 +327,43 @@ self-check then tells you whether the bands are too loose.
 
 ### Properties (optional)
 
-A pytest module that imports `harness_properties` and uses Hypothesis:
+A pytest module that imports `harness_properties` and uses Hypothesis.
+`@harness.settings()` goes above `@given`, as Hypothesis's own
+`@settings` does:
 
     import harness_properties as harness
     from hypothesis import given, strategies as st
 
-    @given(scale=st.floats(0.9, 1.1))
-    @harness.settings()
-    def test_something(scale):
-        for case in harness.corpus():          # the visible inputs, as arrays
-            out = harness.run_replay({k: v * scale for k, v in case.items()})
-            ...
+    CORPUS = harness.corpus()      # the visible cases' inputs, as arrays
 
-`run_replay(inputs) -> outputs` runs the replay binary on one case;
-`corpus()` returns the visible cases' inputs; `settings()` is the
-Hypothesis settings with the run's example count; `seed()` is the seed
-the run was given. Good properties: determinism, a conservation law
-within a measured tolerance, a symmetry the discretisation has exactly.
-State in the module what each property does and does not catch.
+    @st.composite
+    def states(draw):
+        case = CORPUS[draw(st.integers(0, len(CORPUS) - 1))]
+        scale = draw(st.floats(0.9, 1.1, width=32))
+        return {name: (a * scale).astype(a.dtype) for name, a in case.items()}
+
+    @harness.settings()
+    @given(states())
+    def test_something(state):
+        out = harness.run_replay(state)
+        ...
+
+The library is five names. `corpus()` returns the visible cases' inputs
+as `[{variable: ndarray}, ...]`. `run_replay(inputs) -> outputs` runs
+the replay binary once on those arrays in a fresh case directory and
+returns every `<name>.out.npy` the driver left, as arrays; it raises
+rather than returning if the driver fails or hangs. `settings()` is the
+Hypothesis settings every property should share -- the run's example
+count, no deadline, and the too-slow health check off, because every
+example here starts a process. `max_examples()` and `seed()` are the two
+numbers the run was given, for a module that needs to draw something of
+its own.
+
+Everything the library needs comes from the environment the builder
+sets, so a property module names no path, no binary, and no seed. Good
+properties: determinism, a conservation law within a measured tolerance,
+a symmetry the discretisation has exactly. State in the module what each
+property does and does not catch.
 
 ## After the session (the person)
 
@@ -277,8 +374,22 @@ especially. Read the working copy. Then:
 
     ledger promote --config deploy/state/gateway.host.yaml --region-id <code>:onboard
 
-It refuses unless every check passed on the current tree and the working
-copy is that tree. Then commit `programs/<code>/`, add a porting region
+It refuses -- writing nothing -- unless the region is one being
+onboarded, every onboarding check passed on the region's current tree,
+and the working copy is that tree byte for byte, naming the first file
+that differs. It also refuses if a destination under `programs/<code>/`
+already holds something; `--replace` empties those first, and
+`--programs <dir>` writes the whole result somewhere else, which is how
+to compare a promotion against what is checked in. What it writes is the
+manifest with its source root rewritten from the tree to the `baseline`
+beside it, the tree minus that manifest as `baseline/`, the visible
+inputs under `datasets/visible/`, and the answers -- the visible outputs
+and the whole held-out set -- under `captures/`. The program's own
+timing outputs are not promoted: a run at a real timing size writes
+megabytes, and what a port is compared against is the deployment's own
+`time_baseline` run, which stays in the region's ledger.
+
+Then commit `programs/<code>/`, add a porting region
 to `gateway.<code>.yaml` (`phase: porting`, a `spec_path` under
 `notes/regions/`, `strategy: stdpar_managed`, `baseline_strategy:
 cpu_reference`, `visible_dataset: visible`), set `EQUIVALENT_REGION` to

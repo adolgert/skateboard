@@ -130,6 +130,12 @@ so the steps can refer to it by number.
 
 ## Step 0 — To-fix list
 
+*As built: `63a20ca`.* The device proof went further than item 8 asked:
+a launch line counts only if it carries the runtime's own file,
+function, line and device fields, and the claim records where each
+launch came from. Item 13 was answered by deleting the orchestrator and
+the agent-runner rather than archiving them, in the following step.
+
 Small, mechanical, found during the audit. One pull request, before any
 design work, so the later steps start from a consistent tree.
 
@@ -184,6 +190,12 @@ existing test file. Items 1, 5, 12, 13 are review only.
 ---
 
 ## Step 1 — Repository layout for codes, and the code manifest
+
+*As built: `ecdc720`.* The directory is `programs/`, and the builder and
+the oracle moved to `services/` with both images building from the
+repository root. Beyond the step's text, the tsunami region spec was
+checked in with the line range the baseline kernel actually has, and the
+walkthrough copies that file instead of formatting its own.
 
 **Goal.** One place per code, and one file that says what the code is.
 
@@ -241,6 +253,13 @@ claim's materials.
 
 ## Step 2 — Capture format and a variable-agnostic oracle
 
+*As built: `2b2697a`.* NPY, as proposed. The tsunami reference data was
+converted in place rather than regenerated, so the answers are the bytes
+the first campaign recorded, and `npy_io.f90` is emitted by a generator
+checked in beside it with a test holding the two equal. The proposal
+that the oracle also hold the program dataset was reversed two steps
+later.
+
 **Goal.** Remove `h`, `u`, float32, and rank-1 from every Python file.
 
 **Establish.** Read `demo/oracle/app.py`, `compare.py`, `equivalent/
@@ -288,6 +307,13 @@ captures and no variable name in any Python file.
 ---
 
 ## Step 3 — The build contract
+
+*As built: `4700f26`.* The shim and the tree's own makefile, as
+proposed. The builder's profile table went with them, so the CPU
+baseline is a strategy file named per region as `baseline_strategy`;
+and tsunami's replay driver and reference generator moved out of the
+builder image into the code's own tree, where a port's build compiles
+them.
 
 **Goal.** The builder builds any code through one contract, and proves
 the strategy's flags were used.
@@ -353,6 +379,11 @@ its flags; `ledger status` shows them.
 
 ## Step 4 — Multi-file regions and the analyzer's new home
 
+*As built: `3cd7f31`.* As proposed, with one addition the step's text
+does not name: a malformed spec -- no files, an anchor that is not among
+them, a path that is not in the tree -- is a failing verdict that says
+why, rather than a crash in the analyzer.
+
 **Goal.** A region may span several files and may create a file; the
 analyzer lives in the package.
 
@@ -391,6 +422,14 @@ and a port that inlines the stencil into a new file.
 ---
 
 ## Step 5 — Onboarding actions and the `onboarded` row
+
+*As built: `e9e4c00` (phase, the minimal manifest, `manifest_check` and
+`harness_build`), `29723d3` (capture, replay, determinism, timing),
+`d73922a` (`promote`, and tsunami onboarded from its bare baseline), and
+`12bb12f` for 5b (`harness_self_check` and `harness_property`, making
+the list eight checks). `promote` wrote the program's timing outputs
+into the code's directory at first and stopped when the next step moved
+that reference into the ledger.
 
 **Goal.** The verifiable goals of G6: every onboarding step is a gateway
 action that files a claim, and `status` says what is missing.
@@ -482,6 +521,13 @@ when the working copy differs from the passing tree.
 
 ## Step 6 — Program-level regression and timing without the tiling trick
 
+*As built: `92af2f0`.* The reference for a program run is the
+deployment's own `time_baseline` claim rather than anything checked in,
+and the tolerance file gained a `files:` section because a whole-program
+run drifts where a single call of the region does not. `time_baseline`
+rebuilds and reruns every time rather than reusing the onboarding run's
+stored outputs when the manifest hash matches.
+
 *Settled during execution (2026-08-28).* The program dataset is not
 checked in and not baked into the oracle. A promoted tsunami program
 output is 8 MB per promotion, and every code at a real timing size is
@@ -546,6 +592,14 @@ beside `variables:`).
 ---
 
 ## Step 7 — Property-based invariants as a predicate
+
+*As built: `db0d75c`.* The properties run in the builder against a
+library baked into its image, so a code's module names no path, no
+binary and no seed. The mass-conservation property the step proposed
+does not catch a wrong flux -- a periodic centred difference sums to
+zero whatever it differences -- so the tsunami module says so, and it is
+the exact periodic-shift property that catches a stencil that has
+stopped wrapping.
 
 **Goal.** D22: a per-code property module has a slot in the table.
 

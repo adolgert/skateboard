@@ -25,11 +25,12 @@ answering every comparison with the name of what is missing.
 
 | file | what it is |
 | --- | --- |
-| `docker-compose.yml` | the four services and the four networks |
+| `docker-compose.yml` | the four networks, the four services that stay up, and the two walkthrough runners that are started on demand |
 | `gateway.<code>.yaml` | the gateway's configuration for a deployment built around that code, in the container's paths; `EQUIVALENT_CODE` picks it |
-| `gateway/Dockerfile` | the gateway image: the package, which holds the analyzer |
-| `agent/Dockerfile` | the session image: compilers, a GPU, and the session tool |
+| `gateway/Dockerfile` | the gateway image: the package, which holds the analyzer, and a copy of the strategy files |
+| `agent/Dockerfile` | the session image: compilers, a GPU, the session tool, and the harness's own NPY module and property library, so a hand build in a session compiles against what the builder will use |
 | `seed.py` | writes the baseline the gateway's repository starts from, reading which tree from the code's manifest |
+| `hostconfig.py` | rewrites `gateway.<code>.yaml`'s container paths into this machine's, which is how `state/gateway.host.yaml` is produced |
 | `up.sh` | prepare state, seed, build, start, wait for health |
 | `pi.sh` | open an interactive session in the agent container |
 | `walkthrough.sh`, `walkthrough.py` | drive one region from nothing to accepted; the region is `EQUIVALENT_REGION` |
@@ -37,6 +38,10 @@ answering every comparison with the name of what is missing.
 | `isolation_check.sh` | assert the isolation from inside the agent |
 | `isolation_check_gateway.sh` | assert the gateway's half of it, from here |
 | `down.sh` | stop; with `--reset`, discard state after asking |
+
+The session container also mounts `../docs/onboarding.md` read-only at
+`/docs/onboarding.md`: it is what a session bringing a new code in reads
+to know what to write.
 
 ## The four networks
 
@@ -105,11 +110,12 @@ empties the destinations first and `--programs` writes somewhere else
 entirely, which is how to compare a promotion against what is checked
 in.
 
-`up.sh` writes `state/gateway.host.yaml`: the same deployment as `gateway.yaml`,
-with the paths of this machine rather than the container's mount points. Both
-are read by the one configuration loader, so there is no second description of
-where a region's files live. Edit `gateway.<code>.yaml` and re-run `up.sh` rather than
-editing the generated copy.
+`up.sh` writes `state/gateway.host.yaml`: the same deployment as
+`gateway.<code>.yaml`, with the paths of this machine rather than the
+container's mount points. Both are read by the one configuration loader, so
+there is no second description of where a region's files live. Edit
+`gateway.<code>.yaml` and re-run `up.sh` rather than editing the generated
+copy.
 
 ## Logging in, once
 
@@ -161,10 +167,15 @@ the login and the baseline seed.
   compiled without the strategy's flags, or compiled a file that is not the
   tree's own source, is a failed claim rather than a passed one. The builder
   has no route off the host either way.
-- **The walkthrough runs in a container, not on this machine.** The gateway is
+- **The walkthroughs run in a container, not on this machine.** The gateway is
   on internal networks only, so nothing outside them can reach it — including
-  this terminal. `walkthrough.sh` runs the same script on the agent's network,
-  with the same token the agent uses.
-- **`state/working` is shared between the session and the walkthrough.** They
-  edit the same files. Running the walkthrough over a session in progress will
-  overwrite the kernel it is working on.
+  this terminal. `walkthrough.sh` and `onboard_walkthrough.sh` run their
+  scripts on the agent's network, with the same token the agent uses.
+- **`state/working` is shared between the session and both walkthroughs.** They
+  edit the same files. Running a walkthrough over a session in progress will
+  overwrite what it is working on, and `onboard_walkthrough.sh` additionally
+  deletes anything in the working copy that is not part of the code's bare
+  baseline.
+- **One deployment holds one code.** The repository is seeded from one
+  baseline and the oracle image bakes one code's answers in, so
+  `EQUIVALENT_CODE` is changed by `./down.sh` and `./up.sh`, not on the fly.

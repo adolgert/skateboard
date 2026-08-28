@@ -1,7 +1,15 @@
 # regionharness — spec-driven capture-replay for Fortran regions
 
-`check_sese.py` moved to `equivalent/analyzers/check_sese.py`; run it as
-`python3 -m equivalent.analyzers.check_sese <region.yaml>`.
+This is earlier, standalone work, kept for the n4pes case it was built
+for. Nothing in it is on the gateway path and nothing in it is extended:
+the capture-replay a code gets when it is brought in through the gateway
+uses the NPY format and the contracts in `docs/onboarding.md`, not
+Serialbox. The one file that crossed over is `check_sese.py`, which is
+the analyzer the gateway runs; it now lives at
+`equivalent/analyzers/check_sese.py` and is run as
+`python3 -m equivalent.analyzers.check_sese <region.yaml>`. Its tests
+travelled with it, so plain `pytest` no longer collects this directory's
+CoarseAIR-bound ones; run them by naming the file.
 
 Turns a region spec (`notes/regions/*.yaml`) into Serialbox capture
 instrumentation, a standalone replay harness, and a set of validation gates.

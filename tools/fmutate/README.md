@@ -12,6 +12,14 @@ property of the gate as configured, not of a model of the gate.
 
 Background and the survey that motivated the design: [`docs/coverage-testing.md`](../../docs/coverage-testing.md).
 
+The operator tables and the generator here are also the harness's own: they are
+carried over, operator for operator, into `services/builder/mutate.py`, which
+runs inside the builder as the `harness_self_check` step of onboarding a code.
+That step asks the same question about a code being brought in, with the tree's
+own makefile and the bands the code proposes, and returns per-mutant verdicts
+rather than outputs. This tool is the standalone one: it runs on the host, with
+gfortran, and it is where a coverage prepass and a checked rebuild live.
+
 ## Why not an existing tool
 
 There isn't one. [Mothra](https://fortranwiki.org/fortran/show/Mutation+testing+frameworks)
@@ -55,8 +63,8 @@ policy and under bitwise equality. A mutant that changes output bitwise but
 passes the tolerance policy is one the tolerance is hiding. **This, not the
 mutation score, is the metric to watch.** It gives a principled ratchet for
 recalibration: when tolerances are widened for a new compiler (the pending
-`nvfortran` recalibration in `programs/tsunami/tolerances.json`), widen them only as
-far as the gap stays at zero. `--fail-on-gap` enforces that in CI.
+`nvfortran` recalibration in `programs/tsunami/baseline/harness/tolerances.json`),
+widen them only as far as the gap stays at zero. `--fail-on-gap` enforces that in CI.
 
 **Killed only by the checked build.** With `--checked`, survivors are rebuilt
 with `-fcheck=all -finit-real=snan -ffpe-trap=...` and replayed again. Anything
@@ -114,7 +122,7 @@ root. See `targets/tsunami.json`.
     "fc": "gfortran",
     "sources": ["mod_params.f90", "..."],        // compiled from src_dir, in order
     "extra_sources": ["services/builder/harness/npy_io.f90",
-                      "services/builder/harness/replay.f90"], // driver + harness, repo-relative
+                      "programs/tsunami/baseline/harness/replay.f90"], // harness + the code's driver
     "exe": "replay",
     "run_args": ["{case_dir}"],                  // {case_dir} is substituted
     "flags":          ["-O2", "..."],            // release build (the gate's build)
@@ -131,15 +139,18 @@ root. See `targets/tsunami.json`.
   },
   "comparator": {
     "module":     "equivalent/capture/compare.py",       // must expose compare_variable()
-    "tolerances": "programs/tsunami/tolerances.json"  // must have a "variables" key
+    "tolerances": "programs/tsunami/baseline/harness/tolerances.json"  // must have a "variables" key
   }
 }
 ```
 
-The driver contract is the one `services/builder/harness/replay.f90` already implements: it
-is invoked as `driver <case_dir>`, reads `input_files` from that directory, and
-writes the files named in `variables` back into it. Any kernel wrapped that way
-can be targeted without changing this tool.
+The driver contract is the harness's own: the driver is invoked as
+`driver <case_dir>`, reads `input_files` from that directory, and writes the
+files named in `variables` back into it. Every code carries its own driver
+implementing it, in its tree -- `programs/tsunami/baseline/harness/replay.f90`
+is the one above -- compiled against `npy_io.f90`, which is the harness's and is
+baked into the builder image. Any kernel wrapped that way can be targeted
+without changing this tool.
 
 Corpus files ending in `.npy` carry their own element type, shape, and element
 order, and are read as they are. A target whose corpus is raw streams instead

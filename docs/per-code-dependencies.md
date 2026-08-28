@@ -5,6 +5,13 @@ Purpose: list every place the harness relies on details of the code it was
 built against, so that a procedure for onboarding a second code can be
 written from it. This is findings only; it proposes no procedure.
 
+**This is a dated snapshot and is left as it was written.** Most of what
+it describes has since been replaced; every file path and line number
+below is the tree as it stood that day. The closing section, "What was
+resolved", says what each finding became and what is still open. Read
+that first if you are here to know the state of the harness rather than
+the state of the audit.
+
 ## Summary
 
 The repository has three tooling layers built against two different codes,
@@ -217,3 +224,121 @@ Four places already externalize part of what a per-code layer needs:
 | `notes/regions/<region>.yaml` | anchor file/routine/lines, live_in/live_out/clobbers with extents and types, closure, contract | tolerances unread; not in git; ~40 lines are read by tools, ~250 are prose |
 | `equivalent/strategy/files/*.yaml` | compiler, flags, device proof, sanitizers, analyzer command, allow_globs | allow_globs is per-code, misfiled here |
 | `deploy/gateway.yaml` regions | spec path, strategy, visible dataset name | no code identity, tree, build, variables, tolerances, timing target, baseline |
+
+## 6. What was resolved
+
+Added after the generalization work. One line per finding: what replaced
+it, or that nothing did.
+
+### The structural assumptions of §3
+
+1. **One editable file per region.** The region spec lists `files:` --
+   every path the region may edit, including paths that do not exist
+   yet. The analyzer returns that list and the allow-list is it plus the
+   spec, each path checked against the strategy's globs.
+2. **Two rank-1 float32 variables called `h` and `u`.** The code's
+   manifest declares each of the region's inputs and outputs by name,
+   element type (`f32 f64 i32 i64 l`) and rank (0 to 4). Captures are
+   one `.npy` file per variable, which says its own type, shape and
+   element order, and the oracle compares whatever variables a case
+   declares it holds. No Python file outside a code's own directory
+   names a variable.
+3. **One compiler command over a flat, hand-ordered file list.** The
+   builder runs the tree's own makefile, with `FC` set to a shim that
+   logs every compiler invocation before running the strategy's
+   compiler. The log is read back: every compile must carry the
+   strategy's flags and must compile only the tree's own source, and
+   both facts go into the build claim. `make`, `cmake` and `fpm` are in
+   the builder image, so a thin makefile can drive either of the other
+   two.
+4. **A tracked subdirectory of this repository, UTF-8 text only.** The
+   UTF-8 half is gone: submissions carry file content as bytes from git
+   to disk, so a namelist or a small data file in another encoding
+   round-trips. The tracked-subdirectory half remains -- see below.
+5. **One oracle image, deployment-global datasets.** Datasets, captures
+   and the tolerance policy are per code, under `programs/<code>/`, and
+   the oracle bakes one code's whole directory in as a build argument.
+   One image per code remains -- see below.
+6. **A compiled-in problem size and the tiling trick.** The manifest
+   names the timing executable, its arguments, its environment, the
+   files it writes and a budget, so the problem size is data. Timing is
+   no longer justified by a correctness argument specific to one kernel:
+   `program_regression` runs the ported program at that size and
+   compares every file it writes against the files the baseline program
+   wrote, and `time_port` cannot run without it.
+7. **Two capture formats with no tolerance path.** One format: a
+   directory per case, one `.npy` per variable (`<name>.npy` in,
+   `<name>.out.npy` out), and a `case.json` naming them. One comparator
+   file, which the oracle image, the builder image and the gateway all
+   use, so there is one definition of "the same answer". The tolerance
+   policy is a per-code file with a band per region output variable and
+   a band per file the timing run writes.
+8. **The region-harness generator's assumptions.** Not addressed, by
+   intent: nothing in `tools/regionharness/` was extended. Its
+   `check_sese.py` moved into the package as the analyzer the gateway
+   runs; the generator is not on the gateway path. What replaced it is
+   that the replay driver and the capture program are written during
+   onboarding against a stated contract, and checked by
+   `harness_replay`, `harness_determinism` and `harness_self_check`
+   rather than generated.
+9. **Line-numbered anchors that go stale.** Not resolved. A spec still
+   names a line range, and the analyzer's verdict is only as good as the
+   range it was given -- which the manual says. The analyzer's claim is
+   filed against the frozen set rather than the tree, so it survives
+   edits inside the region.
+10. **Property-based invariants have no home.** A code's manifest may
+    name a pytest module of invariants; `regression/property` is a
+    predicate type; the builder bakes in the library that module imports
+    and runs it against the replay binary; and acceptance requires the
+    claim exactly when the code declares a module.
+11. **Device proof is the substring `launch `.** The proof now requires
+    the offload runtime's own `file`, `function`, `line` and `device`
+    fields on each launch line, and the claim records where each launch
+    came from. A stronger proof remains open -- see below.
+
+### The duplicated facts of §2
+
+1. **The dependency-ordered module list**, in six places: gone. The
+   tree's own makefile is the only list, and the manifest names the
+   targets it builds and the executables they leave.
+2. **`h`/`u` and the four `.bin` names**, in a dozen places: gone. Names
+   come from each case's own `case.json` and types and ranks from the
+   manifest.
+3. **`src/mod_kernel.f90` as the editable file**: replaced by the spec's
+   `files:` list, capped by the strategy's globs.
+4. **Compiler flags in three places**: the builder's profile table is
+   deleted and the strategy file is the only place they are written. The
+   prompt cards that had drifted from it went with the agent-runner.
+5. **The region block, retyped in five places**: the deployment's
+   configuration is one file per code, and the host's copy is produced
+   from it by rewriting only the paths. The region is no longer baked
+   into the session image.
+6. **The region harness's `input.txt` layout and case-dir stem**: not
+   addressed; that layer was not extended.
+7. **Absolute `/home/adolgert/...` paths in the region harness**: not
+   addressed, for the same reason.
+
+### What remains
+
+- **A baseline has to be a tracked directory in this repository.**
+  `seed.py` reads it out of a commit. A code kept in its own upstream
+  clone would need a clone-and-pin step, and the ledger key would have
+  to include the upstream commit.
+- **One oracle image holds one code, and a deployment holds one code.**
+  The repository is seeded from one baseline and the oracle bakes one
+  code's answers in, so two codes mean two deployments. A multi-code
+  oracle can come later.
+- **The static footprint check is still missing.** Nothing confirms that
+  a spec's declared reads and writes match what the code actually
+  touches; that needs static-analysis tooling this repository does not
+  run generically. `harness_replay` and `harness_self_check` catch a
+  wrong footprint empirically -- a driver that does not set everything
+  the region reads shows up as a replay that does not reproduce the
+  capture -- but the static check is open.
+- **Requirements are scoped to the whole tree.** Any edit invalidates
+  every check, which is right for a small kernel and expensive on a
+  large code, where a region-scoped subject (a hash of the region's
+  dependency cone) would let untouched evidence stand.
+- **A stronger device proof.** Counting kernels with `nsys` rather than
+  reading the runtime's notification lines is a strategy option nobody
+  has written.
