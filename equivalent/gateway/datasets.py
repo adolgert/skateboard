@@ -1,7 +1,8 @@
-"""Loads a region's visible capture set from disk, in the exact layout
-demo/orchestrator/orchestrator.py's load_cases() already reads:
-`<dir>/cases.json` ({"cases": [name, ...]}) plus `<dir>/<name>/h_in.bin`
-and `<dir>/<name>/u_in.bin` per case.
+"""Loads a region's visible capture set from disk.
+
+The layout a visible dataset directory holds: `<dir>/cases.json`
+({"cases": [name, ...]}) plus `<dir>/<name>/h_in.bin` and
+`<dir>/<name>/u_in.bin` per case.
 
 Trust role: these bytes are the inputs every replay runs against. Loading
 the wrong directory, or mangling a case, makes gpu/executed and

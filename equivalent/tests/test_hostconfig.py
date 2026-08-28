@@ -18,15 +18,20 @@ paths:
   repo: /repo
   ledger_root: /ledger
   working_copy: /working
-  datasets_root: /datasets
+  programs: /programs
   strategies: /strategies
   seed: /seed
+codes:
+  tsunami:
+    manifest: tsunami/manifest.yaml
 regions:
   "ch04:step":
+    code: tsunami
     spec_path: notes/regions/ch04-step.sese.yaml
     strategy: stdpar_managed
     visible_dataset: visible
   "n4pes:region":
+    code: tsunami
     spec_path: notes/regions/n4pes.sese.yaml
     strategy: omp_target
 """
@@ -35,7 +40,7 @@ MOUNTS = {
     "/repo": "/srv/deploy/state/repo",
     "/ledger": "/srv/deploy/state/ledger",
     "/working": "/srv/deploy/state/working",
-    "/datasets": "/srv/demo/orchestrator/datasets",
+    "/programs": "/srv/skateboard/programs",
     "/strategies": "/srv/equivalent/strategy/files",
     "/seed": "/srv/deploy/state/seed",
 }
@@ -55,7 +60,7 @@ def test_every_path_becomes_a_host_path_and_sessions_is_added(tmp_path):
         "repo": "/srv/deploy/state/repo",
         "ledger_root": "/srv/deploy/state/ledger",
         "working_copy": "/srv/deploy/state/working",
-        "datasets_root": "/srv/demo/orchestrator/datasets",
+        "programs": "/srv/skateboard/programs",
         "strategies": "/srv/equivalent/strategy/files",
         "seed": "/srv/deploy/state/seed",
         "sessions": SESSIONS,
@@ -68,6 +73,16 @@ def test_both_regions_are_carried_through_unchanged(tmp_path):
 
     assert result["regions"] == source["regions"]
     assert result["version"] == source["version"]
+
+
+def test_the_codes_section_is_carried_through_unchanged(tmp_path):
+    # A code's manifest path is written relative to the programs directory,
+    # so rewriting that one path is enough to make the host's copy resolve;
+    # the codes section itself needs no translation.
+    source = yaml.safe_load(GATEWAY_YAML)
+    result = yaml.safe_load(host_config_text(_gateway_yaml(tmp_path), MOUNTS, SESSIONS))
+
+    assert result["codes"] == source["codes"]
 
 
 def test_a_path_with_no_mount_point_is_an_error_naming_it(tmp_path):

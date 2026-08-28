@@ -9,7 +9,7 @@ table, because the ledger CLI must be able to check claims against it
 without the gateway installed. The table's "accept" row imports this
 list rather than writing a second copy.
 
-Matches demo/orchestrator/orchestrator.py's actual gate: sanitize/initcheck
+Matches the first demonstration harness's actual gate: sanitize/initcheck
 is recorded but does not block acceptance there (only memcheck/racecheck
 do), and timing/baseline is a one-time claim made on the baseline tree, not
 a requirement of any individual port.

@@ -12,6 +12,8 @@ from equivalent.gateway.app import create_app
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import init_baseline_repo
 from equivalent.ledger.store import LedgerStore
+from equivalent.manifest.schema import load_manifest
+from equivalent.tests.fakes import write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
@@ -66,6 +68,7 @@ def _client(tmp_path, source, hi):
         region_id="ch04:step", repo_dir=repo_dir, spec_path=SPEC_PATH,
         ledger_dir=tmp_path / "ledger", strategy_path=STRATEGY_PATH,
         working_copy_dir=working,
+        manifest=load_manifest(write_program(tmp_path) / "manifest.yaml"),
     )
     store = LedgerStore(cfg.ledger_dir)
     client = TestClient(create_app({cfg.region_id: cfg}, TOKEN))

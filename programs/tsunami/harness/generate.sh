@@ -1,17 +1,25 @@
 #!/bin/bash
 # Generate reference capture datasets with the pristine CPU kernel, then split
 # the files across the trust boundary:
-#   - visible INPUTS      -> orchestrator/datasets/visible   (fed to builder /run)
-#   - visible EXPECTED     -> oracle/captures/visible          (oracle-only)
-#   - held-out EVERYTHING  -> oracle/captures/holdout          (oracle-only)
+#   - visible INPUTS      -> datasets/visible      (fed to the builder's /run)
+#   - visible EXPECTED    -> captures/visible      (oracle-only)
+#   - held-out EVERYTHING -> captures/holdout      (oracle-only)
 #
 # Also runs a self-test: replaying the visible inputs through the SAME pristine
 # kernel must reproduce the reference outputs bit-for-bit.
+#
+# This script still drives the compiler by hand. A later change turns it into
+# the capture target of this code's own Makefile, which is what the manifest's
+# build section already names, so that the builder runs it under the same
+# contract as every other target. Do not run it casually: it regenerates the
+# reference data, and a different compiler than the one that made the tracked
+# captures would move every expected answer.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-DEMO="$(cd "$HERE/.." && pwd)"
-WORK="$DEMO/work/src"
+CODE="$(cd "$HERE/.." && pwd)"
+WORK="$CODE/baseline/src"
+CAPTURE="$(cd "$HERE/../../../services/builder/harness" && pwd)"
 BUILD="$HERE/.build"
 FC="${FC:-gfortran}"
 FFLAGS="-O2 -ffree-line-length-none"
@@ -24,8 +32,8 @@ cd "$BUILD"
 
 echo "=== compiling gen_reference and replay (pristine kernel, $FC) ==="
 KMODS="$WORK/mod_params.f90 $WORK/mod_diff.f90 $WORK/mod_initial.f90 $WORK/mod_kernel.f90"
-$FC $FFLAGS -o gen_reference $KMODS "$HERE/mod_capture.f90" "$HERE/gen_reference.f90"
-$FC $FFLAGS -o replay        $KMODS "$HERE/mod_capture.f90" "$HERE/replay.f90"
+$FC $FFLAGS -o gen_reference $KMODS "$CAPTURE/mod_capture.f90" "$HERE/gen_reference.f90"
+$FC $FFLAGS -o replay        $KMODS "$CAPTURE/mod_capture.f90" "$CAPTURE/replay.f90"
 
 echo "=== generating VISIBLE dataset (icenter=25 decay=0.02) ==="
 ./gen_reference $GRID $STEPS 25 0.02 "$BUILD/visible"
@@ -46,9 +54,9 @@ done
 [ "$fail" = 0 ] && echo "  self-test PASSED (replay reproduces reference)" || { echo "  self-test FAILED"; exit 1; }
 
 # --- distribute across the trust boundary
-VIS_IN="$DEMO/orchestrator/datasets/visible"
-VIS_EXP="$DEMO/oracle/captures/visible"
-HLD="$DEMO/oracle/captures/holdout"
+VIS_IN="$CODE/datasets/visible"
+VIS_EXP="$CODE/captures/visible"
+HLD="$CODE/captures/holdout"
 rm -rf "$VIS_IN" "$VIS_EXP" "$HLD"
 mkdir -p "$VIS_IN" "$VIS_EXP" "$HLD"
 

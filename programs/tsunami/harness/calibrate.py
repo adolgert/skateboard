@@ -11,7 +11,11 @@ already exhibits and accept differences of that magnitude.
 Re-run against nvfortran once the HPC SDK image is available to widen bands if
 the GPU's FMA/reduction reordering exceeds the CPU spread (a real finding).
 
-Writes: oracle/tolerances.json
+Writes: the code's tolerances.json, beside its manifest.
+
+This script still drives the compiler by hand. A later change turns the
+capture and replay builds into targets of this code's own Makefile, which is
+what the manifest's build section already names.
 """
 import json
 import os
@@ -22,15 +26,17 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEMO = os.path.dirname(HERE)
-WORK = os.path.join(DEMO, "work", "src")
-VIS_IN = os.path.join(DEMO, "orchestrator", "datasets", "visible")
-OUT = os.path.join(DEMO, "oracle", "tolerances.json")
+CODE = os.path.dirname(HERE)
+REPO = os.path.dirname(os.path.dirname(CODE))
+WORK = os.path.join(CODE, "baseline", "src")
+CAPTURE = os.path.join(REPO, "services", "builder", "harness")
+VIS_IN = os.path.join(CODE, "datasets", "visible")
+OUT = os.path.join(CODE, "tolerances.json")
 
 KMODS = [f"{WORK}/mod_params.f90", f"{WORK}/mod_diff.f90",
          f"{WORK}/mod_initial.f90", f"{WORK}/mod_kernel.f90"]
-CAP = f"{HERE}/mod_capture.f90"
-REPLAY = f"{HERE}/replay.f90"
+CAP = f"{CAPTURE}/mod_capture.f90"
+REPLAY = f"{CAPTURE}/replay.f90"
 
 PROFILES = {
     "plain":    ["-O2", "-ffree-line-length-none"],

@@ -90,7 +90,7 @@ services:
       - ./state/working:/working:ro
       - ./state/seed:/seed:ro
       - ./gateway.yaml:/etc/equivalent/gateway.yaml:ro
-      - ../demo/orchestrator/datasets:/datasets:ro
+      - ../programs:/programs:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 5s
@@ -100,9 +100,9 @@ services:
 
   builder:                      # semi-trusted executor; the only container with the GPU
     build:
-      context: ../demo
-      dockerfile: builder/Dockerfile
-    image: skateboard/builder   # the same image the demonstration harness builds
+      context: ..
+      dockerfile: services/builder/Dockerfile
+    image: skateboard/builder
     networks: [build_net]
     gpus: all
     environment:
@@ -121,8 +121,13 @@ services:
       start_period: 10s
 
   oracle:                       # trusted, sealed; read-only rootfs
+    # The captures and the tolerance policy of one code are baked into the
+    # image, so which code it answers for is a build argument, not a mount.
     build:
-      context: ../demo/oracle
+      context: ..
+      dockerfile: services/oracle/Dockerfile
+      args:
+        CODE: ${EQUIVALENT_CODE:-tsunami}
     networks: [oracle_net]
     environment:
       - SKATEBOARD_TOKEN=${EQUIVALENT_TOKEN}
@@ -140,6 +145,8 @@ services:
     environment:
       - EQUIVALENT_GATEWAY_URL=http://gateway:8000
       - EQUIVALENT_TOKEN=${EQUIVALENT_TOKEN}
+      - EQUIVALENT_CODE=${EQUIVALENT_CODE:-tsunami}
+      - EQUIVALENT_REGION=${EQUIVALENT_REGION:-ch04:step}
     networks: [agent_net]
     # It writes into the working copy, which the agent's account also writes
     # to. walkthrough.sh passes this terminal's own account so the two do not
@@ -148,6 +155,7 @@ services:
     volumes:
       - ./walkthrough.py:/opt/walkthrough.py:ro
       - ../docs/examples:/examples:ro
+      - ../programs:/programs:ro
       - ./state/working:/working
     entrypoint: ["python3", "/opt/walkthrough.py"]
 

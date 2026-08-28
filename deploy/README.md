@@ -3,8 +3,15 @@
 Everything in this directory is deployment: container definitions, the
 gateway's configuration, and the scripts that start and check a running
 stack. The only code here is `seed.py`, which writes the baseline, and
-`walkthrough.py`, which drives one region end to end. Both import the
-`equivalent` package; neither decides anything.
+`walkthrough.py`, which drives one region end to end. Neither decides
+anything.
+
+What is deployed comes from two directories above this one: `programs/`,
+one directory per code, holding that code's manifest, baseline sources,
+datasets, captures, and tolerance policy; and `services/`, holding the
+builder and the oracle. Both image builds take the repository root as
+their context, and the oracle takes the code as a build argument
+(`EQUIVALENT_CODE`) because it bakes that code's answers in.
 
 | file | what it is |
 | --- | --- |
@@ -12,7 +19,7 @@ stack. The only code here is `seed.py`, which writes the baseline, and
 | `gateway.yaml` | the gateway's configuration, in the container's paths |
 | `gateway/Dockerfile` | the gateway image: the package plus the analyzer |
 | `agent/Dockerfile` | the session image: compilers, a GPU, and the session tool |
-| `seed.py` | writes the baseline the gateway's repository starts from |
+| `seed.py` | writes the baseline the gateway's repository starts from, reading which tree from the code's manifest |
 | `up.sh` | prepare state, seed, build, start, wait for health |
 | `pi.sh` | open an interactive session in the agent container |
 | `walkthrough.sh`, `walkthrough.py` | drive one region from nothing to accepted |

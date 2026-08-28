@@ -12,7 +12,7 @@ allow_globs:
 languages:
   fortran:
     compiler: nvfortran
-    # Exactly what demo/builder/stages.py PROFILES["omp_target"] passes to
+    # Exactly what services/builder/stages.py PROFILES["omp_target"] passes to
     # nvfortran today. Note this includes mem:managed even though the current
     # agent-runner prompt text says "there is NO managed memory on this rung"
     # -- the flags below are what actually gets compiled; the prompt is wrong.

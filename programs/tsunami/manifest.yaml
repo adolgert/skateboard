@@ -1,0 +1,39 @@
+version: 1
+name: tsunami
+source:
+  root: baseline            # the tracked tree that becomes the gateway's baseline
+  patterns:                 # files that count as source; sent to the builder
+    - "**/*.f90"
+    - "**/*.F90"
+    - "**/*.f08"
+    - "**/*.f03"
+    - "**/*.f"
+    - "**/*.F"
+    - "**/*.for"
+    - "**/*.inc"
+    - "Makefile"
+    - "**/*.mk"
+build:
+  makefile: Makefile        # relative to the tree root
+  targets:
+    replay:  {target: replay,  executable: replay}
+    timing:  {target: timing,  executable: tsunami}
+    capture: {target: capture, executable: gen_reference}
+interface:
+  module: mod_kernel
+  entry: step
+  inputs:
+    - {name: h, dtype: f32, rank: 1}
+    - {name: u, dtype: f32, rank: 1}
+  outputs:
+    - {name: h, dtype: f32, rank: 1}
+    - {name: u, dtype: f32, rank: 1}
+datasets:
+  visible: {args: ["100", "5000", "25", "0.02"]}
+  holdout: {args: ["100", "5000", "60", "0.01"]}
+timing:
+  args: []
+  outputs: []
+  budget_s: 300
+tolerances: tolerances.json
+properties: null            # or a path to a pytest module

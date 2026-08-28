@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from equivalent.manifest.schema import Manifest
+
 
 @dataclass(frozen=True)
 class RegionConfig:
@@ -21,4 +23,10 @@ class RegionConfig:
     # not in the submit request, so that nothing the agent sends can
     # choose which gateway-side path gets read.
     working_copy_dir: Path
+    # The manifest of the code this region belongs to, already loaded. It
+    # is carried here rather than looked up per request so that every
+    # claim a session files names one and the same description of the
+    # code, and so that a manifest edited on disk mid-session cannot
+    # change what the running gateway believes.
+    manifest: Manifest
     visible_dataset_dir: Path | None = None

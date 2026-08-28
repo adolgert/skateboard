@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from equivalent.gateway.main import build_app_from_env
 from equivalent.gateway.submit import baseline_commit
-from equivalent.tests.fakes import FakeBuilder
+from equivalent.tests.fakes import FakeBuilder, write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
@@ -56,6 +56,7 @@ def _deployment(tmp_path, monkeypatch, token=TOKEN, strategies=STRATEGIES_DIR, *
     (working / "notes" / "regions").mkdir(parents=True)
     (working / SPEC_PATH).write_text(SPEC)
 
+    programs = write_program(tmp_path).parent
     config_path = tmp_path / "gateway.yaml"
     config_path.write_text(yaml.safe_dump({
         "version": 1,
@@ -63,10 +64,14 @@ def _deployment(tmp_path, monkeypatch, token=TOKEN, strategies=STRATEGIES_DIR, *
             "repo": str(tmp_path / "repo"),
             "ledger_root": str(tmp_path / "ledger"),
             "working_copy": str(working),
+            "programs": str(programs),
             "strategies": str(strategies),
             "seed": str(seed),
         },
-        "regions": {"ch04:step": {"spec_path": SPEC_PATH, "strategy": "stdpar_managed"}},
+        "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
+        "regions": {"ch04:step": {
+            "code": "tsunami", "spec_path": SPEC_PATH, "strategy": "stdpar_managed",
+        }},
     }))
 
     monkeypatch.setenv("EQUIVALENT_CONFIG", str(config_path))

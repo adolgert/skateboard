@@ -3,16 +3,18 @@ from pathlib import Path
 import pytest
 
 from equivalent.gateway.submit import (
-    fortran_files_at,
     init_baseline_repo,
     materialize_tree,
     resolve_allow_globs,
+    source_files_at,
     submit,
     tracked_files,
 )
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import tree_subject
+from equivalent.manifest.schema import load_manifest
+from equivalent.tests.fakes import write_program
 
 
 def _write(root, path, content):
@@ -30,6 +32,11 @@ def _seed(root):
     _write(root, "src/mod_kernel.f90", "subroutine step\nend subroutine\n")
     _write(root, "Makefile", "all:\n\techo build\n")
     return root
+
+
+def _manifest(tmp_path):
+    """The code's own description of which files count as source."""
+    return load_manifest(write_program(tmp_path) / "manifest.yaml")
 
 
 # The hash of that two-file baseline, taken while submit still read every
@@ -142,26 +149,40 @@ def test_an_all_text_baseline_hashes_exactly_as_it_did_before(tmp_path):
     assert tree_subject(tracked_files(repo_dir, "main")).sha256 == TEXT_BASELINE_TREE
 
 
-def test_fortran_files_are_handed_to_the_builder_as_text(tmp_path):
-    # The builder writes what it is sent straight into a .f90 file for the
-    # compiler, so that payload stays str even though the tree is bytes.
+def test_source_files_are_handed_to_the_builder_as_text(tmp_path):
+    # The builder writes what it is sent straight into a source file for
+    # the compiler, so that payload stays str even though the tree is
+    # bytes. Which files count is the code's own manifest.
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
 
-    files = fortran_files_at(repo_dir, "main")
+    files = source_files_at(repo_dir, "main", _manifest(tmp_path))
 
-    assert [f["path"] for f in files] == ["src/mod_kernel.f90"]
-    assert files[0]["content"] == "subroutine step\nend subroutine\n"
+    # The Makefile counts as source too: the builder is told how to build
+    # the tree by the tree itself.
+    assert [f["path"] for f in files] == ["Makefile", "src/mod_kernel.f90"]
+    assert files[1]["content"] == "subroutine step\nend subroutine\n"
 
 
-def test_a_fortran_file_that_is_not_utf8_is_an_error_naming_the_path(tmp_path):
+def test_a_file_the_manifest_does_not_call_source_is_not_sent(tmp_path):
+    seed = _seed(tmp_path / "seed")
+    _write(seed, "README.md", "how to build this\n")
+    repo_dir = tmp_path / "repo"
+    init_baseline_repo(repo_dir, seed)
+
+    files = source_files_at(repo_dir, "main", _manifest(tmp_path))
+
+    assert "README.md" not in [f["path"] for f in files]
+
+
+def test_a_source_file_that_is_not_utf8_is_an_error_naming_the_path(tmp_path):
     seed = _seed(tmp_path / "seed")
     _write(seed, "src/legacy.f90", LATIN1_BYTES)
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, seed)
 
     with pytest.raises(ValueError) as excinfo:
-        fortran_files_at(repo_dir, "main")
+        source_files_at(repo_dir, "main", _manifest(tmp_path))
 
     assert "src/legacy.f90" in str(excinfo.value)
 

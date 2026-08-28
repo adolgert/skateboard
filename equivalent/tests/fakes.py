@@ -1,14 +1,85 @@
-"""Fake builder/oracle clients for the component and dispatch tests.
+"""Stand-ins the component and dispatch tests build a gateway out of.
 
 Unlike check_sese.py (cheap, pure Python, safe to run for real in
 tests), the builder needs nvfortran/compute-sanitizer/a GPU and the
 oracle needs its baked capture data -- none of which exist in this
 development environment. These fakes match the real services' response
-shapes (demo/builder/app.py, demo/oracle/app.py) exactly, so the gateway
-dispatch code under test is exercised the same way it would be against
-the real thing; only what's inside the box differs.
+shapes (services/builder/app.py, services/oracle/app.py) exactly, so the
+gateway dispatch code under test is exercised the same way it would be
+against the real thing; only what's inside the box differs.
+
+`write_program` is not a fake: it writes a small but real code directory,
+laid out the way `programs/<code>/` is, so every test that needs a
+manifest gets one from the same place. A test that copied its own
+manifest would keep passing after the schema changed under it.
 """
 from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import yaml
+
+# A code small enough to read here, with every field the manifest schema
+# requires. The visible dataset holds one case, which is what the
+# dispatch tests replay.
+PROGRAM_MANIFEST = {
+    "version": 1,
+    "name": None,  # filled in with the code's own name
+    "source": {"root": "baseline", "patterns": ["**/*.f90", "Makefile"]},
+    "build": {
+        "makefile": "Makefile",
+        "targets": {
+            "replay": {"target": "replay", "executable": "replay"},
+            "timing": {"target": "timing", "executable": "tsunami"},
+        },
+    },
+    "interface": {
+        "module": "mod_kernel",
+        "entry": "step",
+        "inputs": [{"name": "h", "dtype": "f32", "rank": 1},
+                   {"name": "u", "dtype": "f32", "rank": 1}],
+        "outputs": [{"name": "h", "dtype": "f32", "rank": 1},
+                    {"name": "u", "dtype": "f32", "rank": 1}],
+    },
+    "datasets": {
+        "visible": {"args": ["100", "5000", "25", "0.02"]},
+        "holdout": {"args": ["100", "5000", "60", "0.01"]},
+    },
+    "timing": {"args": [], "outputs": [], "budget_s": 300},
+    "tolerances": "tolerances.json",
+    "properties": None,
+}
+
+VISIBLE_CASE = "case0000"
+
+
+def write_program(root, name: str = "tsunami") -> Path:
+    """Write `<root>/programs/<name>/` and return that code's directory.
+
+    The programs directory a deployment mounts is its parent, and the
+    manifest is `manifest.yaml` inside it -- so a caller needs no third
+    thing told to it.
+    """
+    directory = Path(root) / "programs" / name
+    (directory / "baseline" / "src").mkdir(parents=True, exist_ok=True)
+    (directory / "baseline" / "src" / "mod_kernel.f90").write_text(
+        "module mod_kernel\ncontains\nsubroutine step\nend subroutine\nend module\n"
+    )
+    (directory / "baseline" / "Makefile").write_text("replay:\n\techo build\n")
+    (directory / "tolerances.json").write_text(json.dumps({"variables": {}}))
+
+    visible = directory / "datasets" / "visible" / VISIBLE_CASE
+    visible.mkdir(parents=True, exist_ok=True)
+    (visible / "h_in.bin").write_bytes(b"\x00" * 16)
+    (visible / "u_in.bin").write_bytes(b"\x00" * 16)
+    (directory / "datasets" / "visible" / "cases.json").write_text(
+        json.dumps({"cases": [VISIBLE_CASE]})
+    )
+
+    manifest = {**PROGRAM_MANIFEST, "name": name}
+    (directory / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+    return directory
 
 
 class FakeBuilder:

@@ -5,6 +5,7 @@ from equivalent.cli.main import main
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
+from equivalent.tests.fakes import write_program
 
 
 def test_status_command_runs_end_to_end(tmp_path, capsys):
@@ -106,6 +107,7 @@ def test_status_with_a_configuration_file_shows_the_tree_the_gateway_shows(tmp_p
     (tmp_path / "working" / "notes" / "regions").mkdir(parents=True)
     (tmp_path / "working" / spec_path).write_text("region: ch04:step\n")
 
+    programs = write_program(tmp_path).parent
     config_path = tmp_path / "gateway.yaml"
     config_path.write_text(yaml.safe_dump({
         "version": 1,
@@ -113,10 +115,14 @@ def test_status_with_a_configuration_file_shows_the_tree_the_gateway_shows(tmp_p
             "repo": str(tmp_path / "repo"),
             "ledger_root": str(tmp_path / "ledger"),
             "working_copy": str(tmp_path / "working"),
+            "programs": str(programs),
             "strategies": str(strategies),
             "seed": str(seed),
         },
-        "regions": {"ch04:step": {"spec_path": spec_path, "strategy": "stdpar_managed"}},
+        "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
+        "regions": {"ch04:step": {
+            "code": "tsunami", "spec_path": spec_path, "strategy": "stdpar_managed",
+        }},
     }))
 
     config = load_gateway_config(config_path, seed_if_empty=True)
@@ -147,6 +153,7 @@ def test_session_command_runs_end_to_end(tmp_path, capsys):
     sessions = tmp_path / "sessions"
     sessions.mkdir()
 
+    programs = write_program(tmp_path).parent
     config_path = tmp_path / "gateway.yaml"
     config_path.write_text(yaml.safe_dump({
         "version": 1,
@@ -154,10 +161,13 @@ def test_session_command_runs_end_to_end(tmp_path, capsys):
             "repo": str(tmp_path / "repo"),
             "ledger_root": str(tmp_path / "ledger"),
             "working_copy": str(tmp_path / "working"),
+            "programs": str(programs),
             "strategies": str(strategies),
             "sessions": str(sessions),
         },
-        "regions": {"ch04:step": {"spec_path": "notes/regions/ch04-step.sese.yaml",
+        "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
+        "regions": {"ch04:step": {"code": "tsunami",
+                                  "spec_path": "notes/regions/ch04-step.sese.yaml",
                                   "strategy": "stdpar_managed"}},
     }))
 

@@ -6,10 +6,11 @@ repository root covers it along with everything else.
 """
 from pathlib import Path
 
-from deploy.seed import baseline_paths, write_seed
+from deploy.seed import baseline_dir, baseline_paths, write_seed
 from equivalent.ledger.subjects import tree_subject
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+CODE = "tsunami"
 
 # The baseline is these six files and nothing else. Naming them here is
 # the point of the test: the directory they are read from also holds
@@ -32,21 +33,27 @@ def _seeded_files(directory: Path) -> list[dict]:
     ]
 
 
+def test_the_baseline_directory_comes_from_the_codes_manifest():
+    # Not from a constant in the script: a second code is onboarded by
+    # writing its manifest, not by editing the deployment.
+    assert baseline_dir(REPO_ROOT, CODE) == f"programs/{CODE}/baseline"
+
+
 def test_the_seed_is_exactly_the_tracked_baseline_files(tmp_path):
-    written = write_seed(REPO_ROOT, tmp_path)
+    written = write_seed(REPO_ROOT, tmp_path, CODE)
 
     assert written == BASELINE
     assert sorted(f["path"] for f in _seeded_files(tmp_path)) == BASELINE
 
 
 def test_the_paths_it_reports_are_the_paths_it_writes(tmp_path):
-    assert baseline_paths(REPO_ROOT) == write_seed(REPO_ROOT, tmp_path)
+    assert baseline_paths(REPO_ROOT, CODE) == write_seed(REPO_ROOT, tmp_path, CODE)
 
 
 def test_two_seedings_produce_the_same_baseline_hash(tmp_path):
     first = tmp_path / "first"
     second = tmp_path / "second"
-    write_seed(REPO_ROOT, first)
-    write_seed(REPO_ROOT, second)
+    write_seed(REPO_ROOT, first, CODE)
+    write_seed(REPO_ROOT, second, CODE)
 
     assert tree_subject(_seeded_files(first)) == tree_subject(_seeded_files(second))

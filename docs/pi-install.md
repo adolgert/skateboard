@@ -77,7 +77,8 @@ oracle. `.env` is ignored by git.
     ./up.sh
 
 This creates the `state/` directories, writes the baseline seed (the six
-files git tracks under `demo/work`), copies the seed into the working
+files git tracks under the source tree the code's manifest names, which
+for tsunami is `programs/tsunami/baseline`), copies the seed into the working
 copy if the working copy is empty, builds the gateway, builder, and
 oracle images, starts them, and waits for the gateway to report healthy.
 It ends by printing the baseline commit, the ledger directory, and the
@@ -242,13 +243,21 @@ report that the binary is missing; running `build_replay` again rebuilds
 it. The gateway can be restarted freely; the repository and ledger are
 on the host.
 
-## Changing the region or the strategy
+## Changing the code, the region, or the strategy
 
-`deploy/gateway.yaml` names each region: its spec file path, its
-strategy, and its visible dataset. `equivalent/strategy/files/` holds
-the strategies (`stdpar_managed`, `omp_target`). A new region is a new
-entry in `gateway.yaml` and `EQUIVALENT_REGION` in `.env`; a new
-strategy is a new YAML file. Restart the gateway after editing
+`programs/` holds one directory per code: its `manifest.yaml`, the
+baseline sources, the datasets, the reference captures, the tolerance
+policy, and the region specs. `deploy/gateway.yaml` names each code in
+its `codes:` section and each region in its `regions:` section, where a
+region gives its code, its spec file path, its strategy, and its visible
+dataset. `equivalent/strategy/files/` holds the strategies
+(`stdpar_managed`, `omp_target`).
+
+A new region is a new entry in `gateway.yaml` and `EQUIVALENT_REGION` in
+`.env`; a new strategy is a new YAML file; a new code is a new directory
+under `programs/`, a new `codes:` entry, and `EQUIVALENT_CODE` in
+`.env`. Changing the code also means rebuilding the oracle image, which
+bakes in that code's captures. Restart the gateway after editing
 `gateway.yaml`, and re-run `up.sh` so the host copy is regenerated.
 
 ## When something is wrong

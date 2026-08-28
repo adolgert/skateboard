@@ -7,6 +7,8 @@ from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import init_baseline_repo
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
+from equivalent.manifest.schema import load_manifest
+from equivalent.tests.fakes import write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
@@ -31,6 +33,7 @@ def _region(tmp_path, region_id="ch04:step"):
         ledger_dir=tmp_path / "ledger",
         strategy_path=STRATEGY_PATH,
         working_copy_dir=working,
+        manifest=load_manifest(write_program(tmp_path) / "manifest.yaml"),
     )
     return cfg
 

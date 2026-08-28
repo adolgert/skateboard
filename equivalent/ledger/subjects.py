@@ -11,8 +11,13 @@ from dataclasses import dataclass
 
 # "policy" is the oracle's tolerance policy -- it appears in regression
 # claims' materials (a pass under a loose policy must be distinguishable
-# from a pass under a strict one), never as a claim's subject.
-SUBJECT_KINDS = ("tree", "frozen", "capture_set", "strategy", "binary", "outputs", "policy")
+# from a pass under a strict one), never as a claim's subject. "manifest"
+# is the code's own description, and appears in every claim's materials
+# for the same reason: a pass against one code must not read as a pass
+# against another.
+SUBJECT_KINDS = (
+    "tree", "frozen", "capture_set", "strategy", "manifest", "binary", "outputs", "policy",
+)
 
 
 @dataclass(frozen=True)
@@ -46,9 +51,9 @@ def hash_files(files: list[dict]) -> str:
     """sha256 over (path, content) pairs, sorted by normalized path.
 
     `files` is a list of {"path": str, "content": str|bytes}. This is the
-    same scheme demo/orchestrator/orchestrator.py's `src_sha` already uses
-    (sorted by path, path bytes then content bytes, no separator) so a hash
-    computed here reduces to the same value if truncated the same way.
+    same scheme the first demonstration harness's `src_sha` used (sorted by
+    path, path bytes then content bytes, no separator) so a hash computed
+    here reduces to the same value if truncated the same way.
     """
     h = hashlib.sha256()
     for f in sorted(files, key=lambda x: _normalize_path(x["path"])):
@@ -62,7 +67,7 @@ def hash_files(files: list[dict]) -> str:
 def hash_bytes(data: bytes) -> str:
     """sha256 over a single blob (a strategy file, a binary, ...).
 
-    Matches demo/oracle/app.py's POLICY_SHA scheme: plain sha256 of the raw
+    Matches services/oracle/app.py's POLICY_SHA scheme: plain sha256 of the raw
     file bytes, nothing else mixed in.
     """
     return hashlib.sha256(data).hexdigest()

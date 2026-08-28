@@ -10,7 +10,7 @@ them through the builder itself, and compares -- the agent has no action
 that would let it see a held-out input or a held-out output on its own,
 and this component never puts either into a claim's detail. The oracle
 itself also never returns held-out per-case detail to anyone, by its own
-design (demo/oracle/app.py) -- this is defense in depth on top of that,
+design (services/oracle/app.py) -- this is defense in depth on top of that,
 not the only thing enforcing it.
 """
 from __future__ import annotations

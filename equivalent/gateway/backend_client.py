@@ -1,5 +1,5 @@
 """Thin clients for the builder and oracle services, matching their real
-HTTP contracts (demo/builder/app.py, demo/oracle/app.py) exactly.
+HTTP contracts (services/builder/app.py, services/oracle/app.py) exactly.
 
 Trust role: none -- these carry bytes between the gateway and two
 services that are themselves trusted for what they measure (builder) or

@@ -7,7 +7,7 @@ CPU-only build would count as having run on the GPU.
 The visible outputs are stored in this claim's own detail -- regression_visible
 reads them back from here rather than re-running the replay binary a
 second time for the same cases, matching what
-demo/orchestrator/orchestrator.py already does (it reuses the same
+the first demonstration harness already did (it reused the same
 in-memory `runr["outputs"]`).
 """
 from __future__ import annotations

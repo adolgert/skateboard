@@ -5,7 +5,7 @@ capture-replay oracle says PASS, *how much should we believe it?* Coverage metri
 usual answer, and the plain ones (line, branch) are the weakest members of a family that
 runs from "did the code execute" all the way to "would a fault have been observed." This
 surveys that family, says what is actually implementable for Fortran 2008 today, and
-reports a measurement run against `demo/`.
+reports a measurement run against the tsunami kernel in `programs/tsunami`.
 
 Section 4 is the measurement. It is the part specific to this repository; sections 1-3 and
 5-11 are the survey.
@@ -152,20 +152,22 @@ enough that (1) plus brute force is sufficient.
 
 ---
 
-## 4. Measurement: mutation testing the `demo/` oracle
+## 4. Measurement: mutation testing the tsunami oracle
 
 I ran a real campaign against this repository rather than describing one. The harness is
 committed as [`tools/fmutate`](../tools/fmutate/README.md):
 
 ```bash
-python3 tools/fmutate/fmutate.py tools/fmutate/targets/demo.json --checked
+python3 tools/fmutate/fmutate.py tools/fmutate/targets/tsunami.json --checked
 ```
 
-**Setup.** Mutants generated over `demo/work/src/mod_kernel.f90` and `mod_diff.f90` using
+**Setup.** Mutants generated over `programs/tsunami/baseline/src/mod_kernel.f90` and
+`mod_diff.f90` using
 six operators — arithmetic (AOR), relational (ROR), logical (LCR), constant (CRP), **array
 section bound (SBR)**, and statement deletion (SDL). Each mutant: rebuild
-`capture/replay.f90` against the mutated module, replay the 5 visible cases, and compare to
-`oracle/captures/visible` using the real `oracle/compare.py` and `tolerances.json`, scored
+the replay driver against the mutated module, replay the 5 visible cases, and compare to
+`programs/tsunami/captures/visible` using the real `services/oracle/compare.py` and
+`programs/tsunami/tolerances.json`, scored
 both under the tolerance policy and under bitwise equality. Mutants on lines a coverage
 prepass shows are never executed are not built at all.
 
@@ -466,7 +468,7 @@ is the canonical case study; [Yan et al. 2025](https://onlinelibrary.wiley.com/d
 is the current state for elliptic PDE solvers; [hierarchical MRs](https://homepages.uc.edu/~niunn/papers/SE4Science18.pdf)
 organizes them.
 
-For `demo/`'s shallow-water kernel the relations are immediate and cheap:
+For the tsunami shallow-water kernel the relations are immediate and cheap:
 
 - **Translation invariance.** Periodic BCs + uniform grid ⇒ circularly shifting `h,u` must
   circularly shift the output identically. *This kills every mutant in §4.3* — a broken

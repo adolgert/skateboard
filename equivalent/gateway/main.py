@@ -102,6 +102,7 @@ def build_app_from_env(env=None, *, builder=None, oracle=None) -> FastAPI:
 
     config = load_gateway_config(config_path, seed_if_empty=True)
     print(f"gateway: baseline commit {config.baseline_commit} in {config.paths.repo}", flush=True)
+    print(f"gateway: codes {sorted(config.codes)}", flush=True)
     print(f"gateway: regions {sorted(config.regions)}", flush=True)
 
     backend_token = env.get(BACKEND_TOKEN_VAR) or token

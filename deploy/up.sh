@@ -21,6 +21,7 @@ EQUIVALENT_UID="$(id -u)"
 EQUIVALENT_GID="$(id -g)"
 export EQUIVALENT_UID EQUIVALENT_GID
 
+code="${EQUIVALENT_CODE:-tsunami}"
 region="${EQUIVALENT_REGION:-ch04:step}"
 # A region id spelled as a directory name: the gateway files each region's
 # ledger under its id with the colon replaced by a dash.
@@ -29,7 +30,7 @@ region_dir="${region//:/-}"
 mkdir -p state/repo state/ledger state/working state/sessions state/seed state/pi-home/agent
 
 echo "== baseline seed =="
-python3 "${here}/seed.py" state/seed
+python3 "${here}/seed.py" --code "${code}" state/seed
 
 # The agent's working copy starts as the baseline. Only when it is empty: a
 # working copy with anything in it is the person's session in progress.
@@ -74,7 +75,7 @@ python3 "${here}/hostconfig.py" "${here}/gateway.yaml" state/gateway.host.yaml \
     --mount "/ledger=${here}/state/ledger" \
     --mount "/working=${here}/state/working" \
     --mount "/seed=${here}/state/seed" \
-    --mount "/datasets=${repo_root}/demo/orchestrator/datasets" \
+    --mount "/programs=${repo_root}/programs" \
     --mount "/strategies=${repo_root}/equivalent/strategy/files" \
     --sessions "${here}/state/sessions" >/dev/null
 

@@ -288,13 +288,14 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 return _claims_response(existing)
 
         def record(predicate_type: str, subject: Subject, tool: str, result: dict, materials=()):
-            # Every claim names the strategy in its materials, so no call
-            # site lists it (or can forget it). `strategy` is loaded
-            # below, before any dispatch branch calls this.
+            # Every claim names the strategy and the code's manifest in
+            # its materials, so no call site lists them (or can forget
+            # them). `strategy` is loaded below, before any dispatch
+            # branch calls this; the manifest came with the region.
             return store.record_claim(
                 [subject], predicate_type,
                 Predicate(tool=tool, version="0.1", configHash=cfg_hash, verdict=result["verdict"], detail=result["detail"]),
-                (strategy.as_subject(), *materials), x_session_id,
+                (strategy.as_subject(), cfg.manifest.as_subject(), *materials), x_session_id,
             )
 
         try:
@@ -323,7 +324,9 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             if req.action == "build_replay":
                 if builder is None:
                     raise ComponentError("builder not configured")
-                result = build_replay.check(cfg.repo_dir, ref, cfg.region_id, tree_sha, strategy, builder)
+                result = build_replay.check(
+                    cfg.repo_dir, ref, cfg.region_id, tree_sha, strategy, cfg.manifest, builder,
+                )
                 claim = record("build/replay", subjects_by_kind["tree"], "builder", result)
                 log("claim", claim_id=claim.id)
                 return _claim_response(claim)
@@ -383,7 +386,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                     raise ComponentError("builder not configured")
                 base_tree = baseline_tree_sha(cfg.repo_dir)
                 result = timing.check_baseline(
-                    cfg.repo_dir, cfg.region_id, base_tree, builder,
+                    cfg.repo_dir, cfg.region_id, base_tree, cfg.manifest, builder,
                     repeats=int(req.config.get("repeats", 5)),
                 )
                 claim = record("timing/baseline", Subject(kind="tree", sha256=base_tree), "builder", result)

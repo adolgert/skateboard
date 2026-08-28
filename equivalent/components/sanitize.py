@@ -2,7 +2,7 @@
 
 One builder call produces one verdict per tool named in the strategy's
 `sanitizers` list (memcheck, racecheck, initcheck), matching
-demo/orchestrator/orchestrator.py's single call -> three ledger columns.
+one call to the builder -> three ledger claims.
 Unlike every other component here, this one returns several verdicts, not
 one -- equivalent.gateway.app records one claim per tool from a single
 dispatch, atomically, so a duplicate check against any single one of them

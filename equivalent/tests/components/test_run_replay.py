@@ -5,7 +5,7 @@ import pytest
 # kernel_launches comes straight from the file the builder image runs, so
 # this test fails if the two drift apart. It reads a string and needs no
 # GPU, no compiler, and no container.
-from demo.builder.stages import kernel_launches
+from services.builder.stages import kernel_launches
 from equivalent.components import run_replay
 from equivalent.components.errors import ComponentError
 from equivalent.strategy.schema import load_strategy

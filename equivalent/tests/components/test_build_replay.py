@@ -5,10 +5,16 @@ import pytest
 from equivalent.components import build_replay
 from equivalent.components.errors import ComponentError
 from equivalent.gateway.submit import init_baseline_repo
+from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
-from equivalent.tests.fakes import FakeBuilder
+from equivalent.tests.fakes import FakeBuilder, write_program
 
 STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
+
+
+def _manifest(tmp_path):
+    """The code's own description of which files count as source."""
+    return load_manifest(write_program(tmp_path) / "manifest.yaml")
 
 
 def _repo(tmp_path, files):
@@ -21,7 +27,7 @@ def _repo(tmp_path, files):
     return repo_dir
 
 
-def test_pass_sends_every_fortran_file_in_the_tree(tmp_path):
+def test_pass_sends_every_file_the_manifest_calls_source(tmp_path):
     repo_dir = _repo(tmp_path, {
         "mod_params.f90": "module mod_params\nend module\n",
         "mod_diff.f90": "module mod_diff\nend module\n",
@@ -30,7 +36,9 @@ def test_pass_sends_every_fortran_file_in_the_tree(tmp_path):
     strategy = load_strategy(STRATEGY_PATH)
     builder = FakeBuilder()
 
-    result = build_replay.check(repo_dir, "main", "ch04:step", "tree123", strategy, builder)
+    result = build_replay.check(
+        repo_dir, "main", "ch04:step", "tree123", strategy, _manifest(tmp_path), builder,
+    )
 
     assert result["verdict"] == "pass"
     sent_paths = {f["path"] for f in builder.build_calls[0]["files"]}
@@ -46,7 +54,9 @@ def test_the_strategy_files_flags_reach_the_builder_and_the_claim_detail(tmp_pat
     strategy = load_strategy(STRATEGY_PATH)
     builder = FakeBuilder()
 
-    result = build_replay.check(repo_dir, "main", "ch04:step", "tree123", strategy, builder)
+    result = build_replay.check(
+        repo_dir, "main", "ch04:step", "tree123", strategy, _manifest(tmp_path), builder,
+    )
 
     expected = list(strategy.languages["fortran"].flags)
     assert builder.build_calls[0]["flags"] == expected
@@ -60,16 +70,20 @@ def test_fail_when_the_builder_reports_a_compile_error(tmp_path):
     builder = FakeBuilder()
     builder.build_ok = False
 
-    result = build_replay.check(repo_dir, "main", "ch04:step", "tree123", strategy, builder)
+    result = build_replay.check(
+        repo_dir, "main", "ch04:step", "tree123", strategy, _manifest(tmp_path), builder,
+    )
 
     assert result["verdict"] == "fail"
     assert "log_tail" in result["detail"]
 
 
-def test_raises_component_error_with_no_fortran_files(tmp_path):
+def test_raises_component_error_when_the_tree_holds_no_source(tmp_path):
     repo_dir = _repo(tmp_path, {"README.md": "hello\n"})
     strategy = load_strategy(STRATEGY_PATH)
     builder = FakeBuilder()
 
     with pytest.raises(ComponentError):
-        build_replay.check(repo_dir, "main", "ch04:step", "tree123", strategy, builder)
+        build_replay.check(
+            repo_dir, "main", "ch04:step", "tree123", strategy, _manifest(tmp_path), builder,
+        )

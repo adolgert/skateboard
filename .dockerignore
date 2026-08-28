@@ -17,6 +17,11 @@ experiments
 ftgdata
 notes
 
+# Build products left in a code's tree by a hand compile. The images build
+# from the tracked sources, never from whatever is on this machine.
+programs/*/baseline/tsunami
+programs/*/harness/.build
+
 deploy/state
 deploy/.env
 

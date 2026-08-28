@@ -11,13 +11,13 @@ STRATEGY_FILES = {
     "omp_target": FILES_DIR / "omp_target.yaml",
 }
 
-# The exact flags demo/builder/stages.py's PROFILES pass to nvfortran today.
+# The exact flags services/builder/stages.py's PROFILES pass to nvfortran today.
 DEMO_FLAGS = {
     "stdpar_managed": ("-O2", "-stdpar=gpu", "-gpu=cc89,mem:managed", "-Minfo=accel"),
     "omp_target": ("-O2", "-mp=gpu", "-gpu=cc89,mem:managed", "-Minfo=accel"),
 }
 
-# demo/builder/stages.py's per-profile "notify" value and OMP_TARGET_OFFLOAD use.
+# services/builder/stages.py's per-profile "notify" value and OMP_TARGET_OFFLOAD use.
 DEMO_DEVICE_PROOF = {
     "stdpar_managed": {"notify": "acc", "mandatory": False},
     "omp_target": {"notify": "omp", "mandatory": True},

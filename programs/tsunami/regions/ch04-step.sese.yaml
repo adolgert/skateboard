@@ -1,0 +1,15 @@
+# The region a porting session works on: the `step` subroutine, one time
+# step of the 1-D shallow water equations.
+#
+# This file is the reference copy. A session's working copy gets it laid
+# down at the path the gateway's configuration names, and the analyzer
+# reads it from the submitted tree -- so the line range below must match
+# the baseline kernel, not whatever the working copy has been edited to.
+#
+# pst_node's range is inclusive: line 34 is `subroutine step(h, u)` and
+# line 43 is `end subroutine step` in the baseline src/mod_kernel.f90.
+region: ch04:step
+anchor:
+  file: src/mod_kernel.f90
+  pst_node: "step@34-43"
+  entry_symbol: step

@@ -7,11 +7,15 @@ paths:
   repo: /repo                 # the gateway's own git clone (baseline + region branches)
   ledger_root: /ledger        # ledger_root/<baseline-commit>/<region-id>/ per region
   working_copy: /working      # read-only mount of the agent's working copy
-  datasets_root: /datasets    # visible inputs, per region below
+  programs: /programs         # one directory per code: manifest, baseline, datasets
   strategies: /strategies     # directory holding the strategy YAML files
   seed: /seed                 # baseline files, used only if repo is not yet initialized
+codes:
+  tsunami:
+    manifest: tsunami/manifest.yaml   # relative to <programs>, so the host's copy resolves too
 regions:
   "ch04:step":
+    code: tsunami                   # -> the codes entry above
     spec_path: notes/regions/ch04-step.sese.yaml
     strategy: stdpar_managed        # -> <strategies>/stdpar_managed.yaml
-    visible_dataset: visible        # -> <datasets_root>/visible ; optional
+    visible_dataset: visible        # -> <programs>/tsunami/datasets/visible ; optional

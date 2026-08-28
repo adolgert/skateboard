@@ -1,35 +1,45 @@
 """The gateway's configuration file: one YAML naming every path and region.
 
 Trust role: this decides which repository, which ledger, which working
-copy, and which strategy each region is checked against. A wrong entry
-here does not make a check lie, but it makes every claim describe
-something other than what the person thinks they are reviewing. So the
-file is read strictly: an unknown key, a missing field, or a strategy
+copy, which code, and which strategy each region is checked against. A
+wrong entry here does not make a check lie, but it makes every claim
+describe something other than what the person thinks they are
+reviewing. So the file is read strictly: an unknown key, a missing
+field, a region naming a code the file does not describe, or a strategy
 file that is not on disk stops the gateway at startup rather than
 surfacing as a puzzling failure on the first request.
 
-The file has two sections::
+The file has three sections::
 
     version: 1
     paths:
       repo: /repo
       ledger_root: /ledger
       working_copy: /working
-      datasets_root: /datasets
+      programs: /programs
       strategies: /strategies
       seed: /seed
       sessions: /sessions
+    codes:
+      tsunami:
+        manifest: tsunami/manifest.yaml
     regions:
       "ch04:step":
+        code: tsunami
         spec_path: notes/regions/ch04-step.sese.yaml
         strategy: stdpar_managed
         visible_dataset: visible
 
-Each region's directories are built by joining the two: the ledger lives
-at `<ledger_root>/<baseline commit>/<region id with ':' replaced by
-'-'>`, the strategy at `<strategies>/<strategy>.yaml`, and the visible
-dataset at `<datasets_root>/<visible_dataset>`. Nothing spells those
+Each region's directories are built by joining them: the ledger lives at
+`<ledger_root>/<baseline commit>/<region id with ':' replaced by '-'>`,
+the strategy at `<strategies>/<strategy>.yaml`, a code's manifest at
+`<programs>/<manifest>`, and the visible dataset at
+`<programs>/<code>/datasets/<visible_dataset>`. Nothing spells those
 layouts a second time.
+
+A code's manifest path is relative to `programs` rather than absolute so
+that the same file describes the deployment seen from inside the
+container and from the host, where only the `paths` values differ.
 
 `sessions` is the odd one out: it names where the agent's own session
 transcripts are written, which nothing in the gateway ever reads. It is
@@ -46,14 +56,19 @@ import yaml
 
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import baseline_commit, init_baseline_repo, region_slug
+from equivalent.manifest.schema import Manifest, load_manifest
 
 VERSION = 1
 
-TOP_LEVEL_KEYS = ("version", "paths", "regions")
-REQUIRED_PATH_KEYS = ("repo", "ledger_root", "working_copy", "strategies")
-OPTIONAL_PATH_KEYS = ("datasets_root", "seed", "sessions")
-REQUIRED_REGION_KEYS = ("spec_path", "strategy")
+TOP_LEVEL_KEYS = ("version", "paths", "codes", "regions")
+REQUIRED_PATH_KEYS = ("repo", "ledger_root", "working_copy", "programs", "strategies")
+OPTIONAL_PATH_KEYS = ("seed", "sessions")
+REQUIRED_CODE_KEYS = ("manifest",)
+REQUIRED_REGION_KEYS = ("code", "spec_path", "strategy")
 OPTIONAL_REGION_KEYS = ("visible_dataset",)
+# Where a code keeps the datasets a region may name, under its own
+# directory. One spelling, so the deployment and this reader agree.
+DATASETS_DIR = "datasets"
 
 
 @dataclass(frozen=True)
@@ -63,8 +78,8 @@ class Paths:
     repo: Path
     ledger_root: Path
     working_copy: Path
+    programs: Path
     strategies: Path
-    datasets_root: Path | None = None
     seed: Path | None = None
     # Where the agent's own session transcripts are written. The gateway
     # never reads this -- it is here so the reading tools find the
@@ -76,9 +91,19 @@ class Paths:
 
 
 @dataclass(frozen=True)
+class CodeConfig:
+    """One code the deployment holds, and the manifest describing it."""
+
+    name: str
+    manifest_path: Path
+    manifest: Manifest
+
+
+@dataclass(frozen=True)
 class GatewayConfig:
     paths: Paths
     baseline_commit: str
+    codes: dict[str, CodeConfig]
     regions: dict[str, RegionConfig]
 
 
@@ -123,11 +148,29 @@ def _resolve_baseline_commit(paths: Paths, where: str, seed_if_empty: bool) -> s
     return commit
 
 
+def _load_code(name: str, raw: dict, paths: Paths, where: str) -> CodeConfig:
+    code_where = f"{where} code '{name}'"
+    _check_keys(raw, REQUIRED_CODE_KEYS, (), code_where)
+    manifest_path = paths.programs / raw["manifest"]
+    if not manifest_path.is_file():
+        raise ValueError(
+            f"{code_where} names manifest '{raw['manifest']}', but {manifest_path} does not exist"
+        )
+    return CodeConfig(name=name, manifest_path=manifest_path, manifest=load_manifest(manifest_path))
+
+
 def _load_region(
-    region_id: str, raw: dict, paths: Paths, commit: str, where: str
+    region_id: str, raw: dict, paths: Paths, codes: dict, commit: str, where: str
 ) -> RegionConfig:
     region_where = f"{where} region '{region_id}'"
     _check_keys(raw, REQUIRED_REGION_KEYS, OPTIONAL_REGION_KEYS, region_where)
+
+    code = codes.get(raw["code"])
+    if code is None:
+        raise ValueError(
+            f"{region_where} names code '{raw['code']}', which the codes section does "
+            f"not describe; it has {sorted(codes)}"
+        )
 
     strategy_path = paths.strategies / f"{raw['strategy']}.yaml"
     if not strategy_path.is_file():
@@ -137,12 +180,7 @@ def _load_region(
 
     visible_dataset_dir = None
     if raw.get("visible_dataset") is not None:
-        if paths.datasets_root is None:
-            raise ValueError(
-                f"{region_where} names visible_dataset '{raw['visible_dataset']}', but "
-                f"paths has no datasets_root to look it up in"
-            )
-        visible_dataset_dir = paths.datasets_root / raw["visible_dataset"]
+        visible_dataset_dir = paths.programs / code.name / DATASETS_DIR / raw["visible_dataset"]
         if not visible_dataset_dir.is_dir():
             raise ValueError(
                 f"{region_where} names visible_dataset '{raw['visible_dataset']}', but "
@@ -156,6 +194,7 @@ def _load_region(
         ledger_dir=paths.ledger_root / commit / region_slug(region_id),
         strategy_path=strategy_path,
         working_copy_dir=paths.working_copy,
+        manifest=code.manifest,
         visible_dataset_dir=visible_dataset_dir,
     )
 
@@ -184,11 +223,17 @@ def load_gateway_config(path, *, seed_if_empty: bool = False) -> GatewayConfig:
         raise ValueError(f"{where}: working_copy {paths.working_copy} is not a directory")
     if not paths.strategies.is_dir():
         raise ValueError(f"{where}: strategies {paths.strategies} is not a directory")
+    if not paths.programs.is_dir():
+        raise ValueError(f"{where}: programs {paths.programs} is not a directory")
 
     commit = _resolve_baseline_commit(paths, where, seed_if_empty)
 
+    codes = {
+        name: _load_code(name, code_raw, paths, where)
+        for name, code_raw in raw["codes"].items()
+    }
     regions = {
-        region_id: _load_region(region_id, region_raw, paths, commit, where)
+        region_id: _load_region(region_id, region_raw, paths, codes, commit, where)
         for region_id, region_raw in raw["regions"].items()
     }
-    return GatewayConfig(paths=paths, baseline_commit=commit, regions=regions)
+    return GatewayConfig(paths=paths, baseline_commit=commit, codes=codes, regions=regions)

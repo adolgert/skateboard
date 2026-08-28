@@ -12,8 +12,9 @@ from equivalent.gateway.app import create_app
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import init_baseline_repo
 from equivalent.ledger.store import LedgerStore
+from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
-from equivalent.tests.fakes import FakeBuilder, FakeOracle
+from equivalent.tests.fakes import FakeBuilder, FakeOracle, write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
@@ -39,15 +40,6 @@ SPEC = (
 )
 
 
-def _visible_dataset(tmp_path):
-    d = tmp_path / "visible"
-    (d / "case0000").mkdir(parents=True)
-    (d / "cases.json").write_text(json.dumps({"cases": ["case0000"]}))
-    (d / "case0000" / "h_in.bin").write_bytes(b"\x00" * 16)
-    (d / "case0000" / "u_in.bin").write_bytes(b"\x00" * 16)
-    return d
-
-
 def _client(tmp_path):
     seed = tmp_path / "seed"
     (seed / "src").mkdir(parents=True)
@@ -59,10 +51,13 @@ def _client(tmp_path):
     init_baseline_repo(repo_dir, seed)
     working = tmp_path / "working"
     working.mkdir()
+    program = write_program(tmp_path)
     cfg = RegionConfig(
         region_id="ch04:step", repo_dir=repo_dir, spec_path=SPEC_PATH,
         ledger_dir=tmp_path / "ledger", strategy_path=STRATEGY_PATH,
-        working_copy_dir=working, visible_dataset_dir=_visible_dataset(tmp_path),
+        working_copy_dir=working,
+        manifest=load_manifest(program / "manifest.yaml"),
+        visible_dataset_dir=program / "datasets" / "visible",
     )
     builder, oracle = FakeBuilder(), FakeOracle()
     client = TestClient(create_app({cfg.region_id: cfg}, TOKEN, builder=builder, oracle=oracle))
@@ -101,12 +96,16 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
     assert len(builder.run_calls) == 2
     assert len(oracle.compare_calls) == 2
 
-    # Every claim, whatever the action, names the strategy in its
-    # materials.
+    # Every claim, whatever the action, names the strategy and the code's
+    # own manifest in its materials: a pass under one description of the
+    # code must not read as a pass under another.
     strategy = load_strategy(STRATEGY_PATH)
     for claim in store.all_claims():
         assert any(
             m.kind == "strategy" and m.sha256 == strategy.sha256 for m in claim.materials
+        ), claim.predicateType
+        assert any(
+            m.kind == "manifest" and m.sha256 == cfg.manifest.sha256 for m in claim.materials
         ), claim.predicateType
 
     # Regression claims carry the tolerance policy as a formal material,

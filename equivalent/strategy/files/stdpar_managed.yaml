@@ -15,7 +15,7 @@ allow_globs:
 languages:
   fortran:
     compiler: nvfortran
-    # Exactly what demo/builder/stages.py PROFILES["stdpar_managed"] passes to
+    # Exactly what services/builder/stages.py PROFILES["stdpar_managed"] passes to
     # nvfortran today, including mem:managed.
     flags:
       - "-O2"

@@ -1,6 +1,6 @@
 # Builder: NVIDIA HPC SDK (nvfortran + compute-sanitizer + nsys) plus a thin HTTP
-# shim. Build context is the demo/ directory so we can copy the trusted capture
-# harness in alongside the service code.
+# shim. Build context is the repository root, so the trusted replay harness that
+# lives beside the service code is copied in with it.
 FROM nvcr.io/nvidia/nvhpc:25.9-devel-cuda13.0-ubuntu24.04
 
 # nvfortran / compute-sanitizer / nsys are already on PATH in this image.
@@ -14,9 +14,9 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 RUN mkdir -p /opt/harness /work
 
 # Trusted, baked replay harness -- NOT from the agent's payload.
-COPY capture/mod_capture.f90 capture/replay.f90 /opt/harness/
+COPY services/builder/harness/mod_capture.f90 services/builder/harness/replay.f90 /opt/harness/
 # Service code (all gate command lines live in stages.py).
-COPY builder/app.py builder/stages.py /app/
+COPY services/builder/app.py services/builder/stages.py /app/
 
 WORKDIR /app
 EXPOSE 9090

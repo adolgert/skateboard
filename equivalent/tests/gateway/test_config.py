@@ -4,12 +4,15 @@ import yaml
 
 from equivalent.gateway.config import load_gateway_config
 from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tests.fakes import write_program
 
 CONFIG = {
     "version": 1,
     "paths": {},
+    "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
     "regions": {
         "ch04:step": {
+            "code": "tsunami",
             "spec_path": "notes/regions/ch04-step.sese.yaml",
             "strategy": "stdpar_managed",
             "visible_dataset": "visible",
@@ -30,13 +33,13 @@ def _tree(tmp_path, config: dict):
     strategies.mkdir()
     (strategies / "stdpar_managed.yaml").write_text("name: stdpar_managed\n")
     (tmp_path / "working").mkdir()
-    (tmp_path / "datasets" / "visible").mkdir(parents=True)
+    programs = write_program(tmp_path).parent
 
     config = {**config, "paths": {
         "repo": str(repo),
         "ledger_root": str(tmp_path / "ledger"),
         "working_copy": str(tmp_path / "working"),
-        "datasets_root": str(tmp_path / "datasets"),
+        "programs": str(programs),
         "strategies": str(strategies),
         "seed": str(seed),
         **config["paths"],
@@ -57,17 +60,60 @@ def test_one_region_becomes_one_region_config_with_every_path_joined(tmp_path):
     assert cfg.spec_path == "notes/regions/ch04-step.sese.yaml"
     assert cfg.strategy_path == tmp_path / "strategies" / "stdpar_managed.yaml"
     assert cfg.working_copy_dir == tmp_path / "working"
-    assert cfg.visible_dataset_dir == tmp_path / "datasets" / "visible"
+    # The dataset lives under the code that owns it, not in a directory
+    # shared by every code the deployment holds.
+    assert cfg.visible_dataset_dir == tmp_path / "programs" / "tsunami" / "datasets" / "visible"
     # The ledger sits under the baseline commit, then the region id with
     # the colon replaced -- so two baselines never share a ledger.
     assert cfg.ledger_dir == tmp_path / "ledger" / baseline / "ch04-step"
     assert config.baseline_commit == baseline
 
 
+def test_the_codes_section_loads_each_manifest_and_the_region_carries_its_own(tmp_path):
+    path, _ = _tree(tmp_path, CONFIG)
+
+    config = load_gateway_config(path)
+
+    assert list(config.codes) == ["tsunami"]
+    code = config.codes["tsunami"]
+    assert code.manifest_path == tmp_path / "programs" / "tsunami" / "manifest.yaml"
+    assert code.manifest.name == "tsunami"
+    # The region does not look its code up again later: it carries the
+    # same loaded manifest, so every claim it files names one file.
+    assert config.regions["ch04:step"].manifest is code.manifest
+
+
+def test_a_region_naming_a_code_the_file_does_not_describe_names_it(tmp_path):
+    config = {**CONFIG, "regions": {
+        "ch04:step": {**CONFIG["regions"]["ch04:step"], "code": "coarseair"},
+    }}
+    path, _ = _tree(tmp_path, config)
+
+    with pytest.raises(ValueError) as excinfo:
+        load_gateway_config(path)
+
+    assert "coarseair" in str(excinfo.value)
+    assert "ch04:step" in str(excinfo.value)
+
+
+def test_a_code_whose_manifest_is_not_there_fails_at_startup(tmp_path):
+    config = {**CONFIG, "codes": {"tsunami": {"manifest": "tsunami/no-such-manifest.yaml"}}}
+    path, _ = _tree(tmp_path, config)
+
+    with pytest.raises(ValueError) as excinfo:
+        load_gateway_config(path)
+
+    assert "no-such-manifest.yaml" in str(excinfo.value)
+
+
 def test_two_regions_become_two_region_configs(tmp_path):
     config = {**CONFIG, "regions": {
         **CONFIG["regions"],
-        "ch04:diff": {"spec_path": "notes/regions/ch04-diff.sese.yaml", "strategy": "stdpar_managed"},
+        "ch04:diff": {
+            "code": "tsunami",
+            "spec_path": "notes/regions/ch04-diff.sese.yaml",
+            "strategy": "stdpar_managed",
+        },
     }}
     path, baseline = _tree(tmp_path, config)
 
@@ -80,7 +126,9 @@ def test_two_regions_become_two_region_configs(tmp_path):
 
 
 def test_a_region_missing_a_required_field_names_the_field_and_the_region(tmp_path):
-    config = {**CONFIG, "regions": {"ch04:step": {"spec_path": "notes/regions/ch04-step.sese.yaml"}}}
+    config = {**CONFIG, "regions": {"ch04:step": {
+        "code": "tsunami", "spec_path": "notes/regions/ch04-step.sese.yaml",
+    }}}
     path, _ = _tree(tmp_path, config)
 
     with pytest.raises(ValueError) as excinfo:

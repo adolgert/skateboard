@@ -8,9 +8,15 @@ from equivalent.gateway.submit import init_baseline_repo
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
-from equivalent.tests.fakes import FakeBuilder
+from equivalent.manifest.schema import load_manifest
+from equivalent.tests.fakes import FakeBuilder, write_program
 
 TREE = Subject(kind="tree", sha256="1" * 64)
+
+
+def _manifest(tmp_path):
+    """The code's own description of which files count as source."""
+    return load_manifest(write_program(tmp_path) / "manifest.yaml")
 
 
 def _store_with_build_claim(tmp_path, flags=("-O2", "-stdpar=gpu")):
@@ -63,7 +69,9 @@ def test_baseline_builds_the_pristine_tree_under_the_fixed_cpu_profile_then_time
     init_baseline_repo(repo_dir, tmp_path / "seed")
     builder = FakeBuilder()
 
-    result = timing.check_baseline(repo_dir, "ch04:step", "basetree123", builder)
+    result = timing.check_baseline(
+        repo_dir, "ch04:step", "basetree123", _manifest(tmp_path), builder,
+    )
 
     assert result["verdict"] == "pass"
     assert builder.build_calls[0]["profile"] == "cpu_best"
@@ -79,7 +87,9 @@ def test_baseline_fail_when_the_baseline_itself_does_not_build(tmp_path):
     builder = FakeBuilder()
     builder.build_ok = False
 
-    result = timing.check_baseline(repo_dir, "ch04:step", "basetree123", builder)
+    result = timing.check_baseline(
+        repo_dir, "ch04:step", "basetree123", _manifest(tmp_path), builder,
+    )
 
     assert result["verdict"] == "fail"
     assert builder.time_calls == []

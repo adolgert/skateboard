@@ -27,6 +27,7 @@ from pathlib import Path
 
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import frozen_subject, tree_subject
+from equivalent.manifest.schema import source_files
 
 
 @dataclass(frozen=True)
@@ -69,9 +70,8 @@ def _rev_parse(repo_dir, ref) -> str | None:
 def init_baseline_repo(repo_dir, seed_dir) -> str:
     """Copy `seed_dir` into a fresh git repo at `repo_dir` and commit it once.
 
-    Mirrors what demo/orchestrator/orchestrator.py's init_repo() already
-    does with demo/work/: the baseline is a plain folder of files, git-init
-    once. Returns the baseline commit id.
+    The baseline is a plain folder of files, git-init once. Returns the
+    baseline commit id.
     """
     repo_dir = Path(repo_dir)
     repo_dir.mkdir(parents=True, exist_ok=True)
@@ -249,7 +249,7 @@ def materialize_tree(repo_dir, ref: str, dest_dir) -> None:
 def attempt_id_for(region_id: str, tree_sha: str) -> str:
     """A stable workspace key the builder can reuse across build/run/sanitize/time.
 
-    demo/builder/stages.py keeps a workspace on disk per attempt_id and
+    services/builder/stages.py keeps a workspace on disk per attempt_id and
     never checks a tree hash itself; deriving the id from (region, tree)
     means every action against the same tree reuses the same workspace
     without the gateway needing to remember anything extra. This follows
@@ -261,33 +261,31 @@ def attempt_id_for(region_id: str, tree_sha: str) -> str:
     return f"{safe_region}-{tree_sha[:16]}"
 
 
-def fortran_files_at(repo_dir, ref: str) -> list[dict]:
-    """Every .f90/.F90 file tracked at `ref`, sorted by path, with `content` as str.
+def source_files_at(repo_dir, ref: str, manifest) -> list[dict]:
+    """Every file the code counts as source at `ref`, sorted by path, `content` as str.
 
-    Sent as-is to the builder: demo/builder/stages.py picks its own fixed
-    basenames out of whatever it's given and compiles them in its own
-    fixed order, so neither the set's precision nor its order matters here
-    -- only that everything the builder might want is present. Sending
-    this superset is simpler than deriving a precise per-region
-    dependency closure, and the builder ignores what it doesn't use.
+    Which paths count is the manifest's own `source.patterns`, so a code
+    whose build needs .inc files or a Makefile is not silently sent a
+    partial tree. Sent as-is to the builder, which picks out what its
+    build needs and ignores the rest; sending this superset is simpler
+    than deriving a precise per-region dependency closure.
 
     The builder's request body is JSON, which carries text and not bytes,
-    so this is where the tree's bytes become source. A Fortran file that
+    so this is where the tree's bytes become source. A source file that
     is not UTF-8 raises ValueError naming it; the callers turn that into
     a ComponentError, because it is a fact about the tree and not a
     verdict about the port.
     """
+    tracked = {f["path"]: f["content"] for f in tracked_files(repo_dir, ref)}
     files = []
-    for f in tracked_files(repo_dir, ref):
-        if not f["path"].lower().endswith(".f90"):
-            continue
+    for path in source_files(manifest, sorted(tracked)):
         try:
-            files.append({"path": f["path"], "content": f["content"].decode("utf-8")})
+            files.append({"path": path, "content": tracked[path].decode("utf-8")})
         except UnicodeDecodeError as exc:
             raise ValueError(
-                f"{f['path']} is not UTF-8, so it cannot be sent to the builder as source"
+                f"{path} is not UTF-8, so it cannot be sent to the builder as source"
             ) from exc
-    return sorted(files, key=lambda f: f["path"])
+    return files
 
 
 def baseline_commit(repo_dir) -> str | None:

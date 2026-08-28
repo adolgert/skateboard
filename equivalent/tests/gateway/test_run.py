@@ -10,6 +10,8 @@ from equivalent.ledger.predicates import PREDICATE_TYPES
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject, frozen_subject
+from equivalent.manifest.schema import load_manifest
+from equivalent.tests.fakes import write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
@@ -33,6 +35,7 @@ def _region(tmp_path, with_makefile=False):
     return RegionConfig(
         region_id="ch04:step", repo_dir=repo_dir, spec_path=SPEC_PATH, ledger_dir=tmp_path / "ledger",
         strategy_path=STRATEGY_PATH, working_copy_dir=working,
+        manifest=load_manifest(write_program(tmp_path) / "manifest.yaml"),
     )
 
 

@@ -15,6 +15,7 @@ from equivalent.ledger.acceptance import ACCEPTANCE_REQUIREMENTS
 from equivalent.ledger.records import Claim, Predicate, RequestLogLine
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
+from equivalent.tests.fakes import write_program
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 GOLDEN_DIR = Path(__file__).parent / "golden"
@@ -89,6 +90,7 @@ def _deployment(tmp_path, with_sessions=True):
         "repo": str(tmp_path / "repo"),
         "ledger_root": str(tmp_path / "ledger"),
         "working_copy": str(tmp_path / "working"),
+        "programs": str(write_program(tmp_path).parent),
         "strategies": str(STRATEGIES),
     }
     if with_sessions:
@@ -97,7 +99,9 @@ def _deployment(tmp_path, with_sessions=True):
     config_path.write_text(yaml.safe_dump({
         "version": 1,
         "paths": paths,
-        "regions": {"ch04:step": {"spec_path": "notes/regions/ch04-step.sese.yaml",
+        "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
+        "regions": {"ch04:step": {"code": "tsunami",
+                                  "spec_path": "notes/regions/ch04-step.sese.yaml",
                                   "strategy": "stdpar_managed"}},
     }))
     store = LedgerStore(tmp_path / "ledger" / baseline / "ch04-step")
