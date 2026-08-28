@@ -178,6 +178,34 @@ def _region_branch(region_id: str) -> str:
     return f"region/{region_id.replace(':', '-')}"
 
 
+def current_ref(repo_dir, region_id: str) -> str:
+    """The region's branch if it has one yet, else "main" (before its first submit)."""
+    branch = _region_branch(region_id)
+    return branch if _rev_parse(repo_dir, branch) is not None else "main"
+
+
+def frozen_for_allow_globs(repo_dir, allow_globs: list[str]) -> str:
+    """The frozen-set hash for an explicit allow-list: baseline files it doesn't cover."""
+    baseline = tracked_files(repo_dir, "main")
+    frozen_files = [f for f in baseline if not _matches_any(f["path"], allow_globs)]
+    return frozen_subject(frozen_files).sha256
+
+
+def materialize_tree(repo_dir, ref: str, dest_dir) -> None:
+    """Write every file tracked at `ref` into `dest_dir`, for a subprocess to read.
+
+    Reads through git's object store (`git show`), not the shared working
+    tree in `repo_dir` -- which submit() deliberately never checks out --
+    so this never depends on, or races with, whatever happens to be on
+    disk in `repo_dir` itself.
+    """
+    dest_dir = Path(dest_dir)
+    for f in tracked_files(repo_dir, ref):
+        path = dest_dir / f["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f["content"])
+
+
 def current_tree_and_frozen(repo_dir, region_id: str, store: LedgerStore, spec_path: str) -> tuple[str, str]:
     """The region's current tree and frozen-set hashes, read straight from the gateway repo.
 
@@ -185,12 +213,9 @@ def current_tree_and_frozen(repo_dir, region_id: str, store: LedgerStore, spec_p
     current tree is just the baseline itself. This never runs `submit()`
     and never writes anything; it only reads what is already there.
     """
-    branch = _region_branch(region_id)
-    ref = branch if _rev_parse(repo_dir, branch) is not None else "main"
-    baseline = tracked_files(repo_dir, "main")
+    ref = current_ref(repo_dir, region_id)
     allow_globs = resolve_allow_globs(store, spec_path)
-    frozen_files = [f for f in baseline if not _matches_any(f["path"], allow_globs)]
     return (
         tree_subject(tracked_files(repo_dir, ref)).sha256,
-        frozen_subject(frozen_files).sha256,
+        frozen_for_allow_globs(repo_dir, allow_globs),
     )

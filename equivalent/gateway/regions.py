@@ -16,3 +16,4 @@ class RegionConfig:
     repo_dir: Path
     spec_path: str
     ledger_dir: Path
+    strategy_path: Path

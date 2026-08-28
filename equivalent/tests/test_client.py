@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from equivalent.client import GatewayClient
@@ -6,6 +8,7 @@ from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import init_baseline_repo
 
 TOKEN = "test-token"
+STRATEGY_PATH = Path(__file__).resolve().parent.parent / "strategy" / "files" / "stdpar_managed.yaml"
 
 
 def _client_pair(tmp_path):
@@ -16,6 +19,7 @@ def _client_pair(tmp_path):
     cfg = RegionConfig(
         region_id="ch04:step", repo_dir=repo_dir,
         spec_path="notes/regions/ch04-step.sese.yaml", ledger_dir=tmp_path / "ledger",
+        strategy_path=STRATEGY_PATH,
     )
     app = create_app({cfg.region_id: cfg}, TOKEN)
     fastapi_client = TestClient(app)

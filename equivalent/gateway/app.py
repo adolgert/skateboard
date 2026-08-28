@@ -8,8 +8,9 @@ here can make a bad port look accepted.
 All four endpoints are built now: GET /table, GET /status, POST /submit,
 POST /run. POST /run refuses a request whose required claims are missing,
 returns an existing claim for a repeated deterministic request, and
-otherwise reports that the action's component isn't wired up yet --
-Step 6 replaces that placeholder with real dispatch, one action at a time.
+otherwise dispatches to the action's component. Step 6 wires those up one
+action at a time; `sese_check` (6a) is the first. Anything not yet wired
+still reports that its component isn't implemented.
 """
 from __future__ import annotations
 
@@ -19,14 +20,16 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
+from equivalent.components import sese_check
 from equivalent.ledger.acceptance import ACCEPTANCE_REQUIREMENTS
-from equivalent.ledger.records import RequestLogLine
+from equivalent.ledger.records import Predicate, RequestLogLine
 from equivalent.ledger.status import compute_status, requirement_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject, hash_bytes
+from equivalent.strategy.schema import load_strategy
 
 from .regions import RegionConfig
-from .submit import current_tree_and_frozen, resolve_allow_globs
+from .submit import current_ref, current_tree_and_frozen, frozen_for_allow_globs, resolve_allow_globs
 from .submit import submit as do_submit
 from .table import ACTION_TABLE
 
@@ -153,37 +156,61 @@ def create_app(regions: dict[str, RegionConfig], token: str) -> FastAPI:
         }
         cfg_hash = config_hash(req.config)
 
+        def log(outcome, claim_id=None, missing=None):
+            store.append_request(RequestLogLine(
+                ts=_now(), session=x_session_id, model=x_model_id, endpoint="run", action=req.action,
+                region=req.region, tree=tree_sha, config_hash=cfg_hash, outcome=outcome,
+                claim_id=claim_id, missing=tuple(missing) if missing else None,
+            ))
+
         missing = [
             item for predicate_type, subject_kind in row.requires
             if (item := requirement_status(
                 store, predicate_type, subjects_by_kind[subject_kind], PRODUCERS.get(predicate_type),
             ))["status"] == "missing"
         ]
+        if missing:
+            log("refused", missing=missing)
+            return {"refused": True, "action": req.action, "tree": tree_sha, "missing": missing}
 
         duplicate = None
-        if not missing and row.deterministic:
+        if row.deterministic:
             emitted = row.emits[0]
             duplicate_subject = subjects_by_kind[SUBJECT_KIND_OF.get(emitted, "tree")]
             duplicate = store.find_duplicate(emitted, duplicate_subject, cfg_hash)
-
-        if missing:
-            outcome = "refused"
-        elif duplicate is not None:
-            outcome = "duplicate"
-        else:
-            outcome = "error"
-
-        store.append_request(RequestLogLine(
-            ts=_now(), session=x_session_id, model=x_model_id, endpoint="run", action=req.action,
-            region=req.region, tree=tree_sha, config_hash=cfg_hash, outcome=outcome,
-            claim_id=duplicate.id if duplicate is not None else None,
-            missing=tuple(missing) if missing else None,
-        ))
-
-        if missing:
-            return {"refused": True, "action": req.action, "tree": tree_sha, "missing": missing}
         if duplicate is not None:
+            log("duplicate", claim_id=duplicate.id)
             return {"claim_id": duplicate.id, "verdict": duplicate.predicate.verdict, "detail": duplicate.predicate.detail}
+
+        if row.component == "analyzer:check_sese":
+            try:
+                strategy = load_strategy(cfg.strategy_path)
+                result = sese_check.check(cfg.repo_dir, current_ref(cfg.repo_dir, cfg.region_id), cfg.spec_path, strategy)
+            except sese_check.AnalyzerError as exc:
+                log("error")
+                return {"error": str(exc)}
+
+            # A pass widens the region's allow-list, which changes its own
+            # frozen value (D5). The claim must be filed against that new
+            # frozen value, not the one computed before this check ran --
+            # otherwise resolve_allow_globs would report the claim's own
+            # existence as changing "current frozen" out from under it, and
+            # the claim would immediately look missing again. See the
+            # pi-ledger-plan-progress memory note this resolves.
+            subject_sha = (
+                frozen_for_allow_globs(cfg.repo_dir, result["allow_globs"])
+                if result["allow_globs"] is not None else frozen_sha
+            )
+            claim = store.record_claim(
+                [Subject(kind="frozen", sha256=subject_sha)], "sese/verified",
+                Predicate(tool="sese_check", version="0.1", configHash=cfg_hash,
+                          verdict=result["verdict"], detail=result["detail"]),
+                [], x_session_id,
+            )
+            log("claim", claim_id=claim.id)
+            return {"claim_id": claim.id, "verdict": claim.predicate.verdict, "detail": claim.predicate.detail}
+
+        log("error")
         return {"error": f"component '{row.component}' for action '{req.action}' is not implemented yet"}
 
     return app

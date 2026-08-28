@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from equivalent.gateway.app import config_hash, create_app
@@ -12,6 +14,7 @@ from equivalent.ledger.subjects import Subject, frozen_subject
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
 SPEC_PATH = "notes/regions/ch04-step.sese.yaml"
+STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
 
 
 def _seed(root, with_makefile=False):
@@ -27,6 +30,7 @@ def _region(tmp_path, with_makefile=False):
     init_baseline_repo(repo_dir, _seed(tmp_path / "seed", with_makefile))
     return RegionConfig(
         region_id="ch04:step", repo_dir=repo_dir, spec_path=SPEC_PATH, ledger_dir=tmp_path / "ledger",
+        strategy_path=STRATEGY_PATH,
     )
 
 
@@ -192,10 +196,12 @@ def test_unknown_action_and_the_componentless_accept_row_are_rejected(tmp_path):
     assert r2.status_code == 400
 
 
-def test_ready_action_reports_its_component_is_not_implemented_yet(tmp_path):
+def test_ready_action_with_no_component_yet_reports_that_plainly(tmp_path):
+    # time_baseline requires nothing and is real in the table, but its
+    # builder component isn't wired up until a later 6-series step.
     client, cfg, store = _client(tmp_path)
 
-    r = client.post("/run", json={"action": "sese_check", "region": cfg.region_id, "config": {}}, headers=HEADERS)
+    r = client.post("/run", json={"action": "time_baseline", "region": cfg.region_id, "config": {}}, headers=HEADERS)
     body = r.json()
 
     assert "not implemented" in body["error"]

@@ -10,6 +10,7 @@ from equivalent.ledger.store import LedgerStore
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
+STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
 
 
 def _seed(root):
@@ -26,6 +27,7 @@ def _region(tmp_path, region_id="ch04:step"):
         repo_dir=repo_dir,
         spec_path="notes/regions/ch04-step.sese.yaml",
         ledger_dir=tmp_path / "ledger",
+        strategy_path=STRATEGY_PATH,
     )
     return cfg
 

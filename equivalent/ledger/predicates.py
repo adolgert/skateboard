@@ -38,7 +38,11 @@ def _register(name: str, deterministic: bool, agent_detail: DetailLevel, descrip
 
 _register(
     "sese/verified", True, DetailLevel.FULL,
-    "Static analyzer confirms the region's declared effects match the code, on the frozen set.",
+    "Static analyzer confirms the region and its closure are single-entry/"
+    "single-exit (no goto, early return, entry, or stop), on the frozen "
+    "set. Does not check that the spec's declared footprint matches the "
+    "code -- that needs real static-analysis tooling this repository "
+    "doesn't yet run generically; see equivalent/components/sese_check.py.",
 )
 _register(
     "build/replay", True, DetailLevel.FULL,
