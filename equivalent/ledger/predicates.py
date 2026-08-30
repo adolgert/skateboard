@@ -73,12 +73,81 @@ _register(
     "Oracle comparison against the held-out capture set, on the tree; no per-case detail ever leaves the oracle.",
 )
 _register(
+    "program/regression", True, DetailLevel.FULL,
+    "The code's own program, run at the size its manifest declares, wrote what the "
+    "baseline program wrote, under the code's tolerance policy; detail is the "
+    "per-output breakdown. On the tree.",
+)
+_register(
+    "regression/property", True, DetailLevel.FULL,
+    "The code's own property module passed, on the tree, at the recorded seed. Where the "
+    "regression checks compare a port against captured answers, this one searches for an "
+    "input on which an invariant the code states does not hold; detail is the seed, how "
+    "many examples were drawn, and what the run printed.",
+)
+_register(
     "timing/port", False, DetailLevel.FULL,
     "Wall-clock timing of the ported binary, on the tree.",
 )
 _register(
     "timing/baseline", False, DetailLevel.FULL,
-    "Wall-clock timing of the pristine baseline build, on the baseline tree.",
+    "Wall-clock timing of the pristine baseline build, on the baseline tree; its "
+    "program's own outputs are stored as the capture set a port's program run is "
+    "compared against.",
+)
+
+# What an onboarding session files. All of it is the agent's own work
+# being checked -- the manifest, the makefile, the drivers it wrote -- so
+# the agent sees the whole detail: it is the only way it can fix what
+# failed.
+_register(
+    "manifest/valid", True, DetailLevel.FULL,
+    "The manifest the tree carries describes the code completely: every path it "
+    "names is in the tree, every floating-point output has a tolerance band, and "
+    "the two datasets are different runs. On the tree.",
+)
+_register(
+    "harness/builds", True, DetailLevel.FULL,
+    "Every target the tree's manifest declares builds under both the baseline "
+    "strategy and the port strategy, with each strategy's flags proven to have "
+    "reached every compile. On the tree.",
+)
+_register(
+    "harness/captured", True, DetailLevel.FULL,
+    "The capture program wrote every dataset the manifest declares; each case holds "
+    "exactly the variables the region declares, of the declared type and rank; and "
+    "the visible and held-out inputs are not the same run. The sets it wrote are "
+    "stored in the ledger and named in this claim's materials. On the tree.",
+)
+_register(
+    "harness/replays", True, DetailLevel.FULL,
+    "The replay driver, built the way the baseline is built, reproduces every "
+    "captured output bitwise from the captured inputs. On the tree.",
+)
+_register(
+    "harness/deterministic", True, DetailLevel.FULL,
+    "Capturing each dataset again writes the set already stored, and replaying the "
+    "visible inputs twice writes the same outputs twice. On the tree.",
+)
+_register(
+    "harness/times", True, DetailLevel.FULL,
+    "The timing program runs twice inside its declared budget and writes the same "
+    "declared outputs both times; the last run's outputs are stored as the code's "
+    "program capture set. On the tree.",
+)
+_register(
+    "harness/self_check", True, DetailLevel.FULL,
+    "Single-token faults injected into the files the manifest says implement the "
+    "region are built and replayed the way the baseline is, and scored against the "
+    "captured answers with the code's own tolerance bands: at least one is caught, "
+    "and none changes an answer the bands then let through. Survivors -- mutants no "
+    "output changed at all for -- are listed rather than counted against. On the tree.",
+)
+_register(
+    "harness/properties", True, DetailLevel.FULL,
+    "The code's own module of invariants passes against the baseline build, at the "
+    "recorded seed. A code that declares none files this claim too, saying so, because "
+    "stating no invariants is something the code says about itself. On the tree.",
 )
 
 

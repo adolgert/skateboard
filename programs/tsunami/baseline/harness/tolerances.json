@@ -1,0 +1,57 @@
+{
+  "policy_version": "2026-07-30-cpuspread-v1",
+  "calibration": {
+    "method": "gfortran -O2 vs -O3 -ffast-math -funroll-loops, visible cases",
+    "margin_over_observed": 8,
+    "floors": {
+      "abs": 1e-06,
+      "rel": 1e-05,
+      "ulp": 16
+    },
+    "observed_cpu_spread": {
+      "h": {
+        "abs": 0.0,
+        "rel": 0.0,
+        "ulp": 0
+      },
+      "u": {
+        "abs": 0.0,
+        "rel": 0.0,
+        "ulp": 0
+      }
+    },
+    "note": "Recalibrate against nvfortran once the HPC SDK image is available.",
+    "program_run": {
+      "method": "gfortran -O2 vs -O3 -ffast-math -funroll-loops, the whole program at its declared timing size (20000 tiles, 5000 steps), neither build ported",
+      "margin_over_observed": 8,
+      "observed": {
+        "h.npy": {
+          "abs": 3.6e-06,
+          "rel": 0.0033,
+          "ulp": 51556
+        }
+      },
+      "note": "Two compilations of the unmodified code disagree by ~3.6e-06 after 5000 float32 steps, which is why the whole-program run cannot be judged by the single-call bands under 'variables': there the observed spread was exactly zero. Only the absolute band is widened; an element that drifts further than the compiler alone does is a failure whatever its ratio."
+    }
+  },
+  "acceptance": "A variable passes if (max_abs <= abs) OR (max_rel <= rel) OR (max_ulp <= ulp). 'variables' bands one call of the region; 'files' bands one whole-program run, per file the timing run writes.",
+  "variables": {
+    "h": {
+      "abs": 1e-06,
+      "rel": 1e-05,
+      "ulp": 16
+    },
+    "u": {
+      "abs": 1e-06,
+      "rel": 1e-05,
+      "ulp": 16
+    }
+  },
+  "files": {
+    "h.npy": {
+      "abs": 3e-05,
+      "rel": 1e-05,
+      "ulp": 16
+    }
+  }
+}

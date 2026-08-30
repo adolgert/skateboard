@@ -46,7 +46,7 @@ def test_normalization_strips_a_dot_slash_prefix_but_not_leading_dots():
 
 
 def test_hash_files_reproduces_demo_src_sha_scheme():
-    # demo/orchestrator/orchestrator.py's src_sha(): sha256 over sorted-by-path
+    # The first demonstration harness's src_sha(): sha256 over sorted-by-path
     # (path, content) pairs, path bytes then content bytes, no separator,
     # truncated to 12 hex chars.
     def demo_src_sha(files):
@@ -61,7 +61,7 @@ def test_hash_files_reproduces_demo_src_sha_scheme():
 
 
 def test_strategy_subject_reproduces_oracle_policy_sha_scheme():
-    # demo/oracle/app.py's POLICY_SHA: plain sha256 of the raw file bytes.
+    # services/oracle/app.py's POLICY_SHA: plain sha256 of the raw file bytes.
     data = b'{"policy_version": 1, "variables": {}}'
     expected = hashlib.sha256(data).hexdigest()
     assert hash_bytes(data) == expected
@@ -72,7 +72,8 @@ def test_binary_subject_and_outputs_subject_are_deterministic():
     data = b"\x00\x01\x02binary-bytes"
     assert binary_subject(data).sha256 == binary_subject(data).sha256
 
-    cases = {"case0000": {"h": b"hhh", "u": b"uuu"}, "case0001": {"h": b"HHH", "u": b"UUU"}}
+    cases = {"case0000": {"field": b"aaa", "flux": b"bbb"},
+             "case0001": {"field": b"AAA", "flux": b"BBB"}}
     a = outputs_subject(cases)
     b = outputs_subject(dict(reversed(list(cases.items()))))
     assert a.sha256 == b.sha256

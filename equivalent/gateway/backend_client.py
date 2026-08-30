@@ -1,5 +1,5 @@
 """Thin clients for the builder and oracle services, matching their real
-HTTP contracts (demo/builder/app.py, demo/oracle/app.py) exactly.
+HTTP contracts (services/builder/app.py, services/oracle/app.py) exactly.
 
 Trust role: none -- these carry bytes between the gateway and two
 services that are themselves trusted for what they measure (builder) or
@@ -28,27 +28,119 @@ class BuilderClient:
     def __init__(self, http: httpx.Client):
         self._http = http
 
-    def build(self, attempt_id: str, files: list[dict], profile: str,
-              flags: list[str] | None = None, link_flags: list[str] | None = None) -> dict:
+    def healthz(self) -> dict:
+        """{"ok": bool, "tools": {name: present}, ...} -- what this builder can run."""
+        r = self._http.get("/healthz")
+        r.raise_for_status()
+        return r.json()
+
+    def build(self, attempt_id: str, tree: list[dict], makefile: str, targets: list[dict],
+              compiler: str, flags: list[str], link_flags: list[str],
+              source_patterns: list[str]) -> dict:
+        """Build one tree with its own makefile.
+
+        `tree` is the whole tracked tree as [{"path", "b64"}]; `targets`
+        is [{"role", "target", "executable"}] from the code's manifest.
+        The compiler and the flags come from the strategy file, and
+        `source_patterns` is what the code calls its own source, which is
+        how the builder can say whether anything else was compiled.
+        """
         r = self._http.post("/v1/build", json={
-            "attempt_id": attempt_id, "source": {"files": files}, "profile": profile,
-            "flags": flags, "link_flags": link_flags,
+            "attempt_id": attempt_id, "tree": tree, "makefile": makefile,
+            "targets": targets, "compiler": compiler, "flags": flags,
+            "link_flags": link_flags, "source_patterns": source_patterns,
         })
         r.raise_for_status()
         return r.json()
 
-    def run(self, attempt_id: str, profile: str, cases: dict, mandatory: bool = False) -> dict:
-        r = self._http.post("/v1/run", json={"attempt_id": attempt_id, "profile": profile, "cases": cases, "mandatory": mandatory})
+    def run(self, attempt_id: str, executable: str, cases: dict,
+            notify: str | None = None, mandatory: bool = False) -> dict:
+        """Replay every case through the manifest's replay executable.
+
+        `cases` is {name: {variable: base64 of its .npy file}}, and the
+        outputs come back in the same shape. The .npy file says what type
+        and shape each array is, so nothing on the wire repeats it.
+        `notify` is the strategy's device proof.
+        """
+        r = self._http.post("/v1/run", json={
+            "attempt_id": attempt_id, "executable": executable, "cases": cases,
+            "notify": notify, "mandatory": mandatory,
+        })
         r.raise_for_status()
         return r.json()
 
-    def sanitize(self, attempt_id: str, profile: str, case: dict, tools: list[str]) -> dict:
-        r = self._http.post("/v1/sanitize", json={"attempt_id": attempt_id, "profile": profile, "case": case, "tools": tools})
+    def capture(self, attempt_id: str, executable: str, args: list[str],
+                run_name: str) -> dict:
+        """Run the code's capture program once and bring back the dataset it wrote.
+
+        `args` are the dataset's own, from the manifest; the directory the
+        program writes into is the builder's to name, and `run_name` is
+        what it calls it. The cases come back as
+        {case: {"inputs": {variable: b64 npy}, "outputs": {...}}}.
+        """
+        r = self._http.post("/v1/capture", json={
+            "attempt_id": attempt_id, "executable": executable, "args": args,
+            "run_name": run_name,
+        })
         r.raise_for_status()
         return r.json()
 
-    def time(self, attempt_id: str, repeats: int = 5) -> dict:
-        r = self._http.post("/v1/time", json={"attempt_id": attempt_id, "repeats": repeats})
+    def sanitize(self, attempt_id: str, executable: str, cases: dict, tools: list[str]) -> dict:
+        """Run each sanitizer over each case. `cases` is shaped as for run()."""
+        r = self._http.post("/v1/sanitize", json={
+            "attempt_id": attempt_id, "executable": executable, "cases": cases, "tools": tools,
+        })
+        r.raise_for_status()
+        return r.json()
+
+    def properties(self, attempt_id: str, executable: str, module: str, cases: dict,
+                   seed: int, max_examples: int) -> dict:
+        """Run the code's own module of invariants against its replay binary.
+
+        `module` is the path the manifest names, relative to the tree
+        root; `cases` is shaped as for run() and becomes the corpus the
+        properties draw from. The seed and the example count go out so
+        that the claim can say what search was made.
+        """
+        r = self._http.post("/v1/properties", json={
+            "attempt_id": attempt_id, "executable": executable, "module": module,
+            "cases": cases, "seed": seed, "max_examples": max_examples,
+        })
+        r.raise_for_status()
+        return r.json()
+
+    def mutate(self, attempt_id: str, makefile: str, replay_target: dict, files: list[str],
+               cases: dict, bands: dict, compiler: str, flags: list[str],
+               link_flags: list[str], source_patterns: list[str],
+               jobs: int | None = None, limit: int | None = None) -> dict:
+        """Mutate the region's own files and score each mutant against the captures.
+
+        `files` are the paths the manifest says implement the region;
+        `cases` is a stored capture set, {name: {"inputs": {...},
+        "outputs": {...}}}; `bands` is the code's tolerance policy per
+        output variable. What comes back is one verdict per mutant, not
+        the outputs any of them wrote.
+        """
+        r = self._http.post("/v1/mutate", json={
+            "attempt_id": attempt_id, "makefile": makefile, "replay_target": replay_target,
+            "files": files, "cases": cases, "bands": bands, "compiler": compiler,
+            "flags": flags, "link_flags": link_flags, "source_patterns": source_patterns,
+            "jobs": jobs, "limit": limit,
+        })
+        r.raise_for_status()
+        return r.json()
+
+    def time(self, attempt_id: str, executable: str, args: list[str], env: dict,
+             outputs: list[str], repeats: int = 5, budget_s: int = 300) -> dict:
+        """Time the manifest's timing executable and collect the files it declares.
+
+        The declared files come back as one set per run, in run order, so
+        a caller can ask whether every run wrote the same thing.
+        """
+        r = self._http.post("/v1/time", json={
+            "attempt_id": attempt_id, "executable": executable, "args": args, "env": env,
+            "outputs": outputs, "repeats": repeats, "budget_s": budget_s,
+        })
         r.raise_for_status()
         return r.json()
 
@@ -63,11 +155,13 @@ class OracleClient:
         return r.json()
 
     def holdout_inputs(self) -> dict:
+        """{"dataset": "holdout", "cases": {name: {variable: base64 npy}}} -- inputs only."""
         r = self._http.get("/v1/dataset/holdout/inputs")
         r.raise_for_status()
         return r.json()
 
     def compare(self, dataset: str, outputs: dict, attempt_id: str = "unknown") -> dict:
+        """Judge one dataset's outputs, shaped {case: {variable: base64 npy}}."""
         r = self._http.post("/v1/compare", json={"attempt_id": attempt_id, "dataset": dataset, "outputs": outputs})
         r.raise_for_status()
         return r.json()

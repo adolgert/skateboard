@@ -11,10 +11,16 @@ import yaml
 from equivalent.cli import render, session
 from equivalent.cli.main import main
 from equivalent.gateway.submit import init_baseline_repo
-from equivalent.ledger.acceptance import ACCEPTANCE_REQUIREMENTS
+from equivalent.ledger.acceptance import (
+    ACCEPTANCE_REQUIREMENTS,
+    ONBOARDING,
+    ONBOARDING_REQUIREMENTS,
+    PORTING,
+)
 from equivalent.ledger.records import Claim, Predicate, RequestLogLine
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
+from equivalent.tests.fakes import write_program
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 GOLDEN_DIR = Path(__file__).parent / "golden"
@@ -89,6 +95,7 @@ def _deployment(tmp_path, with_sessions=True):
         "repo": str(tmp_path / "repo"),
         "ledger_root": str(tmp_path / "ledger"),
         "working_copy": str(tmp_path / "working"),
+        "programs": str(write_program(tmp_path).parent),
         "strategies": str(STRATEGIES),
     }
     if with_sessions:
@@ -97,8 +104,11 @@ def _deployment(tmp_path, with_sessions=True):
     config_path.write_text(yaml.safe_dump({
         "version": 1,
         "paths": paths,
-        "regions": {"ch04:step": {"spec_path": "notes/regions/ch04-step.sese.yaml",
-                                  "strategy": "stdpar_managed"}},
+        "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
+        "regions": {"ch04:step": {"code": "tsunami", "phase": "porting",
+                                  "spec_path": "notes/regions/ch04-step.sese.yaml",
+                                  "strategy": "stdpar_managed",
+                                  "baseline_strategy": "cpu_reference"}},
     }))
     store = LedgerStore(tmp_path / "ledger" / baseline / "ch04-step")
     return config_path, store, sessions_dir
@@ -214,6 +224,24 @@ def test_a_status_call_a_local_call_and_an_unlogged_gateway_call_are_all_reporte
     assert "no request line for status" in text
 
 
+def test_an_onboarding_action_is_a_gateway_call_too(tmp_path):
+    # One reader reads both kinds of transcript, so the tool names it
+    # knows are every action in the table, not one phase's.
+    path = _write_session(tmp_path / "onboarding.jsonl", [
+        _assistant("a", None, "2026-01-01T00:00:00.000Z", [
+            {"type": "toolCall", "id": "t1", "name": "manifest_check", "arguments": {}},
+            {"type": "toolCall", "id": "t2", "name": "harness_build", "arguments": {}},
+        ]),
+    ])
+    _, _, events = session.read_session(path)
+
+    joined = session.join(events, [])
+
+    assert [(e.tool_name, e.kind) for e in joined.unmatched_calls] == [
+        ("manifest_check", "tool_call"), ("harness_build", "tool_call"),
+    ]
+
+
 def test_a_request_line_with_no_tool_call_beside_it_is_reported():
     _, _, events = session.read_session(SAMPLE)
     extra = RequestLogLine(
@@ -263,8 +291,9 @@ def test_a_session_whose_claims_finish_a_tree_reports_how_long_it_took(tmp_path)
     assert summary.trees == (tree,)
     assert summary.claims_by_predicate == {req.predicate_type: 1 for req in ACCEPTANCE_REQUIREMENTS}
     assert summary.fail_verdicts == 0
-    # The last requirement lands eight seconds after the first request.
-    assert summary.time_to_acceptance == "8s"
+    # The last requirement lands one second per requirement after the
+    # first request, which is when the tree became acceptable.
+    assert summary.time_to_acceptance == f"{len(ACCEPTANCE_REQUIREMENTS)}s"
 
 
 def test_a_session_that_never_finishes_a_tree_says_it_is_not_accepted(tmp_path):
@@ -292,6 +321,32 @@ def test_a_session_that_never_finishes_a_tree_says_it_is_not_accepted(tmp_path):
     assert summary.fail_verdicts == 1
 
 
+def test_an_onboarding_session_is_measured_against_the_onboarding_requirements(tmp_path):
+    # The same claims are a finished onboarding and not a finished port,
+    # so which list a session is read against comes from its region.
+    store = LedgerStore(tmp_path / "region")
+    tree = "a" * 64
+    requests = [RequestLogLine(
+        ts="2026-01-01T00:00:00Z", session="sess-1", model="m", endpoint="submit", action="submit",
+        region="tsunami:onboarding", tree=tree, config_hash=None, outcome="submitted",
+    )]
+    for i, req in enumerate(ONBOARDING_REQUIREMENTS, start=1):
+        store.append_claim(_claim(
+            f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", req.predicate_type, req.subject_kind,
+            tree, "pass", "sess-1",
+        ))
+
+    onboarding = session.summarize(
+        store, "sess-1", requests, [], session.join([], requests), phase=ONBOARDING,
+    )
+    porting = session.summarize(
+        store, "sess-1", requests, [], session.join([], requests), phase=PORTING,
+    )
+
+    assert onboarding.time_to_acceptance == f"{len(ONBOARDING_REQUIREMENTS)}s"
+    assert porting.time_to_acceptance == "not accepted"
+
+
 def test_the_summary_for_the_sample_session_matches_the_golden_file(tmp_path):
     store = LedgerStore(tmp_path / "region")
     store.append_claim(_claim(
@@ -317,3 +372,26 @@ def test_a_transcript_renamed_by_hand_is_still_found_by_the_id_it_declares(tmp_p
     assert session.find_session_file(tmp_path, "hand-built") == renamed
     assert session.find_session_file(tmp_path, "some-other-session") is None
     assert session.find_session_file(tmp_path / "not-here", "hand-built") is None
+
+
+def test_a_claim_tool_call_pairs_with_the_claim_endpoints_line():
+    # The claim tool is a gateway call like any other, on an endpoint of
+    # its own name; without that it would read as one of the agent's own
+    # local tools and its request line would go unmatched.
+    from equivalent.cli.session import SessionEvent
+
+    assert "claim" in session.GATEWAY_TOOL_NAMES
+    event = SessionEvent(
+        ts="2026-01-01T00:00:03.000Z", kind="tool_call", tool_call_id="tool:1:ccc",
+        tool_name="claim",
+    )
+    line = RequestLogLine(
+        ts="2026-01-01T00:00:03Z", session="s1", model="m", endpoint="claim", action="claim",
+        region="ch04:step", tree=None, config_hash=None, outcome="read", claim_id="c-0007",
+        tool_call_id="tool:1:ccc",
+    )
+
+    joined = session.join([event], [line])
+
+    assert joined.unmatched_requests == ()
+    assert [(row.who, row.source) for row in joined.rows] == [("claim", "both")]

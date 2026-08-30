@@ -8,8 +8,12 @@ sanitize: Runs 'sanitize' via builder:/v1/sanitize. Records: sanitize/memcheck, 
 
 regression_visible: Runs 'regression_visible' via oracle:/v1/compare. Records: regression/visible. Requires: sanitize/memcheck = pass for the submitted tree; sanitize/racecheck = pass for the submitted tree.
 
+property_check: Runs 'property_check' via builder:/v1/properties. Records: regression/property. Requires: regression/visible = pass for the submitted tree. Optional settings: seed (integer) -- The Hypothesis seed for the search. One is drawn for the run when left out, and the claim records which. max_examples (integer) -- How many examples to draw per property. A hundred when left out.
+
 regression_holdout: Runs 'regression_holdout' via oracle:/v1/compare. Records: regression/holdout. Requires: regression/visible = pass for the submitted tree.
 
-time_port: Runs 'time_port' via builder:/v1/time. Records: timing/port. Requires: regression/holdout = pass for the submitted tree.
+program_regression: Runs 'program_regression' via builder:/v1/time. Records: program/regression. Requires: regression/holdout = pass for the submitted tree.
 
-time_baseline: Runs 'time_baseline' via builder:/v1/time. Records: timing/baseline.
+time_port: Runs 'time_port' via builder:/v1/time. Records: timing/port. Requires: program/regression = pass for the submitted tree. Optional settings: repeats (integer) -- How many timed runs to make. Five when left out.
+
+time_baseline: Runs 'time_baseline' via builder:/v1/time. Records: timing/baseline. Optional settings: repeats (integer) -- How many timed runs to make. Five when left out.

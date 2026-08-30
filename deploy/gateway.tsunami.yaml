@@ -1,0 +1,41 @@
+# The gateway's own configuration, written in the container's terms: every
+# path here is a mount point inside the gateway image, not a host directory.
+# up.sh writes a second copy beside the state directory whose paths resolve
+# on the host, for the ledger command line to read.
+version: 1
+paths:
+  repo: /repo                 # the gateway's own git clone (baseline + region branches)
+  ledger_root: /ledger        # ledger_root/<baseline-commit>/<region-id>/ per region
+  working_copy: /working      # read-only mount of the agent's working copy
+  programs: /programs         # one directory per code: manifest, baseline, datasets
+  strategies: /strategies     # directory holding the strategy YAML files
+  seed: /seed                 # baseline files, used only if repo is not yet initialized
+codes:
+  tsunami:
+    manifest: tsunami/manifest.yaml   # relative to <programs>, so the host's copy resolves too
+regions:
+  "ch04:step":
+    code: tsunami                   # -> the codes entry above
+    phase: porting                  # a region of a code that has been brought in
+    spec_path: notes/regions/ch04-step.sese.yaml
+    strategy: stdpar_managed        # -> <strategies>/stdpar_managed.yaml
+    baseline_strategy: cpu_reference # what the pristine baseline is timed against
+    visible_dataset: visible        # -> <programs>/tsunami/datasets/visible ; optional
+  # The same time step taken as a two-file region: the spec lists the
+  # stencil module as well, so a port may change both files.
+  "ch04:step-stencil":
+    code: tsunami
+    phase: porting
+    spec_path: notes/regions/ch04-step-stencil.sese.yaml
+    strategy: stdpar_managed
+    baseline_strategy: cpu_reference
+    visible_dataset: visible
+  # The same code brought in from its bare baseline. No region has been
+  # chosen, so there is no spec and no dataset to name: what an
+  # onboarding session produces is the description the porting regions
+  # above are checked against.
+  "tsunami:onboard":
+    code: tsunami
+    phase: onboarding
+    strategy: onboarding            # -> <strategies>/onboarding.yaml ; allows the whole tree
+    baseline_strategy: cpu_reference

@@ -1,12 +1,12 @@
 """Compute a region's status from its ledger: current tree, which claims
-are present, which are missing, and whether the region is accepted.
+are present, which are missing, and whether the region has met every
+requirement of its phase.
 
 The ledger CLI and the gateway's GET /status must both render from this
 function, not two copies of it, or they will drift apart.
 """
 from __future__ import annotations
 
-from .acceptance import ACCEPTANCE_REQUIREMENTS
 from .store import LedgerStore
 from .subjects import Subject
 
@@ -65,8 +65,16 @@ def requirement_status(store: LedgerStore, predicate_type: str, subject: Subject
     return {"predicateType": predicate_type, "status": "missing", "producing_action": producing_action}
 
 
-def compute_status(store: LedgerStore, tree: Subject | None = None, frozen: Subject | None = None) -> dict:
-    """Status for the region's current tree.
+def compute_status(
+    store: LedgerStore, requirements, phase: str,
+    tree: Subject | None = None, frozen: Subject | None = None,
+) -> dict:
+    """Status for the region's current tree, against one phase's requirements.
+
+    `requirements` is the list the region's phase is judged by
+    (`equivalent.ledger.acceptance.requirements_for`), and `phase` is that
+    phase's name, which travels with the answer so a reader knows which
+    list it is looking at without matching the rows against both.
 
     `tree` and `frozen` are the caller's answer to "what is current right
     now"; pass them when you have a better source than the ledger itself
@@ -78,7 +86,7 @@ def compute_status(store: LedgerStore, tree: Subject | None = None, frozen: Subj
         frozen = _current_subject(store, "frozen")
 
     rows = []
-    for req in ACCEPTANCE_REQUIREMENTS:
+    for req in requirements:
         subject = tree if req.subject_kind == "tree" else frozen
         rows.append(requirement_status(store, req.predicate_type, subject, req.producing_action))
 
@@ -88,6 +96,7 @@ def compute_status(store: LedgerStore, tree: Subject | None = None, frozen: Subj
     return {
         "tree": tree.sha256 if tree else None,
         "frozen": frozen.sha256 if frozen else None,
+        "phase": phase,
         "rows": rows,
         "accepted": accepted,
     }

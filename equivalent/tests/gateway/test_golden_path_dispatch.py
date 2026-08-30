@@ -3,49 +3,48 @@ dispatch, run against fakes standing in for the builder and oracle (see
 equivalent/tests/fakes.py for why: no nvfortran/compute-sanitizer/GPU in
 this environment).
 """
+import base64
 import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from equivalent.capture import npy
 from equivalent.gateway.app import create_app
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import init_baseline_repo
+from equivalent.ledger.acceptance import PORTING
+from equivalent.ledger.capture_sets import program_variable
 from equivalent.ledger.store import LedgerStore
+from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
-from equivalent.tests.fakes import FakeBuilder, FakeOracle
+from equivalent.tests.fakes import FakeBuilder, FakeOracle, timing_array, write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
 STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
+BASELINE_STRATEGY_PATH = STRATEGY_PATH.parent / "cpu_reference.yaml"
 SPEC_PATH = "notes/regions/ch04-step.sese.yaml"
 
 CLEAN_SOURCE = """\
 module mod_kernel
 contains
-subroutine step(h, u)
-  real :: h, u
-  h = h + u
+subroutine step(a, b)
+  real :: a, b
+  a = a + b
 end subroutine step
 end module mod_kernel
 """
 
 SPEC = (
     "region: ch04:step\n"
+    "files:\n"
+    "  - src/mod_kernel.f90\n"
     "anchor:\n"
     "  file: src/mod_kernel.f90\n"
     '  pst_node: "step@3-5"\n'
     "  entry_symbol: step\n"
 )
-
-
-def _visible_dataset(tmp_path):
-    d = tmp_path / "visible"
-    (d / "case0000").mkdir(parents=True)
-    (d / "cases.json").write_text(json.dumps({"cases": ["case0000"]}))
-    (d / "case0000" / "h_in.bin").write_bytes(b"\x00" * 16)
-    (d / "case0000" / "u_in.bin").write_bytes(b"\x00" * 16)
-    return d
 
 
 def _client(tmp_path):
@@ -59,10 +58,17 @@ def _client(tmp_path):
     init_baseline_repo(repo_dir, seed)
     working = tmp_path / "working"
     working.mkdir()
+    # A code that declares its own invariants, so the property check is
+    # part of what this port is judged by.
+    program = write_program(tmp_path, properties=True)
     cfg = RegionConfig(
-        region_id="ch04:step", repo_dir=repo_dir, spec_path=SPEC_PATH,
+        region_id="ch04:step", code="tsunami", phase=PORTING, repo_dir=repo_dir,
+        spec_path=SPEC_PATH,
         ledger_dir=tmp_path / "ledger", strategy_path=STRATEGY_PATH,
-        working_copy_dir=working, visible_dataset_dir=_visible_dataset(tmp_path),
+        baseline_strategy_path=BASELINE_STRATEGY_PATH,
+        working_copy_dir=working,
+        manifest=load_manifest(program / "manifest.yaml"),
+        visible_dataset_dir=program / "datasets" / "visible",
     )
     builder, oracle = FakeBuilder(), FakeOracle()
     client = TestClient(create_app({cfg.region_id: cfg}, TOKEN, builder=builder, oracle=oracle))
@@ -75,6 +81,18 @@ def _run(client, cfg, action):
     return r.json()
 
 
+# Every gate of a port, in the order each one's evidence becomes the next
+# one's precondition. time_baseline comes before program_regression
+# because it is what stores the baseline program's outputs, and
+# program_regression before time_port because a timing measurement of a
+# program that computes the wrong thing measures nothing.
+GATES = (
+    "sese_check", "build_replay", "run_replay", "sanitize",
+    "regression_visible", "property_check", "regression_holdout", "time_baseline",
+    "program_regression", "time_port",
+)
+
+
 def test_full_pipeline_reaches_acceptance(tmp_path):
     client, cfg, store, builder, oracle = _client(tmp_path)
 
@@ -83,10 +101,7 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
     (working / SPEC_PATH).write_text(SPEC)
     client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
 
-    for action in (
-        "sese_check", "build_replay", "run_replay", "sanitize",
-        "regression_visible", "regression_holdout", "time_port", "time_baseline",
-    ):
+    for action in GATES:
         body = _run(client, cfg, action)
         assert "error" not in body, f"{action}: {body}"
         assert body.get("refused") is not True, f"{action}: {body}"
@@ -101,12 +116,16 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
     assert len(builder.run_calls) == 2
     assert len(oracle.compare_calls) == 2
 
-    # Every claim, whatever the action, names the strategy in its
-    # materials.
+    # Every claim, whatever the action, names the strategy and the code's
+    # own manifest in its materials: a pass under one description of the
+    # code must not read as a pass under another.
     strategy = load_strategy(STRATEGY_PATH)
     for claim in store.all_claims():
         assert any(
             m.kind == "strategy" and m.sha256 == strategy.sha256 for m in claim.materials
+        ), claim.predicateType
+        assert any(
+            m.kind == "manifest" and m.sha256 == cfg.manifest.sha256 for m in claim.materials
         ), claim.predicateType
 
     # Regression claims carry the tolerance policy as a formal material,
@@ -114,6 +133,23 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
     for predicate_type in ("regression/visible", "regression/holdout"):
         claim = next(c for c in store.all_claims() if c.predicateType == predicate_type)
         assert any(m.kind == "policy" and m.sha256 == "policyabc" for m in claim.materials)
+
+    # The port's own program run was compared against the set the
+    # baseline's run stored, and the claim names both that set and the
+    # bands it was judged within.
+    baseline_claim = next(c for c in store.all_claims() if c.predicateType == "timing/baseline")
+    program_set = baseline_claim.predicate.detail["program_set"]
+    program_claim = next(c for c in store.all_claims() if c.predicateType == "program/regression")
+    assert program_claim.predicate.detail["program_set"] == program_set
+    assert any(m.kind == "capture_set" and m.sha256 == program_set for m in program_claim.materials)
+    assert any(m.kind == "policy" for m in program_claim.materials)
+
+    # The property claim says which search was made, so a person can ask
+    # for the same one again.
+    property_claim = next(c for c in store.all_claims() if c.predicateType == "regression/property")
+    assert property_claim.predicate.detail["module"] == "harness/properties.py"
+    assert property_claim.predicate.detail["seed"] == builder.properties_calls[0]["seed"]
+    assert property_claim.predicate.detail["max_examples"] == 100
 
     # The build claim records the strategy's own flags as what was
     # compiled, and the timing claim carries the same flags read back
@@ -176,7 +212,7 @@ def test_time_baseline_is_filed_against_the_baseline_tree_not_the_current_tree(t
     _run(client, cfg, "sese_check")  # widens the allow-list to include mod_kernel.f90
 
     (working / "src").mkdir(parents=True)
-    (working / "src" / "mod_kernel.f90").write_text(CLEAN_SOURCE.replace("h + u", "h + u + 0"))
+    (working / "src" / "mod_kernel.f90").write_text(CLEAN_SOURCE.replace("a + b", "a + b + 0"))
     client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
 
     result = _run(client, cfg, "time_baseline")
@@ -184,3 +220,116 @@ def test_time_baseline_is_filed_against_the_baseline_tree_not_the_current_tree(t
     status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
     claim = store.get_claim(result["claim_id"])
     assert claim.subject[0].sha256 != status["tree"]
+
+
+def test_a_port_that_is_wrong_at_the_timing_size_cannot_be_timed(tmp_path):
+    # Fast and wrong is the failure the region's own regression checks
+    # cannot see: they replay one captured case, and this is the whole
+    # program at the size the speedup is claimed for.
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in GATES[: GATES.index("program_regression")]:
+        _run(client, cfg, action)
+
+    # From here the timing program writes something else. The baseline's
+    # run, and so the stored reference, is already behind us.
+    drifted = cfg.manifest.timing.outputs[0]
+
+    def wrong_at_scale(outputs, run):
+        return {
+            name: base64.b64encode(
+                npy.encode(timing_array(name) + (1.0 if name == drifted else 0.0))
+            ).decode()
+            for name in outputs
+        }
+
+    builder.timing_outputs = wrong_at_scale
+
+    body = _run(client, cfg, "program_regression")
+    assert body["verdict"] == "fail"
+    assert not body["detail"]["per_var"][program_variable(drifted)]["pass"]
+
+    refused = _run(client, cfg, "time_port")
+    assert refused["refused"] is True
+    assert [item["predicateType"] for item in refused["missing"]] == ["program/regression"]
+
+    status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+    assert status["accepted"] is False
+
+
+def test_a_port_whose_invariants_do_not_hold_cannot_be_accepted(tmp_path):
+    # A port can reproduce every captured answer and still break something
+    # the code says is always true of it. That is what this claim is for,
+    # and a code that declares invariants is not accepted without it.
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in GATES[: GATES.index("property_check")]:
+        _run(client, cfg, action)
+
+    builder.properties_ok = False
+    builder.properties_counts = {"passed": 2, "failed": 1, "errors": 0}
+    builder.properties_log = "Falsifying example: test_mass_is_conserved(k=1)"
+
+    body = _run(client, cfg, "property_check")
+    assert body["verdict"] == "fail"
+    assert "Falsifying example" in body["detail"]["log_tail"]
+
+    for action in GATES[GATES.index("property_check") + 1:]:
+        _run(client, cfg, action)
+    status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+    assert status["accepted"] is False
+    assert [row["status"] for row in status["rows"] if row["predicateType"] == "regression/property"] == ["missing"]
+
+
+def test_the_same_seed_is_the_same_search_and_a_new_seed_is_a_new_claim(tmp_path):
+    # Repeating a search that already ran costs minutes and says nothing
+    # new; searching from somewhere else is a different question and gets
+    # its own claim.
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in GATES[: GATES.index("property_check")]:
+        _run(client, cfg, action)
+
+    def run_with(config):
+        r = client.post(
+            "/run", json={"action": "property_check", "region": cfg.region_id, "config": config},
+            headers=HEADERS,
+        )
+        return r.json()
+
+    first = run_with({"seed": 11})
+    again = run_with({"seed": 11})
+    other = run_with({"seed": 12})
+
+    assert again["claim_id"] == first["claim_id"]
+    assert other["claim_id"] != first["claim_id"]
+    assert [call["seed"] for call in builder.properties_calls] == [11, 12]
+    assert store.get_claim(other["claim_id"]).predicate.detail["seed"] == 12
+
+
+def test_how_many_examples_a_search_draws_can_be_asked_for(tmp_path):
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in GATES[: GATES.index("property_check")]:
+        _run(client, cfg, action)
+
+    client.post(
+        "/run",
+        json={"action": "property_check", "region": cfg.region_id,
+              "config": {"seed": 5, "max_examples": 20}},
+        headers=HEADERS,
+    )
+
+    assert builder.properties_calls[0]["max_examples"] == 20

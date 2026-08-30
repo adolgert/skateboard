@@ -1,35 +1,55 @@
 """The gateway's configuration file: one YAML naming every path and region.
 
 Trust role: this decides which repository, which ledger, which working
-copy, and which strategy each region is checked against. A wrong entry
-here does not make a check lie, but it makes every claim describe
-something other than what the person thinks they are reviewing. So the
-file is read strictly: an unknown key, a missing field, or a strategy
+copy, which code, and which strategy each region is checked against. A
+wrong entry here does not make a check lie, but it makes every claim
+describe something other than what the person thinks they are
+reviewing. So the file is read strictly: an unknown key, a missing
+field, a region naming a code the file does not describe, or a strategy
 file that is not on disk stops the gateway at startup rather than
 surfacing as a puzzling failure on the first request.
 
-The file has two sections::
+The file has three sections::
 
     version: 1
     paths:
       repo: /repo
       ledger_root: /ledger
       working_copy: /working
-      datasets_root: /datasets
+      programs: /programs
       strategies: /strategies
       seed: /seed
       sessions: /sessions
+    codes:
+      tsunami:
+        manifest: tsunami/manifest.yaml
     regions:
       "ch04:step":
+        code: tsunami
+        phase: porting
         spec_path: notes/regions/ch04-step.sese.yaml
         strategy: stdpar_managed
+        baseline_strategy: cpu_reference
         visible_dataset: visible
 
-Each region's directories are built by joining the two: the ledger lives
-at `<ledger_root>/<baseline commit>/<region id with ':' replaced by
-'-'>`, the strategy at `<strategies>/<strategy>.yaml`, and the visible
-dataset at `<datasets_root>/<visible_dataset>`. Nothing spells those
+A region's `phase` says which kind of session it is for. A `porting`
+region names a spec and a visible dataset and its code's manifest must
+be complete -- everything a port is checked against has to exist before
+the first request. An `onboarding` region is where that description is
+written: it has no spec, no dataset, and a manifest that may still be
+minimal.
+
+Each region's directories are built by joining them: the ledger lives at
+`<ledger_root>/<baseline commit>/<region id with ':' replaced by '-'>`,
+the strategy at `<strategies>/<strategy>.yaml` (and the baseline
+strategy the same way), a code's manifest at
+`<programs>/<manifest>`, and the visible dataset at
+`<programs>/<code>/datasets/<visible_dataset>`. Nothing spells those
 layouts a second time.
+
+A code's manifest path is relative to `programs` rather than absolute so
+that the same file describes the deployment seen from inside the
+container and from the host, where only the `paths` values differ.
 
 `sessions` is the odd one out: it names where the agent's own session
 transcripts are written, which nothing in the gateway ever reads. It is
@@ -46,14 +66,23 @@ import yaml
 
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import baseline_commit, init_baseline_repo, region_slug
+from equivalent.ledger.acceptance import ONBOARDING, PHASES, PORTING
+from equivalent.manifest.schema import Manifest, load_manifest
 
 VERSION = 1
 
-TOP_LEVEL_KEYS = ("version", "paths", "regions")
-REQUIRED_PATH_KEYS = ("repo", "ledger_root", "working_copy", "strategies")
-OPTIONAL_PATH_KEYS = ("datasets_root", "seed", "sessions")
-REQUIRED_REGION_KEYS = ("spec_path", "strategy")
-OPTIONAL_REGION_KEYS = ("visible_dataset",)
+TOP_LEVEL_KEYS = ("version", "paths", "codes", "regions")
+REQUIRED_PATH_KEYS = ("repo", "ledger_root", "working_copy", "programs", "strategies")
+OPTIONAL_PATH_KEYS = ("seed", "sessions")
+REQUIRED_CODE_KEYS = ("manifest",)
+REQUIRED_REGION_KEYS = ("code", "phase", "strategy", "baseline_strategy")
+# Both of these belong to a porting region: `spec_path` is required of
+# one and meaningless to an onboarding region, and `visible_dataset` is
+# optional even when porting.
+OPTIONAL_REGION_KEYS = ("spec_path", "visible_dataset")
+# Where a code keeps the datasets a region may name, under its own
+# directory. One spelling, so the deployment and this reader agree.
+DATASETS_DIR = "datasets"
 
 
 @dataclass(frozen=True)
@@ -63,8 +92,8 @@ class Paths:
     repo: Path
     ledger_root: Path
     working_copy: Path
+    programs: Path
     strategies: Path
-    datasets_root: Path | None = None
     seed: Path | None = None
     # Where the agent's own session transcripts are written. The gateway
     # never reads this -- it is here so the reading tools find the
@@ -76,9 +105,19 @@ class Paths:
 
 
 @dataclass(frozen=True)
+class CodeConfig:
+    """One code the deployment holds, and the manifest describing it."""
+
+    name: str
+    manifest_path: Path
+    manifest: Manifest
+
+
+@dataclass(frozen=True)
 class GatewayConfig:
     paths: Paths
     baseline_commit: str
+    codes: dict[str, CodeConfig]
     regions: dict[str, RegionConfig]
 
 
@@ -123,26 +162,86 @@ def _resolve_baseline_commit(paths: Paths, where: str, seed_if_empty: bool) -> s
     return commit
 
 
+def _load_code(name: str, raw: dict, paths: Paths, where: str) -> CodeConfig:
+    code_where = f"{where} code '{name}'"
+    _check_keys(raw, REQUIRED_CODE_KEYS, (), code_where)
+    manifest_path = paths.programs / raw["manifest"]
+    if not manifest_path.is_file():
+        raise ValueError(
+            f"{code_where} names manifest '{raw['manifest']}', but {manifest_path} does not exist"
+        )
+    return CodeConfig(name=name, manifest_path=manifest_path, manifest=load_manifest(manifest_path))
+
+
+def _strategy_path(name, field: str, paths: Paths, region_where: str) -> Path:
+    path = paths.strategies / f"{name}.yaml"
+    if not path.is_file():
+        raise ValueError(
+            f"{region_where} names {field} '{name}', but {path} does not exist"
+        )
+    return path
+
+
+def _region_spec_path(raw: dict, phase: str, region_where: str) -> str | None:
+    """The spec the analyzer reads, which a porting region must name.
+
+    An onboarding region may leave it out, and nothing reads it if it is
+    there: no single region has been chosen yet, and the allow-list comes
+    from the strategy instead.
+    """
+    spec_path = raw.get("spec_path")
+    if phase == PORTING and spec_path is None:
+        raise ValueError(
+            f"{region_where} is a porting region and names no spec_path; the analyzer "
+            f"reads that file to say what the region is"
+        )
+    return spec_path
+
+
 def _load_region(
-    region_id: str, raw: dict, paths: Paths, commit: str, where: str
+    region_id: str, raw: dict, paths: Paths, codes: dict, commit: str, where: str
 ) -> RegionConfig:
     region_where = f"{where} region '{region_id}'"
     _check_keys(raw, REQUIRED_REGION_KEYS, OPTIONAL_REGION_KEYS, region_where)
 
-    strategy_path = paths.strategies / f"{raw['strategy']}.yaml"
-    if not strategy_path.is_file():
+    code = codes.get(raw["code"])
+    if code is None:
         raise ValueError(
-            f"{region_where} names strategy '{raw['strategy']}', but {strategy_path} does not exist"
+            f"{region_where} names code '{raw['code']}', which the codes section does "
+            f"not describe; it has {sorted(codes)}"
         )
 
+    phase = raw["phase"]
+    if phase not in PHASES:
+        raise ValueError(
+            f"{region_where} has phase {phase!r}; it must be one of {list(PHASES)}"
+        )
+    spec_path = _region_spec_path(raw, phase, region_where)
+    if phase == PORTING and not code.manifest.complete:
+        raise ValueError(
+            f"{region_where} is a porting region, but the manifest of code "
+            f"'{code.name}' still lacks {code.manifest.missing_parts()}; a code is "
+            f"described that fully by onboarding it before any region of it is ported"
+        )
+
+    strategy_path = _strategy_path(raw["strategy"], "strategy", paths, region_where)
+    # The baseline is built with a strategy of its own -- the comparison
+    # floor a speedup is measured against. It is named per region rather
+    # than fixed here, because what counts as a fair floor is a property
+    # of the code and the machine, not of this reader.
+    baseline_strategy_path = _strategy_path(
+        raw["baseline_strategy"], "baseline_strategy", paths, region_where,
+    )
+
     visible_dataset_dir = None
+    if phase == ONBOARDING and raw.get("visible_dataset") is not None:
+        raise ValueError(
+            f"{region_where} is an onboarding region and names visible_dataset "
+            f"'{raw['visible_dataset']}'; the datasets a code is judged against are "
+            f"what onboarding produces, so there is none to name yet"
+        )
     if raw.get("visible_dataset") is not None:
-        if paths.datasets_root is None:
-            raise ValueError(
-                f"{region_where} names visible_dataset '{raw['visible_dataset']}', but "
-                f"paths has no datasets_root to look it up in"
-            )
-        visible_dataset_dir = paths.datasets_root / raw["visible_dataset"]
+        visible_dataset_dir = paths.programs / code.name / DATASETS_DIR / raw["visible_dataset"]
         if not visible_dataset_dir.is_dir():
             raise ValueError(
                 f"{region_where} names visible_dataset '{raw['visible_dataset']}', but "
@@ -151,11 +250,15 @@ def _load_region(
 
     return RegionConfig(
         region_id=region_id,
+        code=code.name,
+        phase=phase,
         repo_dir=paths.repo,
-        spec_path=raw["spec_path"],
+        spec_path=spec_path,
         ledger_dir=paths.ledger_root / commit / region_slug(region_id),
         strategy_path=strategy_path,
+        baseline_strategy_path=baseline_strategy_path,
         working_copy_dir=paths.working_copy,
+        manifest=code.manifest,
         visible_dataset_dir=visible_dataset_dir,
     )
 
@@ -184,11 +287,17 @@ def load_gateway_config(path, *, seed_if_empty: bool = False) -> GatewayConfig:
         raise ValueError(f"{where}: working_copy {paths.working_copy} is not a directory")
     if not paths.strategies.is_dir():
         raise ValueError(f"{where}: strategies {paths.strategies} is not a directory")
+    if not paths.programs.is_dir():
+        raise ValueError(f"{where}: programs {paths.programs} is not a directory")
 
     commit = _resolve_baseline_commit(paths, where, seed_if_empty)
 
+    codes = {
+        name: _load_code(name, code_raw, paths, where)
+        for name, code_raw in raw["codes"].items()
+    }
     regions = {
-        region_id: _load_region(region_id, region_raw, paths, commit, where)
+        region_id: _load_region(region_id, region_raw, paths, codes, commit, where)
         for region_id, region_raw in raw["regions"].items()
     }
-    return GatewayConfig(paths=paths, baseline_commit=commit, regions=regions)
+    return GatewayConfig(paths=paths, baseline_commit=commit, codes=codes, regions=regions)

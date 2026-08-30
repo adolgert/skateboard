@@ -7,13 +7,14 @@
 build/
 dist/
 
-# Fortran build artifacts
+# Fortran build artifacts. A code's baseline tree is also where the Fortran
+# gets compiled by hand, so its executables land beside the source.
 *.mod
 *.o
-demo/work/tsunami
-demo/capture/.build/
+programs/*/baseline/tsunami
+programs/*/harness/.build/
 
-# Local environment (contains a local dev token; use demo/.env.example)
+# A local token left over from the demonstration harness's own .env
 demo/.env
 
 # Deployment state: the gateway's repository, the ledger, the working copy,

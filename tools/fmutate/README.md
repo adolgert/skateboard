@@ -12,6 +12,14 @@ property of the gate as configured, not of a model of the gate.
 
 Background and the survey that motivated the design: [`docs/coverage-testing.md`](../../docs/coverage-testing.md).
 
+The operator tables and the generator here are also the harness's own: they are
+carried over, operator for operator, into `services/builder/mutate.py`, which
+runs inside the builder as the `harness_self_check` step of onboarding a code.
+That step asks the same question about a code being brought in, with the tree's
+own makefile and the bands the code proposes, and returns per-mutant verdicts
+rather than outputs. This tool is the standalone one: it runs on the host, with
+gfortran, and it is where a coverage prepass and a checked rebuild live.
+
 ## Why not an existing tool
 
 There isn't one. [Mothra](https://fortranwiki.org/fortran/show/Mutation+testing+frameworks)
@@ -25,7 +33,7 @@ cannot be expressed.
 ## Usage
 
 ```bash
-python3 tools/fmutate/fmutate.py tools/fmutate/targets/demo.json --checked
+python3 tools/fmutate/fmutate.py tools/fmutate/targets/tsunami.json --checked
 ```
 
 Useful flags:
@@ -55,13 +63,13 @@ policy and under bitwise equality. A mutant that changes output bitwise but
 passes the tolerance policy is one the tolerance is hiding. **This, not the
 mutation score, is the metric to watch.** It gives a principled ratchet for
 recalibration: when tolerances are widened for a new compiler (the pending
-`nvfortran` recalibration in `demo/oracle/tolerances.json`), widen them only as
-far as the gap stays at zero. `--fail-on-gap` enforces that in CI.
+`nvfortran` recalibration in `programs/tsunami/baseline/harness/tolerances.json`),
+widen them only as far as the gap stays at zero. `--fail-on-gap` enforces that in CI.
 
 **Killed only by the checked build.** With `--checked`, survivors are rebuilt
 with `-fcheck=all -finit-real=snan -ffpe-trap=...` and replayed again. Anything
 that dies there is a fault the release-mode gate provably cannot see. On the
-demo target this is 12 mutants, all of them array-section bound errors in the
+tsunami target this is 12 mutants, all of them array-section bound errors in the
 interior stencil of `diff_centered`:
 
 ```
@@ -103,17 +111,18 @@ about what a parser would have done with Fortran 2008.
 ## Target files
 
 A target describes one kernel and its corpus. Paths are relative to the repo
-root. See `targets/demo.json`.
+root. See `targets/tsunami.json`.
 
 ```jsonc
 {
   "name": "human-readable label",
-  "src_dir": "demo/work/src",           // where the kernel sources live
+  "src_dir": "programs/tsunami/baseline/src", // where the kernel sources live
   "mutate": ["mod_kernel.f90"],         // which of them to mutate
   "build": {
     "fc": "gfortran",
     "sources": ["mod_params.f90", "..."],        // compiled from src_dir, in order
-    "extra_sources": ["demo/capture/replay.f90"],// driver + harness, absolute-ish
+    "extra_sources": ["services/builder/harness/npy_io.f90",
+                      "programs/tsunami/baseline/harness/replay.f90"], // harness + the code's driver
     "exe": "replay",
     "run_args": ["{case_dir}"],                  // {case_dir} is substituted
     "flags":          ["-O2", "..."],            // release build (the gate's build)
@@ -121,23 +130,32 @@ root. See `targets/demo.json`.
     "checked_flags":  ["-fcheck=all", "-finit-real=snan", "..."]
   },
   "corpus": {
-    "inputs":   "demo/orchestrator/datasets/visible",  // per-case input dirs
-    "expected": "demo/oracle/captures/visible",        // per-case reference dirs
+    "inputs":   "programs/tsunami/datasets/visible",   // per-case input dirs
+    "expected": "programs/tsunami/captures/visible",   // per-case reference dirs
     "case_glob": "case[0-9]*",
-    "input_files": ["h_in.bin", "u_in.bin"],
-    "variables": { "h": "h_out.bin", "u": "u_out.bin" }
+    "input_files": ["h.npy", "u.npy"],           // copied into the case dir
+    "variables": { "h": "h.out.npy", "u": "u.out.npy" },
+    "raw_dtype": "<f8"                           // only for corpora that are not .npy
   },
   "comparator": {
-    "module":     "demo/oracle/compare.py",     // must expose compare_variable()
-    "tolerances": "demo/oracle/tolerances.json" // must have a "variables" key
+    "module":     "equivalent/capture/compare.py",       // must expose compare_variable()
+    "tolerances": "programs/tsunami/baseline/harness/tolerances.json"  // must have a "variables" key
   }
 }
 ```
 
-The driver contract is the one `demo/capture/replay.f90` already implements: it
-is invoked as `driver <case_dir>`, reads `input_files` from that directory, and
-writes the files named in `variables` back into it. Any kernel wrapped that way
-can be targeted without changing this tool.
+The driver contract is the harness's own: the driver is invoked as
+`driver <case_dir>`, reads `input_files` from that directory, and writes the
+files named in `variables` back into it. Every code carries its own driver
+implementing it, in its tree -- `programs/tsunami/baseline/harness/replay.f90`
+is the one above -- compiled against `npy_io.f90`, which is the harness's and is
+baked into the builder image. Any kernel wrapped that way can be targeted
+without changing this tool.
+
+Corpus files ending in `.npy` carry their own element type, shape, and element
+order, and are read as they are. A target whose corpus is raw streams instead
+has to say what is in them with `raw_dtype`; without it, such a file is
+refused rather than guessed at.
 
 `case_glob` is deliberately `case[0-9]*` rather than `case*`: the latter also
 matches `cases.json`.
@@ -149,7 +167,7 @@ how much you should worry:
 
 1. **An oracle hole.** The suite genuinely cannot distinguish a wrong kernel.
 2. **An input-selection gap.** The mutant is equivalent *for this corpus only*.
-   Both survivors on the demo target are this: `/ dx` → `* dx` is undetectable
+   Both survivors on the tsunami target are this: `/ dx` → `* dx` is undetectable
    because `mod_params.f90` sets `dx = 1.0`. No oracle strengthening reaches it;
    only a capture case with `dx /= 1.0` does.
 3. **A genuinely equivalent mutant.** Unavoidable; typically 10–40% of mutants
@@ -162,7 +180,7 @@ running it.
 ## Cost
 
 Each mutant is one compile plus one replay per case, run in parallel across
-workers. The demo target (93 mutants, 23 filtered as uncovered, 5 cases,
+workers. The tsunami target (93 mutants, 23 filtered as uncovered, 5 cases,
 `--checked`) takes a couple of minutes on a workstation. Cost scales with kernel
 size, so keep targets scoped to the port boundary rather than whole programs —
 which is the same scoping the capture-replay harness already imposes.

@@ -19,10 +19,13 @@ pass() {
 
 : "${EQUIVALENT_GATEWAY_URL:?EQUIVALENT_GATEWAY_URL is not set}"
 : "${EQUIVALENT_GATEWAY_TOKEN:?EQUIVALENT_GATEWAY_TOKEN is not set}"
+: "${EQUIVALENT_REGION:?EQUIVALENT_REGION is not set}"
 
-# 1. The gateway answers, with the token.
+# 1. The gateway answers, with the token. The table is asked for by region:
+#    the actions a session has are the actions of its region's phase.
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
     -H "Authorization: Bearer ${EQUIVALENT_GATEWAY_TOKEN}" \
+    --get --data-urlencode "region=${EQUIVALENT_REGION}" \
     "${EQUIVALENT_GATEWAY_URL}/table")"
 [ "${code}" = "200" ] || fail "the gateway's action table answered ${code}, not 200"
 pass "the gateway answers on ${EQUIVALENT_GATEWAY_URL}"

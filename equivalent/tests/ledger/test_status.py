@@ -2,7 +2,13 @@ import json
 
 import pytest
 
-from equivalent.ledger.acceptance import ACCEPTANCE_REQUIREMENTS
+from equivalent.ledger.acceptance import (
+    ACCEPTANCE_REQUIREMENTS,
+    ONBOARDING,
+    ONBOARDING_REQUIREMENTS,
+    PORTING,
+    requirements_for,
+)
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 
@@ -41,7 +47,7 @@ def test_status_reports_the_newer_tree(tmp_path):
         _claim("c-0002", "2026-01-02T00:00:00Z", "tree", tree_new, "build/replay", "pass"),
     ])
 
-    status = compute_status(store)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
     assert status["tree"] == tree_new
 
 
@@ -65,7 +71,7 @@ def test_status_is_accepted_when_every_requirement_passes_on_one_tree(tmp_path):
     store = LedgerStore(tmp_path / "region")
     _write_claims(store, _all_passing_claims(tree, frozen))
 
-    status = compute_status(store)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
     assert status["accepted"] is True
     assert all(row["status"] == "present" and row["verdict"] == "pass" for row in status["rows"])
 
@@ -76,7 +82,7 @@ def test_status_reports_a_removed_claim_as_missing_with_its_producing_action(tmp
     claims = [c for c in _all_passing_claims(tree, frozen) if c["predicateType"] != "regression/holdout"]
     _write_claims(store, claims)
 
-    status = compute_status(store)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
     assert status["accepted"] is False
     missing = [row for row in status["rows"] if row["status"] == "missing"]
     assert len(missing) == 1
@@ -94,7 +100,7 @@ def test_a_failing_latest_claim_does_not_satisfy_a_requirement(tmp_path):
     claims.append(_claim("c-0099", "2026-01-02T00:00:00Z", "tree", tree, "build/replay", "fail"))
     _write_claims(store, claims)
 
-    status = compute_status(store)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
     assert status["accepted"] is False
     row = next(r for r in status["rows"] if r["predicateType"] == "build/replay")
     assert row["status"] == "missing"
@@ -105,7 +111,41 @@ def test_a_failing_latest_claim_does_not_satisfy_a_requirement(tmp_path):
 
 def test_status_on_an_empty_ledger_has_no_tree_and_is_not_accepted(tmp_path):
     store = LedgerStore(tmp_path / "region")
-    status = compute_status(store)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
     assert status["tree"] is None
     assert status["accepted"] is False
+    assert all(row["status"] == "missing" for row in status["rows"])
+
+
+def test_an_onboarding_region_is_judged_by_the_onboarding_list(tmp_path):
+    tree = "3" * 64
+    store = LedgerStore(tmp_path / "region")
+    _write_claims(store, [
+        _claim(f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", "tree", tree, req.predicate_type, "pass")
+        for i, req in enumerate(ONBOARDING_REQUIREMENTS, start=1)
+    ])
+
+    status = compute_status(store, requirements_for(ONBOARDING), ONBOARDING)
+
+    assert status["phase"] == ONBOARDING
+    assert [row["predicateType"] for row in status["rows"]] == [
+        req.predicate_type for req in ONBOARDING_REQUIREMENTS
+    ]
+    assert status["accepted"] is True
+    # None of the porting requirements is asked for: an onboarding session
+    # has no region to run the analyzer on and no port to time.
+    assert "sese/verified" not in json.dumps(status)
+
+
+def test_the_same_ledger_read_as_a_port_is_missing_everything(tmp_path):
+    tree = "3" * 64
+    store = LedgerStore(tmp_path / "region")
+    _write_claims(store, [
+        _claim(f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", "tree", tree, req.predicate_type, "pass")
+        for i, req in enumerate(ONBOARDING_REQUIREMENTS, start=1)
+    ])
+
+    status = compute_status(store, requirements_for(PORTING), PORTING)
+
+    assert status["phase"] == PORTING
     assert all(row["status"] == "missing" for row in status["rows"])

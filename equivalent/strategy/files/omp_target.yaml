@@ -1,9 +1,10 @@
 name: omp_target
 version: 1
 
-# fnmatch's "*" already matches across "/" (it has no directory-boundary
-# meaning here), so "src/*.f90" covers both src/mod_kernel.f90 and something
-# like src/PESs/N4_UMN_PES_Class.F90 -- no "**" needed or supported.
+# Matching ignores case, so "src/*.f90" covers src/PESs/N4_UMN_PES_Class.F90
+# as well as src/mod_kernel.f90. "*" also matches across "/" (it has no
+# directory-boundary meaning here), so a pattern under src/ reaches any depth
+# below it -- no "**" needed or supported.
 allow_globs:
   - "src/*.f90"
   - "notes/regions/*.yaml"
@@ -11,7 +12,7 @@ allow_globs:
 languages:
   fortran:
     compiler: nvfortran
-    # Exactly what demo/builder/stages.py PROFILES["omp_target"] passes to
+    # Exactly what services/builder/stages.py PROFILES["omp_target"] passes to
     # nvfortran today. Note this includes mem:managed even though the current
     # agent-runner prompt text says "there is NO managed memory on this rung"
     # -- the flags below are what actually gets compiled; the prompt is wrong.
@@ -26,6 +27,12 @@ link_flags: []
 required_tools:
   - nvfortran
   - compute-sanitizer
+  # A code may carry its own module of invariants, and the property check
+  # runs it with pytest and Hypothesis inside the builder. Every strategy
+  # asks for them, not only the porting ones: which strategy a code with
+  # properties is ported under is the region's choice, not the code's.
+  - "python:pytest"
+  - "python:hypothesis"
 
 # Same NVCOMPILER_ACC_NOTIFY launch-counting as stdpar_managed (notify: omp).
 # mandatory: true -- OMP_TARGET_OFFLOAD=MANDATORY is also set, so a host
@@ -39,4 +46,9 @@ sanitizers:
   - racecheck
   - initcheck
 
-analyzer_command: "python3 tools/regionharness/check_sese.py"
+# Which visible cases the sanitizers see. "first" here because a sanitizer run
+# is far slower than a plain replay and the visible cases differ only in their
+# input data; "all" is the other choice.
+sanitize_cases: first
+
+analyzer_command: "python3 -m equivalent.analyzers.check_sese"

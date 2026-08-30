@@ -1,0 +1,60 @@
+{
+  "name": "tsunami (mod_kernel + mod_diff, visible corpus)",
+  "src_dir": "programs/tsunami/baseline/src",
+  "mutate": [
+    "mod_kernel.f90",
+    "mod_diff.f90"
+  ],
+  "build": {
+    "fc": "gfortran",
+    "sources": [
+      "mod_params.f90",
+      "mod_diff.f90",
+      "mod_initial.f90",
+      "mod_kernel.f90"
+    ],
+    "extra_sources": [
+      "services/builder/harness/npy_io.f90",
+      "programs/tsunami/baseline/harness/replay.f90"
+    ],
+    "exe": "replay",
+    "run_args": [
+      "{case_dir}"
+    ],
+    "flags": [
+      "-O2",
+      "-ffree-line-length-none"
+    ],
+    "coverage_flags": [
+      "-O0",
+      "-g",
+      "--coverage",
+      "-ffree-line-length-none"
+    ],
+    "checked_flags": [
+      "-O0",
+      "-g",
+      "-ffree-line-length-none",
+      "-fcheck=all",
+      "-finit-real=snan",
+      "-ffpe-trap=invalid,zero,overflow"
+    ]
+  },
+  "corpus": {
+    "inputs": "programs/tsunami/datasets/visible",
+    "expected": "programs/tsunami/captures/visible",
+    "case_glob": "case[0-9]*",
+    "input_files": [
+      "h.npy",
+      "u.npy"
+    ],
+    "variables": {
+      "h": "h.out.npy",
+      "u": "u.out.npy"
+    }
+  },
+  "comparator": {
+    "module": "equivalent/capture/compare.py",
+    "tolerances": "programs/tsunami/baseline/harness/tolerances.json"
+  }
+}

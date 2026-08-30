@@ -1,4 +1,5 @@
 """Starting the gateway the way a deployment starts it: from the environment."""
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -8,24 +9,28 @@ from fastapi.testclient import TestClient
 
 from equivalent.gateway.main import build_app_from_env
 from equivalent.gateway.submit import baseline_commit
+from equivalent.tests.fakes import FakeBuilder, write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
 STRATEGIES_DIR = Path(__file__).resolve().parents[2] / "strategy" / "files"
+REGION = {"region": "ch04:step"}
 SPEC_PATH = "notes/regions/ch04-step.sese.yaml"
 
 SOURCE = """\
 module mod_kernel
 contains
-subroutine step(h, u)
-  real :: h, u
-  h = h + u
+subroutine step(a, b)
+  real :: a, b
+  a = a + b
 end subroutine step
 end module mod_kernel
 """
 
 SPEC = (
     "region: ch04:step\n"
+    "files:\n"
+    "  - src/mod_kernel.f90\n"
     "anchor:\n"
     "  file: src/mod_kernel.f90\n"
     '  pst_node: "step@3-5"\n'
@@ -33,7 +38,18 @@ SPEC = (
 )
 
 
-def _deployment(tmp_path, monkeypatch, token=TOKEN, **extra_env):
+def _strategies_requiring(tmp_path, extra_tool):
+    """A strategies directory whose one strategy also requires `extra_tool`."""
+    d = yaml.safe_load((STRATEGIES_DIR / "stdpar_managed.yaml").read_text())
+    d["required_tools"].append(extra_tool)
+    directory = tmp_path / "strategies"
+    directory.mkdir()
+    (directory / "stdpar_managed.yaml").write_text(yaml.safe_dump(d))
+    shutil.copy(STRATEGIES_DIR / "cpu_reference.yaml", directory / "cpu_reference.yaml")
+    return directory
+
+
+def _deployment(tmp_path, monkeypatch, token=TOKEN, strategies=STRATEGIES_DIR, **extra_env):
     """Directories and a configuration file, named by the environment, with nothing seeded yet."""
     seed = tmp_path / "seed"
     (seed / "src").mkdir(parents=True)
@@ -45,6 +61,7 @@ def _deployment(tmp_path, monkeypatch, token=TOKEN, **extra_env):
     (working / "notes" / "regions").mkdir(parents=True)
     (working / SPEC_PATH).write_text(SPEC)
 
+    programs = write_program(tmp_path).parent
     config_path = tmp_path / "gateway.yaml"
     config_path.write_text(yaml.safe_dump({
         "version": 1,
@@ -52,10 +69,15 @@ def _deployment(tmp_path, monkeypatch, token=TOKEN, **extra_env):
             "repo": str(tmp_path / "repo"),
             "ledger_root": str(tmp_path / "ledger"),
             "working_copy": str(working),
-            "strategies": str(STRATEGIES_DIR),
+            "programs": str(programs),
+            "strategies": str(strategies),
             "seed": str(seed),
         },
-        "regions": {"ch04:step": {"spec_path": SPEC_PATH, "strategy": "stdpar_managed"}},
+        "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
+        "regions": {"ch04:step": {
+            "code": "tsunami", "phase": "porting", "spec_path": SPEC_PATH,
+            "strategy": "stdpar_managed", "baseline_strategy": "cpu_reference",
+        }},
     }))
 
     monkeypatch.setenv("EQUIVALENT_CONFIG", str(config_path))
@@ -91,8 +113,8 @@ def test_the_gateway_it_builds_serves_the_table_and_still_wants_the_token(tmp_pa
     _deployment(tmp_path, monkeypatch)
     client = TestClient(build_app_from_env())
 
-    assert client.get("/table", headers=HEADERS).status_code == 200
-    assert client.get("/table").status_code == 401
+    assert client.get("/table", params=REGION, headers=HEADERS).status_code == 200
+    assert client.get("/table", params=REGION).status_code == 401
 
 
 def test_with_no_builder_or_oracle_configured_the_analyzer_side_still_works(tmp_path, monkeypatch):
@@ -148,3 +170,36 @@ def test_a_missing_config_variable_names_the_variable(tmp_path, monkeypatch):
         build_app_from_env()
 
     assert "EQUIVALENT_CONFIG" in str(excinfo.value)
+
+
+def test_startup_accepts_a_builder_that_has_every_required_tool(tmp_path, monkeypatch):
+    _deployment(tmp_path, monkeypatch)
+
+    app = build_app_from_env(builder=FakeBuilder())
+
+    assert TestClient(app).get("/table", params=REGION, headers=HEADERS).status_code == 200
+
+
+def test_a_required_tool_the_builder_lacks_stops_startup_and_names_it(tmp_path, monkeypatch):
+    # The strategy says which tools the build needs. The builder is the
+    # thing that would run them, so it is asked before the first request
+    # rather than after an action fails in a way nobody can read.
+    _deployment(tmp_path, monkeypatch, strategies=_strategies_requiring(tmp_path, "flang"))
+    builder = FakeBuilder()
+
+    with pytest.raises(ValueError) as excinfo:
+        build_app_from_env(builder=builder)
+
+    message = str(excinfo.value)
+    assert "flang" in message
+    assert "stdpar_managed" in message
+
+
+def test_a_builder_that_does_not_answer_stops_startup(tmp_path, monkeypatch):
+    # Nothing on this port, so the client's connection is refused at once.
+    _deployment(tmp_path, monkeypatch, EQUIVALENT_BUILDER_URL="http://127.0.0.1:1")
+
+    with pytest.raises(ValueError) as excinfo:
+        build_app_from_env()
+
+    assert "/healthz" in str(excinfo.value)

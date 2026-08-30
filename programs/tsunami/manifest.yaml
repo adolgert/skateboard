@@ -1,0 +1,66 @@
+version: 1
+name: tsunami
+source:
+  # The tracked tree that becomes the gateway's baseline. Written on a
+  # line of its own: promoting a code rewrites this one line, and reads
+  # nothing else in the file.
+  root: baseline
+  patterns:                 # files that count as source; sent to the builder
+    - "**/*.f90"
+    - "**/*.F90"
+    - "**/*.f08"
+    - "**/*.f03"
+    - "**/*.f"
+    - "**/*.F"
+    - "**/*.for"
+    - "**/*.inc"
+    - "Makefile"
+    - "**/*.mk"
+build:
+  makefile: Makefile        # relative to the tree root
+  targets:
+    replay:  {target: replay,  executable: replay}
+    timing:  {target: timing,  executable: tsunami}
+    capture: {target: capture, executable: gen_reference}
+interface:
+  module: mod_kernel
+  entry: step
+  # The files that implement the region, relative to the tree root. A port
+  # edits these, and the harness's own self-check mutates them to ask
+  # whether the gate would notice a wrong one.
+  files: [src/mod_kernel.f90, src/mod_diff.f90]
+  inputs:
+    - {name: h, dtype: f32, rank: 1}
+    - {name: u, dtype: f32, rank: 1}
+  outputs:
+    - {name: h, dtype: f32, rank: 1}
+    - {name: u, dtype: f32, rank: 1}
+datasets:
+  visible: {args: ["100", "5000", "25", "0.02"]}
+  holdout: {args: ["100", "5000", "60", "0.01"]}
+timing:
+  # The problem size, as the program's own first argument. It is the same
+  # number the program defaults to, written here so that changing what is
+  # timed is an edit to this file rather than to a source file.
+  args: ["20000"]
+  # Files the run writes, compared element by element against the files
+  # the baseline program wrote. Each has its own band in the tolerance
+  # file, under `files` and keyed by the path spelled here -- not the
+  # band the region variable `h` is compared within, even though the file
+  # holds the same quantity. One call of the region reproduces its answer
+  # exactly; 5000 steps of it do not, because two compilations of the
+  # same source drift apart over that many float32 updates. The two bands
+  # measure different things and the tolerance file says which is which.
+  outputs: [h.npy]
+  budget_s: 300
+  env:
+    # The pristine kernel returns difference arrays by value, so the CPU
+    # baseline allocates temporaries every step; keep the arena so the
+    # stencil is timed, not page faults.
+    MALLOC_TRIM_THRESHOLD_: "-1"
+    MALLOC_MMAP_THRESHOLD_: "1073741824"
+tolerances: harness/tolerances.json   # relative to the source tree root
+# This code's own invariants, as a pytest module the property check runs
+# against the replay binary. Relative to the source tree root, like the
+# tolerances above. A code with none writes `properties: null`.
+properties: harness/properties.py

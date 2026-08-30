@@ -3,22 +3,45 @@
 Everything in this directory is deployment: container definitions, the
 gateway's configuration, and the scripts that start and check a running
 stack. The only code here is `seed.py`, which writes the baseline, and
-`walkthrough.py`, which drives one region end to end. Both import the
-`equivalent` package; neither decides anything.
+the two walkthroughs, which drive one region end to end — `walkthrough.py`
+a port, `onboard_walkthrough.py` a code being brought in. None of them
+decides anything.
+
+What is deployed comes from two directories above this one: `programs/`,
+one directory per code, holding that code's manifest, baseline sources
+(including its own makefile, replay driver, and capture program),
+datasets, captures, and tolerance policy; and `services/`, holding the
+builder and the oracle. The builder knows no code: it builds a submitted
+tree by running that tree's own makefile, with the compiler and flags
+the strategy names, and reports back what the compiler was actually
+asked to do. Both image builds take the repository root as
+their context, and the oracle takes the code as a build argument
+(`EQUIVALENT_CODE`) because it bakes that code's answers in: the whole
+of `programs/<code>/`, so that it has the manifest, the captures, and
+the tolerance policy inside the source tree wherever the manifest says
+they are. A code that has not been brought in yet has only some of
+those, and the oracle starts anyway, reporting that it is not ready and
+answering every comparison with the name of what is missing.
 
 | file | what it is |
 | --- | --- |
-| `docker-compose.yml` | the four services and the four networks |
-| `gateway.yaml` | the gateway's configuration, in the container's paths |
-| `gateway/Dockerfile` | the gateway image: the package plus the analyzer |
-| `agent/Dockerfile` | the session image: compilers, a GPU, and the session tool |
-| `seed.py` | writes the baseline the gateway's repository starts from |
+| `docker-compose.yml` | the four networks, the four services that stay up, and the two walkthrough runners that are started on demand |
+| `gateway.<code>.yaml` | the gateway's configuration for a deployment built around that code, in the container's paths; `EQUIVALENT_CODE` picks it |
+| `gateway/Dockerfile` | the gateway image: the package, which holds the analyzer, and a copy of the strategy files |
+| `agent/Dockerfile` | the session image: compilers, a GPU, the session tool, and the harness's own NPY module and property library, so a hand build in a session compiles against what the builder will use |
+| `seed.py` | writes the baseline the gateway's repository starts from, reading which tree from the code's manifest |
+| `hostconfig.py` | rewrites `gateway.<code>.yaml`'s container paths into this machine's, which is how `state/gateway.host.yaml` is produced |
 | `up.sh` | prepare state, seed, build, start, wait for health |
 | `pi.sh` | open an interactive session in the agent container |
-| `walkthrough.sh`, `walkthrough.py` | drive one region from nothing to accepted |
+| `walkthrough.sh`, `walkthrough.py` | drive one region from nothing to accepted; the region is `EQUIVALENT_REGION` |
+| `onboard_walkthrough.sh`, `onboard_walkthrough.py` | bring a code in from its bare baseline to onboarded; the region is `--region`, defaulting to `tsunami:onboard` |
 | `isolation_check.sh` | assert the isolation from inside the agent |
 | `isolation_check_gateway.sh` | assert the gateway's half of it, from here |
 | `down.sh` | stop; with `--reset`, discard state after asking |
+
+The session container also mounts `../docs/onboarding.md` read-only at
+`/docs/onboarding.md`: it is what a session bringing a new code in reads
+to know what to write.
 
 ## The four networks
 
@@ -38,8 +61,12 @@ Every call also carries a bearer token.
 cp .env.example .env          # then set EQUIVALENT_TOKEN to something of your own
 ./up.sh                       # state directories, baseline seed, build, start
 ./walkthrough.sh              # optional: prove the whole path works, end to end
+./onboard_walkthrough.sh      # optional: the same for bringing a code in
 ./pi.sh                       # an interactive session
 ```
+
+Both walkthroughs write into `state/working`, so run them one after the
+other rather than at once.
 
 `up.sh` is safe to run again. It creates what is missing, seeds the baseline
 into `state/seed`, copies that into `state/working` only if the working copy is
@@ -67,11 +94,28 @@ reports, name the configuration instead:
 ledger status --config deploy/state/gateway.host.yaml --region-id ch04:step
 ```
 
-`up.sh` writes `state/gateway.host.yaml`: the same deployment as `gateway.yaml`,
-with the paths of this machine rather than the container's mount points. Both
-are read by the one configuration loader, so there is no second description of
-where a region's files live. Edit `gateway.yaml` and re-run `up.sh` rather than
-editing the generated copy.
+The same file names the region an onboarding session is promoted from,
+once its eight checks have passed and you have read them:
+
+```sh
+ledger promote --config deploy/state/gateway.host.yaml --region-id tsunami:onboard
+```
+
+That writes `programs/<code>/` — the manifest, the baseline, the visible
+dataset, and the captures — and prints the steps that stay yours: the
+commit, a `phase: porting` region in `gateway.<code>.yaml`, and `down.sh` /
+`up.sh`, because the oracle bakes the captures into its image. It
+refuses rather than writing over what is already there; `--replace`
+empties the destinations first and `--programs` writes somewhere else
+entirely, which is how to compare a promotion against what is checked
+in.
+
+`up.sh` writes `state/gateway.host.yaml`: the same deployment as
+`gateway.<code>.yaml`, with the paths of this machine rather than the
+container's mount points. Both are read by the one configuration loader, so
+there is no second description of where a region's files live. Edit
+`gateway.<code>.yaml` and re-run `up.sh` rather than editing the generated
+copy.
 
 ## Logging in, once
 
@@ -116,10 +160,22 @@ the login and the baseline seed.
   that disk goes away with the container. After restarting the builder, re-run
   `build_replay` for the tree you are working on; it rebuilds under the same
   key and the later gates find their workspace again.
-- **The walkthrough runs in a container, not on this machine.** The gateway is
+- **The builder runs a makefile that came in with the submission.** That is
+  what lets any code be built without teaching the builder about it, and it
+  is why the compiler it hands that makefile is a shim that writes down every
+  invocation. The `build/replay` claim carries that log, and a build that
+  compiled without the strategy's flags, or compiled a file that is not the
+  tree's own source, is a failed claim rather than a passed one. The builder
+  has no route off the host either way.
+- **The walkthroughs run in a container, not on this machine.** The gateway is
   on internal networks only, so nothing outside them can reach it — including
-  this terminal. `walkthrough.sh` runs the same script on the agent's network,
-  with the same token the agent uses.
-- **`state/working` is shared between the session and the walkthrough.** They
-  edit the same files. Running the walkthrough over a session in progress will
-  overwrite the kernel it is working on.
+  this terminal. `walkthrough.sh` and `onboard_walkthrough.sh` run their
+  scripts on the agent's network, with the same token the agent uses.
+- **`state/working` is shared between the session and both walkthroughs.** They
+  edit the same files. Running a walkthrough over a session in progress will
+  overwrite what it is working on, and `onboard_walkthrough.sh` additionally
+  deletes anything in the working copy that is not part of the code's bare
+  baseline.
+- **One deployment holds one code.** The repository is seeded from one
+  baseline and the oracle image bakes one code's answers in, so
+  `EQUIVALENT_CODE` is changed by `./down.sh` and `./up.sh`, not on the fly.

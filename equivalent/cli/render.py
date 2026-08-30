@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 
+from equivalent.ledger.acceptance import FINISHED_WORD
+
 from .session import parse_ts
 
 
@@ -23,12 +25,15 @@ def render_status(status: dict, region: str) -> str:
             # The latest claim exists but did not pass; that is still an
             # unmet requirement, shown with the failing claim's id.
             lines.append(
-                f"  {row['predicateType']:<20} {row['verdict']:<6} {row['claim_id']}  (run again: {row['producing_action']})"
+                f"  {row['predicateType']:<20} {row['verdict']:<6} {row['claim_id']}"
+                f"  (fix and run {row['producing_action']} again)"
             )
         else:
             lines.append(f"  {row['predicateType']:<20} MISSING  (run: {row['producing_action']})")
     if status["accepted"]:
-        lines.append(f"ACCEPTED on {short(status['tree'])}")
+        # The word depends on the phase: an onboarded code is ready for a
+        # person to review and promote, an accepted port is ready to merge.
+        lines.append(f"{FINISHED_WORD[status['phase']]} on {short(status['tree'])}")
     return "\n".join(lines) + "\n"
 
 
@@ -107,6 +112,11 @@ def _outcome(row) -> str:
     if line.outcome == "duplicate":
         verdict = f" {row.verdict}" if row.verdict else ""
         return f"-> duplicate {line.claim_id}{verdict}" if line.claim_id else "-> duplicate claims"
+    if line.outcome == "read":
+        # A read of a claim already filed. It is deliberately not worded
+        # like "claim" below: nothing was recorded by this call.
+        verdict = f" {row.verdict}" if row.verdict else ""
+        return f"-> read claim {line.claim_id}{verdict}"
     if line.outcome == "refused":
         missing = ", ".join(item["predicateType"] for item in (line.missing or ()))
         return f"-> refused missing {missing}"

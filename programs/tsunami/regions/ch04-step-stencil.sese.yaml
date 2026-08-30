@@ -1,0 +1,30 @@
+# The same time step as ch04:step, taken as a two-file region: the kernel
+# and the stencil module it calls. A port of this region may move work
+# across that boundary -- inline the centered difference into the kernel,
+# or rewrite it in place -- because both files are unfrozen.
+#
+# This file is the reference copy. A session's working copy gets it laid
+# down at the path the gateway's configuration names, and the analyzer
+# reads it from the submitted tree -- so the line ranges below must match
+# the baseline sources, not whatever the working copy has been edited to.
+#
+# files: is every path the region may edit. A path here need not exist
+# yet; these two do.
+#
+# Both ranges are inclusive. In the baseline src/mod_kernel.f90, line 34
+# is `subroutine step(h, u)` and line 43 is `end subroutine step`; in
+# src/mod_diff.f90, line 13 is `pure function diff_centered(x) result(dx)`
+# and line 24 is `end function diff_centered`.
+region: ch04:step-stencil
+files:
+  - src/mod_kernel.f90
+  - src/mod_diff.f90
+anchor:
+  file: src/mod_kernel.f90
+  pst_node: "step@34-43"
+  entry_symbol: step
+closure:
+  callees:
+    - name: diff_centered
+      file: src/mod_diff.f90
+      lines: "13-24"

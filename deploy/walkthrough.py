@@ -25,19 +25,23 @@ from pathlib import Path
 
 from equivalent.client import connect
 
-SPEC_PATH = "notes/regions/ch04-step.sese.yaml"
 KERNEL_PATH = "src/mod_kernel.f90"
+# Where a session keeps the spec of the region it is working on, inside the
+# working copy. The gateway reads it from the path its own configuration
+# names, so gateway.yaml spells each region's spec_path the same way: the
+# region id with its colon written as a dash.
+WORKING_SPEC_DIR = "notes/regions"
 
-# The region spec: the anchor is the `step` subroutine, which occupies lines
-# 34 to 43 of the baseline kernel -- `subroutine step` through
-# `end subroutine step`, inclusive.
-SPEC = """\
-region: {region}
-anchor:
-  file: src/mod_kernel.f90
-  pst_node: "step@34-43"
-  entry_symbol: step
-"""
+# Where a code keeps its checked-in region specs, under its own directory
+# in the mounted programs tree. The file is named for the region, with the
+# colon that a region id carries replaced by a dash -- the same spelling
+# the gateway uses for a region's branch and its ledger directory.
+REGIONS_DIR = "regions"
+SPEC_SUFFIX = ".sese.yaml"
+
+# Appended to a file named with --touch, to show that the file is really
+# unfrozen: an edit that cannot change what the code computes.
+TOUCH_LINE = "  ! touched by the walkthrough\n"
 
 # A port that passes every gate. This is the attempt that was accepted in the
 # recorded campaign: it materializes the mass flux before differencing it, so
@@ -55,14 +59,23 @@ BAD_KERNEL = "sonnet-attempt01-mod_kernel.f90"
 
 # In order, after the region has a passing analyzer verdict and a submitted
 # port. Each one's preconditions are the claims the ones before it filed.
+# property_check runs the code's own module of invariants; it is on this
+# list because tsunami declares one, and a code that does not would refuse
+# it with an error saying so.
+# time_baseline comes before program_regression because it is the run that
+# stores the baseline program's own outputs, and program_regression comes
+# before time_port because timing a program that computes the wrong thing
+# at the timing size measures nothing.
 GATES = (
     "build_replay",
     "run_replay",
     "sanitize",
     "regression_visible",
+    "property_check",
     "regression_holdout",
-    "time_port",
     "time_baseline",
+    "program_regression",
+    "time_port",
 )
 
 
@@ -112,7 +125,23 @@ def print_status(status: dict) -> None:
     print(f"    accepted  {status['accepted']}")
 
 
-def walk(client, region: str, working: Path, examples: Path) -> None:
+def working_spec_path(region: str) -> str:
+    """Where in the working copy this region's spec belongs."""
+    return f"{WORKING_SPEC_DIR}/{region.replace(':', '-')}{SPEC_SUFFIX}"
+
+
+def spec_source(programs: Path, code: str, region: str) -> Path:
+    """The checked-in region spec this walkthrough lays into the working copy.
+
+    It is copied rather than written from a template here so that what a
+    session analyzes is the file a person reviewed, not a second copy of
+    it that can drift -- an inline template is exactly how the two came
+    to disagree about the region's line range before.
+    """
+    return programs / code / REGIONS_DIR / f"{region.replace(':', '-')}{SPEC_SUFFIX}"
+
+
+def walk(client, region: str, working: Path, examples: Path, spec: Path, touch: str | None = None) -> None:
     heading(1, "status, before this walkthrough has submitted anything")
     status = client.status(region)
     print_status(status)
@@ -137,10 +166,10 @@ def walk(client, region: str, working: Path, examples: Path) -> None:
         # checks run again.
         print("    skipped: the region already has evidence; start from down.sh --reset to see the refusal")
 
-    heading(3, "write the region spec into the working copy and submit it")
-    spec_file = working / SPEC_PATH
+    heading(3, f"copy the region spec into the working copy and submit it ({spec.name})")
+    spec_file = working / working_spec_path(region)
     spec_file.parent.mkdir(parents=True, exist_ok=True)
-    spec_file.write_text(SPEC.format(region=region))
+    shutil.copyfile(spec, spec_file)
     receipt = client.submit(region)
     print(f"    tree      {receipt['tree']}")
     print(f"    frozen    {receipt['frozen']}")
@@ -153,10 +182,18 @@ def walk(client, region: str, working: Path, examples: Path) -> None:
 
     heading(5, f"submit a port that should pass every gate ({GOOD_KERNEL})")
     shutil.copyfile(examples / GOOD_KERNEL, working / KERNEL_PATH)
+    if touch is not None:
+        with (working / touch).open("a") as f:
+            f.write(TOUCH_LINE)
+        print(f"    touched   {touch}")
     receipt = client.submit(region)
     print(f"    tree      {receipt['tree']}")
     for rejected in receipt["rejected"]:
         print(f"    ignored   {rejected['path']} ({rejected['reason']})")
+    if touch is not None:
+        ignored = [r["path"] for r in receipt["rejected"]]
+        expect(touch not in ignored, f"the edit to {touch} was ignored: that file is still frozen")
+        print(f"    applied   {touch}")
     for action in GATES:
         body = client.run(action, region)
         filed = report(action, body)
@@ -188,8 +225,15 @@ def main(argv=None) -> int:
     parser.add_argument("--url", default=os.environ.get("EQUIVALENT_GATEWAY_URL", "http://gateway:8000"))
     parser.add_argument("--token", default=os.environ.get("EQUIVALENT_TOKEN", ""))
     parser.add_argument("--region", default=os.environ.get("EQUIVALENT_REGION", "ch04:step"))
+    parser.add_argument("--code", default=os.environ.get("EQUIVALENT_CODE", "tsunami"))
     parser.add_argument("--working", default="/working", help="the agent's working copy")
+    parser.add_argument("--programs", default="/programs", help="the tree holding one directory per code")
     parser.add_argument("--examples", default="/examples", help="directory holding the recorded ports")
+    parser.add_argument(
+        "--touch",
+        help="append a harmless comment to this file in the working copy before submitting the port, "
+             "to show a second file the region lists is really unfrozen",
+    )
     parser.add_argument("--session-id", default="walkthrough")
     parser.add_argument("--model-id", default="none")
     args = parser.parse_args(argv)
@@ -198,9 +242,14 @@ def main(argv=None) -> int:
         print("no token: pass --token or set EQUIVALENT_TOKEN", file=sys.stderr)
         return 2
 
+    spec = spec_source(Path(args.programs), args.code, args.region)
+    if not spec.is_file():
+        print(f"no region spec at {spec}", file=sys.stderr)
+        return 2
+
     client = connect(args.url, args.token, args.session_id, args.model_id)
     try:
-        walk(client, args.region, Path(args.working), Path(args.examples))
+        walk(client, args.region, Path(args.working), Path(args.examples), spec, args.touch)
     except Surprised as surprise:
         print(f"\nSTOPPED: {surprise}", file=sys.stderr)
         return 1

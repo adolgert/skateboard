@@ -16,9 +16,15 @@ from equivalent.ledger.subjects import Subject, hash_bytes
 
 REQUIRED_FIELDS = (
     "name", "version", "allow_globs", "languages", "link_flags",
-    "required_tools", "device_proof", "sanitizers", "analyzer_command",
+    "required_tools", "device_proof", "sanitizers", "sanitize_cases",
+    "analyzer_command",
 )
 REQUIRED_DEVICE_PROOF_FIELDS = ("notify", "mandatory")
+# Which of the visible cases the sanitizers are run over. "first" is one
+# case, which is what the sanitizers cost; "all" is every visible case.
+# There is no third choice: a value outside this pair would leave the
+# component guessing what was meant.
+SANITIZE_CASE_CHOICES = ("first", "all")
 
 
 @dataclass(frozen=True)
@@ -54,17 +60,27 @@ class Strategy:
     required_tools: tuple
     device_proof: DeviceProof
     sanitizers: tuple
+    sanitize_cases: str  # one of SANITIZE_CASE_CHOICES
     analyzer_command: str
     sha256: str
 
     def allows(self, path: str) -> bool:
         """Would a region under this strategy be allowed to submit this path.
 
-        Uses fnmatch, where "*" matches across "/" (no directory-boundary
-        meaning) -- "src/*.f90" already matches any depth under src/, "**" is
-        neither needed nor given any special handling.
+        Matching ignores case, so "src/*.f90" accepts src/Mod_Kernel.F90 --
+        Fortran spells the same extension both ways, and the builder is sent
+        both, so the allow-list has to agree with it. "*" matches across "/"
+        (no directory-boundary meaning), so "src/*.f90" already matches any
+        depth under src/ and "**" is neither needed nor given any special
+        handling.
+
+        The comparison lower-cases the path and the pattern and then matches
+        case-sensitively, rather than leaving the choice to fnmatch, whose
+        own case rule follows the operating system: this behaves the same on
+        every machine the gateway might run on.
         """
-        return any(fnmatch.fnmatch(path, pattern) for pattern in self.allow_globs)
+        lowered = path.lower()
+        return any(fnmatch.fnmatchcase(lowered, pattern.lower()) for pattern in self.allow_globs)
 
     def rejected_paths(self, paths) -> list:
         """Of the given concrete paths, the ones this strategy does not allow."""
@@ -85,6 +101,12 @@ def load_strategy(path) -> Strategy:
 
     languages = {lang: Language.from_dict(spec) for lang, spec in d["languages"].items()}
 
+    if d["sanitize_cases"] not in SANITIZE_CASE_CHOICES:
+        raise ValueError(
+            f"strategy file {path} has sanitize_cases {d['sanitize_cases']!r}; "
+            f"it must be one of {list(SANITIZE_CASE_CHOICES)}"
+        )
+
     return Strategy(
         name=d["name"],
         version=d["version"],
@@ -94,6 +116,7 @@ def load_strategy(path) -> Strategy:
         required_tools=tuple(d["required_tools"]),
         device_proof=DeviceProof.from_dict(d["device_proof"]),
         sanitizers=tuple(d["sanitizers"]),
+        sanitize_cases=d["sanitize_cases"],
         analyzer_command=d["analyzer_command"],
         sha256=hash_bytes(raw),
     )

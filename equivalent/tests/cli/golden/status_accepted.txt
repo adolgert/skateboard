@@ -6,5 +6,6 @@ region ch04:step   tree aaaaaaaaaaaa (frozen bbbbbbbbbbbb)
   sanitize/racecheck   pass   c-0005
   regression/visible   pass   c-0006
   regression/holdout   pass   c-0007
-  timing/port          pass   c-0008
+  program/regression   pass   c-0008
+  timing/port          pass   c-0009
 ACCEPTED on aaaaaaaaaaaa

@@ -56,6 +56,8 @@ services:
       - ./state/working:/working
       - ./state/sessions:/sessions
       - ./state/pi-home:/home/agent/.pi     # holds the login the person does once
+      # What a session bringing a new code in reads to know what to write.
+      - ../docs/onboarding.md:/docs/onboarding.md:ro
     stdin_open: true
     tty: true
 
@@ -64,7 +66,14 @@ services:
       context: ..
       dockerfile: deploy/gateway/Dockerfile
     networks: [agent_net, build_net, oracle_net]
-    depends_on: [builder, oracle]
+    # The gateway compares every strategy's required_tools against the
+    # builder's /healthz before it serves anything, so it waits for the
+    # builder to be answering rather than merely started.
+    depends_on:
+      builder:
+        condition: service_healthy
+      oracle:
+        condition: service_started
     # Runs as the account that started the deployment, not root. The
     # repository and the ledger are bind mounts owned by that account, and
     # git refuses to work in a repository owned by someone other than the
@@ -82,8 +91,9 @@ services:
       - ./state/ledger:/ledger
       - ./state/working:/working:ro
       - ./state/seed:/seed:ro
-      - ./gateway.yaml:/etc/equivalent/gateway.yaml:ro
-      - ../demo/orchestrator/datasets:/datasets:ro
+      # One deployment holds one code; its configuration file is chosen by name.
+      - ./gateway.${EQUIVALENT_CODE:-tsunami}.yaml:/etc/equivalent/gateway.yaml:ro
+      - ../programs:/programs:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 5s
@@ -93,9 +103,9 @@ services:
 
   builder:                      # semi-trusted executor; the only container with the GPU
     build:
-      context: ../demo
-      dockerfile: builder/Dockerfile
-    image: skateboard/builder   # the same image the demonstration harness builds
+      context: ..
+      dockerfile: services/builder/Dockerfile
+    image: skateboard/builder
     networks: [build_net]
     gpus: all
     environment:
@@ -103,10 +113,24 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     # /work is a normal writable dir in the (ephemeral) container. NOT a tmpfs:
     # Docker mounts tmpfs noexec, which blocks executing the compiled binary.
+    # The image has python3 for the service shim but no curl, so the check is
+    # written in python3. /healthz needs no token.
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:9090/healthz').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
 
   oracle:                       # trusted, sealed; read-only rootfs
+    # The captures and the tolerance policy of one code are baked into the
+    # image, so which code it answers for is a build argument, not a mount.
     build:
-      context: ../demo/oracle
+      context: ..
+      dockerfile: services/oracle/Dockerfile
+      args:
+        CODE: ${EQUIVALENT_CODE:-tsunami}
     networks: [oracle_net]
     environment:
       - SKATEBOARD_TOKEN=${EQUIVALENT_TOKEN}
@@ -124,6 +148,8 @@ services:
     environment:
       - EQUIVALENT_GATEWAY_URL=http://gateway:8000
       - EQUIVALENT_TOKEN=${EQUIVALENT_TOKEN}
+      - EQUIVALENT_CODE=${EQUIVALENT_CODE:-tsunami}
+      - EQUIVALENT_REGION=${EQUIVALENT_REGION:-ch04:step}
     networks: [agent_net]
     # It writes into the working copy, which the agent's account also writes
     # to. walkthrough.sh passes this terminal's own account so the two do not
@@ -132,8 +158,30 @@ services:
     volumes:
       - ./walkthrough.py:/opt/walkthrough.py:ro
       - ../docs/examples:/examples:ro
+      - ../programs:/programs:ro
       - ./state/working:/working
     entrypoint: ["python3", "/opt/walkthrough.py"]
+
+  onboard_walkthrough:          # the same, for a code being brought in
+    # A second entry rather than a second argument to the one above,
+    # because the two mount different scripts. Everything else -- the
+    # image, the network, the token, the account -- is the same, so it
+    # reaches exactly what the walkthrough above reaches.
+    profiles: [tools]
+    build:
+      context: ..
+      dockerfile: deploy/gateway/Dockerfile
+    environment:
+      - EQUIVALENT_GATEWAY_URL=http://gateway:8000
+      - EQUIVALENT_TOKEN=${EQUIVALENT_TOKEN}
+      - EQUIVALENT_CODE=${EQUIVALENT_CODE:-tsunami}
+    networks: [agent_net]
+    user: "${EQUIVALENT_UID:-1000}:${EQUIVALENT_GID:-1000}"
+    volumes:
+      - ./onboard_walkthrough.py:/opt/onboard_walkthrough.py:ro
+      - ../programs:/programs:ro
+      - ./state/working:/working
+    entrypoint: ["python3", "/opt/onboard_walkthrough.py"]
 
 networks:
   agent_net:

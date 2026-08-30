@@ -36,8 +36,9 @@ afterwards, call by call.
 
 **The region.** A port is done one region at a time. A region is a small
 part of the program with one way in and one way out, named in a spec
-file. The session is configured for one region; today that is
-`ch04:step`, the time-step routine of a shallow-water solver.
+file. A session is configured for exactly one region, and the deployment
+says which. The worked example throughout this manual is `ch04:step`,
+the time-step routine of the `tsunami` shallow-water solver.
 
 **The working copy.** `/working` inside the session: a directory the
 model can edit freely, which starts as a copy of the baseline code. The
@@ -59,38 +60,57 @@ is ever changed or deleted. You can read it at any time with the
 session, that fixes the porting approach: which files may change at
 most, which compiler and flags are used, how GPU execution is proven,
 and which sanitizers run. The model cannot change it. Every claim
-records which strategy was in effect.
+records which strategy was in effect. A region names a second one, the
+baseline strategy, which is what the unmodified code is compiled with
+when a speedup is measured.
 
-**The spec.** A short YAML file, `notes/regions/ch04-step.sese.yaml` in
-the working copy, that names the region: which source file, which
-subroutine, and which lines. The model writes it, at the start of the
-session, and it is the first thing submitted.
+**The manifest.** A configuration file per code, also fixed before the
+session, saying what the code is: which tree, which makefile and build
+targets, which variables the region reads and writes, which datasets,
+what the timing run is, and whether the code carries a module of
+invariants of its own. It is why the harness needs to be taught
+nothing about a code in order to build and run it. Every claim records
+it too.
+
+**The spec.** A short YAML file in the working copy, at the path the
+region's own configuration names — `notes/regions/ch04-step.sese.yaml`
+for the worked example — saying which files the region spans, which
+procedure it is, and which lines. The model writes it, at the start of
+the session, and it is the first thing submitted. A code keeps a
+reviewed copy of each of its specs under `programs/<code>/regions/`,
+which is the copy the walkthrough lays into the working copy.
 
 **The allow-list.** The set of files the region is permitted to change.
 Files outside it are frozen. Before the spec has been checked, only the
 spec file itself is on the list. Once the analyzer has passed the spec,
-the list is the spec file plus the one source file the spec names. The
-strategy sets a ceiling on this (`src/*.f90` and the spec directory), so
-a spec cannot unfreeze anything outside it.
+the list is the spec file plus every file the spec lists. The strategy sets
+a ceiling on it — its own `allow_globs`, which in the shipped porting
+strategies are the source directory and the spec directory — so a spec
+cannot unfreeze anything outside that.
 
 ## Starting a session
 
 `pi` starts inside the agent container with the extension loaded. The
 extension connects to the gateway, fetches the list of actions, and
-registers one tool for each, plus `submit` and `status`. One line
-confirms it:
+registers one tool for each, plus `submit`, `status`, and `claim`. One
+line confirms it:
 
-    equivalent: registered 10 tools for region ch04:step
+    equivalent: registered 13 tools for region ch04:step
 
+The count is the actions of that region's phase — ten for a region being
+ported, eight for a code being onboarded — plus `submit`, `status`, and
+`claim`.
 If a configuration error is reported instead, the session cannot reach
 the gateway; that is a deployment problem, not something to fix from
 inside the session.
 
-You talk to the model in plain language and it calls the tools. None of
-the tools take arguments: `submit` sends whatever is in the working
-copy, and each check runs against whatever was last submitted. You can
-also type `/status` yourself at any time to see the region's state
-without asking the model.
+You talk to the model in plain language and it calls the tools. Almost
+none of them take arguments: `submit` sends whatever is in the working
+copy, each check runs against whatever was last submitted, and a few
+checks take optional settings described further down. The exception is
+`claim`, which takes the id of the claim to read. You can also type
+`/status` yourself at any time to see the region's state without asking
+the model.
 
 ## A session from start to acceptance
 
@@ -106,22 +126,32 @@ Ask the model to write the region spec. It needs to read the source to
 find the line range. For `ch04:step` the file is:
 
     region: ch04:step
+    files:
+      - src/mod_kernel.f90
     anchor:
       file: src/mod_kernel.f90
       pst_node: "step@34-43"
       entry_symbol: step
 
+`files` is every path the region may edit, and it is what the allow-list
+is built from. The anchor's file has to be one of them. A path that does
+not exist yet is allowed: a port that splits a routine into a new module
+lists that module here and then writes it.
+
 `pst_node` is the subroutine name and the inclusive line range of its
 body, from `subroutine step` through `end subroutine step`. A spec can
 also list callees whose bodies the analyzer should scan, under
-`closure: {callees: [{name: ..., lines: "lo-hi"}]}`, but `step`'s
-callee is in another module and is not part of the region.
+`closure: {callees: [{name: ..., file: ..., lines: "lo-hi"}]}`. A callee
+that names no `file` is in the anchor's file; one that names another
+file must have that file in `files` too. The `ch04:step-stencil` region
+is `ch04:step` written that way: it lists `src/mod_diff.f90` as well and
+scans `diff_centered` there, so a port may change both files.
 
 Then the model calls `submit`, and then `sese_check`. The analyzer
 scans the named lines for anything that would break single-entry,
 single-exit control flow: `goto`, an early `return`, `entry`, `stop`. A
-pass widens the allow-list to include `src/mod_kernel.f90`, which is
-what makes editing possible. The answer looks like:
+pass widens the allow-list to include every file the spec lists, which
+is what makes editing possible. The answer looks like:
 
     sese_check: pass (c-0001)
 
@@ -162,18 +192,53 @@ commit.
 
 ### 4. Run the checks
 
-In order, each depending on the one before:
+Every action a porting session has, what a passing claim from it
+establishes, and what has to be there before it will run. The gateway
+holds this table; the extension turns each row into a tool and puts the
+row's requirements in the tool's description.
 
-**`build_replay`** — The builder compiles the submitted tree with the
-strategy's flags and links it with a replay harness. The claim records
-the flags. A compile error is a `fail` claim carrying the compiler's
-messages.
+| action | what a pass establishes | what it requires |
+| --- | --- | --- |
+| `sese_check` | the lines the spec names have one way in and one way out — no `goto`, early `return`, `entry`, or `stop` — and every file the spec lists is inside the strategy's ceiling | nothing |
+| `build_replay` | the submitted tree builds through its own makefile, with the strategy's flags on every compile and nothing compiled from outside the tree | `sese/verified`, on the region |
+| `run_replay` | the replay driver ran the visible inputs and the offload runtime reported kernel launches | `build/replay` |
+| `sanitize` | `compute-sanitizer` found no memory error, no race, and no read of uninitialised memory | `gpu/executed` |
+| `regression_visible` | on the visible cases, every variable the case declares came back matching the recorded answer within the code's bands | `sanitize/memcheck` and `sanitize/racecheck` |
+| `property_check` | the code's own invariants held on inputs drawn around the visible cases | `regression/visible` |
+| `regression_holdout` | the same comparison on cases the session never sees, answered pass or fail alone | `regression/visible` |
+| `program_regression` | the whole program, run at the size the manifest declares, wrote what the baseline program wrote, file by file | `regression/holdout`, and a `timing/baseline` claim on the baseline tree |
+| `time_baseline` | how long the unmodified program takes under the region's baseline strategy, and stores that run's own outputs as the reference the row above compares against | nothing |
+| `time_port` | how long the ported program takes, at the same size and with the same arguments | `program/regression` |
+| `accept` | nothing of its own: it is the name of the whole list, and there is no tool for it | every claim above except `sanitize/initcheck`, `timing/baseline`, and — for a code that declares no invariants — `regression/property` |
 
-**`run_replay`** — The built program runs on recorded inputs, on the
-GPU, with the driver's kernel-launch notifications turned on. The
-gateway counts launches. A program that runs but launches no kernels
-fails, even if its output is right, because the point of the port is
-that the work moved to the GPU.
+`time_baseline` has no preconditions and is about the baseline tree
+rather than the submission, so it can be run at any point; everything
+else runs in the order of the table, each on the evidence the ones above
+it filed. What each check does:
+
+**`build_replay`** — The builder builds the submitted tree by running
+the tree's own makefile, with the strategy's compiler and flags. It
+knows nothing else about the code: which makefile, which targets, and
+which programs those targets must leave behind all come from the code's
+manifest.
+
+The compiler the makefile is handed is a shim that writes down every
+invocation before running the real one, so the claim can say more than
+"it compiled". It records every compiler command line, and two checks
+come out of that log: the strategy's flags reached every compile, and
+every file compiled was the tree's own source. A build that succeeded
+while ignoring the flags, or that reached outside the tree, is a `fail`
+naming the command line or the file. A compile error is a `fail`
+carrying the compiler's messages.
+
+**`run_replay`** — The replay program the manifest names is run on the
+visible cases with the offload runtime's kernel-launch notifications
+turned on, and the launches it reported are counted. A program that runs
+but launches no kernels fails, even if its output is right, because the
+point of the port is that the work moved to the GPU. This is also where
+what the driver wrote is checked against what the manifest declares the
+region produces: a declared output the driver did not write, or one that
+came back at the wrong element type or rank, is a fail naming it.
 
 **`sanitize`** — `compute-sanitizer` runs the program under memcheck,
 racecheck, and initcheck. One call, three claims:
@@ -185,48 +250,127 @@ racecheck, and initcheck. One call, three claims:
 Memcheck and racecheck are required for acceptance; initcheck is
 recorded for information.
 
-**`regression_visible`** — The outputs recorded by `run_replay` are
-compared against the reference outputs for the visible test cases,
-under the oracle's tolerance policy. The answer includes the per-case
-comparison, and the claim names the policy's hash.
+**`regression_visible`** — The outputs `run_replay` recorded are sent to
+the oracle and compared against the recorded answers for the visible
+cases. The oracle compares whatever variables a case declares it holds,
+reading the names from the case itself and the element type and shape
+from each array file, and fails a submission that leaves one of them out
+rather than passing over it. Floating-point variables are compared
+within the code's bands, integers and logicals exactly. The answer
+includes the per-case comparison, and the claim names the policy's
+hash.
+
+**`property_check`** — The code's own module of invariants is run
+against the port's replay binary, inside the builder. Where every
+regression check compares a port against recorded answers, this one
+searches for an input where something the code says is always true of
+it is not: for `tsunami`, that one step of the region is a function of
+its inputs alone, that it conserves the total water, and that rotating
+its periodic grid rotates the answer bitwise. The inputs are drawn by
+perturbing the visible cases, so a drawn state is one the code is meant
+to be run on.
+
+The search is random, so a request that names no seed has one drawn for
+it, and the claim records the seed it used and how many examples it
+drew. A request that does name a seed repeats exactly that search — same
+seed, same search, and the gateway answers with the claim already filed
+rather than running it twice; a different seed is a different search and
+gets a claim of its own. `max_examples` says how hard to look, and
+defaults to 100. When a
+property fails, the claim carries what the run printed, which is where
+Hypothesis writes the smallest input it could find that breaks it.
+
+This check exists only for a code that declares a properties module in
+its manifest. A code that declares none is not asked for it and is not
+held back by it; a code that does declares it must pass before the port
+is accepted.
 
 **`regression_holdout`** — The same comparison on a second set of cases
 the session never sees. The answer is pass or fail only, so a port
 cannot be tuned to the held-out set. The full comparison stays in the
 ledger for a person.
 
-**`time_port`** — The full-size program is timed, five runs by default.
-This is the last requirement for acceptance. The claim records the
-flags, the run times, and whether the GPU was otherwise idle, which on a
-shared workstation it usually is not.
+**`time_baseline`** — The unmodified program is timed the same way a
+port will be, built with the region's baseline strategy: a strategy file
+like any other, naming the compiler and flags the comparison floor is
+compiled with. It has no prerequisites, runs against the baseline tree
+rather than the submission, and is not itself required for acceptance;
+once per region is enough.
 
-**`time_baseline`** — The unmodified program is timed the same way, for
-comparison. It has no prerequisites, runs against the baseline tree
-rather than the submission, and is not required for acceptance; once
-per region is enough.
+It does one more thing than measure. The files its last run wrote are
+kept in the region's ledger as a capture set — a file named `h.npy`
+becomes the variable `h` — and that set is what the next check compares
+a port against. So `time_baseline` has to have run before
+`program_regression` can. That requirement is not in the table beside
+the others: a row's requirements can only name claims about the subject
+the action is about, which is the port's tree, and `timing/baseline` is
+a claim about the baseline tree. `program_regression` therefore checks
+it itself, and answers with an error naming `time_baseline` rather than
+with a verdict.
 
-The two timing checks accept a `repeats` setting; nothing else takes
-any configuration.
+**`program_regression`** — The port's own program is run once, at the
+size the manifest declares, and every file it writes is compared against
+the file the baseline program wrote. The band comes from the same
+tolerance file the oracle reads, but from its `files` section rather than
+its `variables` section: a whole-program run accumulates over every step
+whatever two compilations of the same source disagree about, and the band
+that fits one call of a region is far too tight for it. A missing file, a
+different shape or element type, or one element outside its band is a
+`fail` naming the output. The claim carries the per-output comparison,
+and names both the policy and the baseline capture set it was judged
+against.
+
+This is the check that a port is still the same code at the size its
+speedup is claimed for: the regression checks above it replay one
+captured call of one region, and a port can be wrong at scale and right
+on those.
+
+**`time_port`** — The code's own program is timed, five runs by default,
+with the arguments and environment the manifest declares and a budget it
+declares too. It requires `program/regression`, so a program that
+computes the wrong thing at the timing size cannot be timed at all. This
+is the last requirement for acceptance. The claim records the flags, the
+run times, what the program was given, which files it wrote and their
+digests, and whether the GPU was otherwise idle, which on a shared
+workstation it usually is not.
+
+A few rows accept settings, and the tools take them as optional
+arguments: `time_baseline` and `time_port` take `repeats`, how many
+timed runs to make, five when it is left out; `property_check` takes
+`seed`, which repeats one exact search and is drawn for the run when
+left out, and `max_examples`, how many examples to draw per property, a
+hundred when left out. In the onboarding session, `harness_property`
+takes the same two, and `harness_self_check` takes `limit`, which scores
+at most that many mutants rather than all of them. Every one of them is
+an integer and every one of them is optional: a call that names none is
+the ordinary call, and gets the defaults above. Nothing else takes any
+configuration, and a value of the wrong kind — or a setting the action
+does not take — is refused as a malformed request naming what was wrong,
+before anything runs.
 
 ### 5. Acceptance
 
-When every required check has passed on one tree, `/status` ends with
-`ACCEPTED`:
+When every required check has passed on one tree, the last line of the
+status is `ACCEPTED`. From a shell on the host:
 
-    tree d7c8d7867dea...  frozen 401d465b2259...
-      sese/verified  pass  c-0001
-      build/replay  pass  c-0002
-      gpu/executed  pass  c-0003
-      sanitize/memcheck  pass  c-0004
-      sanitize/racecheck  pass  c-0005
-      regression/visible  pass  c-0007
-      regression/holdout  pass  c-0008
-      timing/port  pass  c-0009
-    ACCEPTED
+    region ch04:step   tree aaaaaaaaaaaa (frozen bbbbbbbbbbbb)
+      sese/verified        pass   c-0001
+      build/replay         pass   c-0002
+      gpu/executed         pass   c-0003
+      sanitize/memcheck    pass   c-0004
+      sanitize/racecheck   pass   c-0005
+      regression/visible   pass   c-0006
+      regression/holdout   pass   c-0007
+      program/regression   pass   c-0008
+      timing/port          pass   c-0009
+    ACCEPTED on aaaaaaaaaaaa
 
-There is no accept action. Acceptance is a fact about the ledger, not a
-step someone performs, and the ledger's own `status` command reports the
-same thing from outside the session.
+`/status` inside the session prints the same rows in a narrower layout.
+A code that declares invariants of its own has `regression/property` in
+the list too; one that does not is not asked for it. There is no accept
+action. Acceptance is a fact about the ledger, not a step someone
+performs, and the ledger's own `status` command reports the same thing
+from outside the session.
 
 ## Editing and re-checking
 
@@ -249,16 +393,44 @@ again, and the newest measurement is the one that counts.
 
 ## Reading what comes back
 
-**A pass or fail** is a claim:
+**A pass or fail** is a claim. The first line is the verdict, and under
+it is the claim's detail as the check recorded it:
 
-    build_replay: pass (c-0007)
+    build_replay: fail (c-0007)
+    {
+      "problems": [
+        "src/mod_kernel.f90:41: Error: Symbol 'dh' has no IMPLICIT type"
+      ],
+      "compiles": 3,
+      ...
+    }
 
 The id in parentheses names the record in the ledger. A `fail` is a real
-verdict — the check ran and the code did not meet it — and the tool's
-result carries the detail: the compiler log, the sanitizer's findings,
-the cases that missed tolerance. The fix is to edit, submit, and run the
+verdict — the check ran and the code did not meet it — and **the detail
+is the reason**: the compiler log, the sanitizer's findings, the cases
+that missed tolerance, the input a property failed on. It is what the
+session reads to know what to fix, so the keys that explain a failure
+are printed first and a fail is cut off only at 24000 characters; a pass
+is cut off much sooner, since a passing check rarely needs reading. When
+either is cut off, the last line says so and names the claim, which is
+how to read the whole of it. The fix is to edit, submit, and run the
 check again. Failed claims stay in the ledger; they are history, not
 something to erase.
+
+A few predicates are verdict-only by policy — `regression/holdout` is
+the one that matters, so a port cannot be tuned to the held-out cases —
+and their claims come back as the verdict line alone.
+
+**The `claim` tool** reads any claim of the region back by id:
+
+    claim(claim_id="c-0007")
+
+It answers with the same verdict line and the same detail the check's
+own answer carried, filtered by the same policy, so it can never show
+more than the check did. It is for a verdict the session has been told
+about but has not read: one `status` reports as failing, or one from
+earlier in the session. From outside the session, `ledger show` prints
+the same claim in full, including what the policy withholds here.
 
 **A refusal** means the check's prerequisites are not met. It is a
 normal answer, not an error, and it says what to do:
@@ -266,9 +438,15 @@ normal answer, not an error, and it says what to do:
     refused: 'build_replay' requires:
       - sese/verified is missing; run sese_check to produce it.
 
-If the prerequisite ran and failed, `/status` shows the failing claim's
-id beside the requirement, so "never ran" and "ran and failed" are
-distinguishable.
+If the prerequisite ran and failed, `/status` shows it as a fail with
+the failing claim's id, so "never ran" and "ran and failed" are
+distinguishable:
+
+      harness/self_check  fail  c-0007  (fix and run harness_self_check again)
+      harness/properties  missing  (run harness_property)
+
+The first is a claim to read with `claim`; the second is a check that
+has not run.
 
 **An error** means the check itself could not run — the builder is
 unreachable, or its compiled workspace is gone after a restart. No claim
@@ -304,6 +482,90 @@ through, and the time from the first request to acceptance. The session
 id is shown by `pi` and is the suffix of the transcript's filename under
 `deploy/state/sessions`.
 
+## Onboarding a code
+
+Everything above is about porting a region of a code the harness already
+knows. Bringing a new code in is a session of its own, and the region it
+is configured for says so: a region has a **phase**, either `porting` or
+`onboarding`, and the phase decides which tools the session gets and
+what `status` asks for.
+
+An onboarding session works on the whole tree. There is no spec and no
+analyzer verdict, because no region has been chosen yet; the strategy
+allows every path, and what keeps the work honest is that every claim is
+filed against the tree that was submitted, and a person reads what
+passed before any of it is promoted.
+
+What the model writes during onboarding lives in the tree beside the
+code: a makefile with the targets the harness builds, a replay driver, a
+capture program, a tolerance policy, optionally a module of invariants,
+and a **manifest** at `harness/manifest.yaml` that names all of them.
+The manifest is the code's description of itself, and it is what every
+later porting session is checked against. Beside the code it is written
+once more, as `programs/<code>/manifest.yaml`. A code that has not been
+onboarded yet has only the three fields naming it and its source tree,
+and a region of it cannot be ported until the rest exists.
+
+`docs/onboarding.md` is where those contracts are written down: what the
+makefile, the replay driver, the capture program, the timing run, the
+tolerance file, and the properties module each have to do, and what
+every manifest field means. It is mounted into the session container at
+`/docs/onboarding.md`, and it is what a model bringing a code in should
+be pointed at. The rest of this section is only the shape of the
+session.
+
+The session is finished when eight checks have passed on one tree, at
+which point `status` ends with `ONBOARDED` rather than `ACCEPTED`:
+
+| check | what it establishes |
+| --- | --- |
+| `manifest_check` | the manifest is there, complete, names only files the tree holds, gives every floating-point output a tolerance band and every file the timing run writes one of its own, and has the visible and held-out runs differ |
+| `harness_build` | every target the manifest declares builds under both the baseline strategy and the port strategy, with each strategy's flags proven to have reached every compile |
+| `harness_capture` | the capture program writes every declared dataset, each case matching the declared interface, and the visible and held-out inputs differ |
+| `harness_replay` | the replay driver reproduces the captured outputs bitwise from the captured inputs |
+| `harness_determinism` | capturing and replaying again agrees bitwise with what was stored |
+| `harness_timing` | the timing target runs twice inside its budget and writes the same outputs both times |
+| `harness_self_check` | single-token faults injected into the files the manifest says implement the region are built and replayed like the baseline: at least one is caught, and none changes an answer that the tolerance bands then let through |
+| `harness_property` | the code's own module of invariants passes against the baseline build — or, for a code that declares none, the claim records that it declares none |
+
+The datasets a capture writes are kept in the region's ledger, under a
+name that is a hash of their own bytes, and every claim that was reached
+by comparing against one names it.
+
+### Promoting what passed
+
+Promoting is a person's step, not a gateway action. Read the claims
+first — `ledger status` for the region, `ledger show` for anything you
+want the detail of — and then:
+
+    ledger promote --config deploy/state/gateway.host.yaml --region-id tsunami:onboard
+
+It refuses unless the region is one being onboarded, unless every
+onboarding check has passed on the region's current tree, and unless the
+working copy is that tree byte for byte — you review the working copy,
+so what is promoted has to be what you read. It then writes the code's
+directory: the manifest, with its source root rewritten from the tree
+itself to the `baseline` beside it; the tree minus that manifest as the
+new `baseline/`; the visible dataset's inputs under `datasets/visible/`;
+and the answers — the visible outputs and the whole held-out set —
+under `captures/`. The program's own timing outputs are not among them:
+a whole-program run at a real timing size writes megabytes, and what a
+port is compared against is the deployment's own `time_baseline` run,
+which stays in the region's ledger. A destination that
+already holds something is refused unless you pass `--replace`, and
+`--programs` writes the whole thing somewhere else if you would rather
+compare before committing. It ends by printing the steps that stay
+yours: `git add`, a commit, a `phase: porting` region for the code in
+`deploy/gateway.<code>.yaml`, `EQUIVALENT_CODE`, and `down.sh`/`up.sh` so the
+oracle image is built again around the new captures.
+
+`deploy/onboard_walkthrough.sh` drives the whole of this against a
+running stack without a model in the loop: it lays the code's bare
+baseline into the working copy, writes the manifest, submits, runs the
+eight checks in order, and stops at the `ledger promote` command. It is
+the onboarding half of `walkthrough.sh`, and it is the quickest way to
+see whether a deployment can bring a code in at all.
+
 ## Things worth knowing
 
 - Work in the working copy is invisible to the gateway until submitted.
@@ -311,14 +573,24 @@ id is shown by `pi` and is the suffix of the transcript's filename under
   evidence does not exist yet.
 - The model can compile and run in the working copy, and should. That
   is exploration; only submitted checks count.
-- The spec decides which one source file is unfrozen, and the model
-  wrote the spec. Read it. The strategy caps what it can name, and
-  submitting always starts from the baseline, so pointing the spec at a
-  different file drops the edits to the first — but the choice of file
-  is the model's, and it is visible in the tree.
+- The files the spec lists are the files that are unfrozen, and the
+  model wrote the spec. Read it. The strategy caps what the spec may
+  name, and submitting always starts from the baseline, so dropping a
+  file from the spec drops the edits to it — but which files the spec
+  lists is the model's choice, and it is visible in the tree.
 - `status` calls leave no line in the request log; every other tool
-  does. The `session` timeline shows them as unlogged, which is
-  expected.
+  does, `claim` included. The `session` timeline shows the status calls
+  as unlogged, which is expected.
+- The gateway's token is in the agent's container, because the extension
+  running there needs it. So a session can call the HTTP API directly
+  with `curl` instead of through its tools, and it can put any session
+  id it likes in the `X-Session-Id` header. Nothing about the claims
+  changes: the gateway still runs every check itself, still refuses what
+  is out of order, and still records what it did. What is affected is
+  the request log's `session` column — that is what the caller said it
+  was, not something the gateway verified — so any evaluation that joins
+  the request log to session transcripts by that column is joining on
+  the agent's own word for it and must treat it that way.
 - The builder keeps compiled work between checks. After a builder
   restart, run `build_replay` again; the code is safe in the gateway's
   repository.

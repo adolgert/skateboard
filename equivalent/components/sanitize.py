@@ -2,34 +2,49 @@
 
 One builder call produces one verdict per tool named in the strategy's
 `sanitizers` list (memcheck, racecheck, initcheck), matching
-demo/orchestrator/orchestrator.py's single call -> three ledger columns.
+one call to the builder -> three ledger claims.
 Unlike every other component here, this one returns several verdicts, not
 one -- equivalent.gateway.app records one claim per tool from a single
 dispatch, atomically, so a duplicate check against any single one of them
 is a safe proxy for "all three already exist".
 
-Only the first visible case is used, matching demo's own choice (sanitizer
-runs are much slower than a plain replay run).
+Which of the visible cases are sanitized comes from the strategy's
+`sanitize_cases` field, not from this module: a sanitizer run is far
+slower than a plain replay, so a strategy can ask for one case or for
+every one of them.
 """
 from __future__ import annotations
 
 from equivalent.gateway.submit import attempt_id_for
+from equivalent.manifest.schema import Manifest
 from equivalent.strategy.schema import Strategy
 
 from .errors import ComponentError
 
 
-def check(region_id: str, tree_sha: str, strategy: Strategy, visible_cases: dict, builder) -> dict:
+def _chosen_cases(strategy: Strategy, visible_cases: dict) -> dict:
+    """The cases the strategy asks the sanitizers to run over.
+
+    The strategy loader rejects any value other than "all" or "first", so
+    there is no third branch to write here.
+    """
+    if strategy.sanitize_cases == "all":
+        return dict(visible_cases)
+    first = next(iter(visible_cases))
+    return {first: visible_cases[first]}
+
+
+def check(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
+          visible_cases: dict, builder) -> dict:
     """Returns {tool_name: {"verdict": "pass"|"fail", "detail": {...}}, ...}."""
     if not visible_cases:
         raise ComponentError("no visible dataset configured for this region")
 
     attempt_id = attempt_id_for(region_id, tree_sha)
-    name = next(iter(visible_cases))
-    one_case = {name: visible_cases[name]}
+    cases = _chosen_cases(strategy, visible_cases)
     tools = list(strategy.sanitizers)
     try:
-        resp = builder.sanitize(attempt_id, strategy.name, one_case, tools)
+        resp = builder.sanitize(attempt_id, manifest.build.targets["replay"].executable, cases, tools)
     except Exception as exc:
         raise ComponentError(f"builder /v1/sanitize call failed: {exc}") from exc
 

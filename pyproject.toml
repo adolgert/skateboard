@@ -11,6 +11,7 @@ dependencies = [
     "fastapi==0.115.*",
     "pydantic==2.*",
     "httpx",
+    "numpy",
     "PyYAML",
     "uvicorn[standard]==0.30.*",
 ]
@@ -33,9 +34,9 @@ exclude = ["equivalent.tests*"]
 "equivalent.strategy" = ["files/*.yaml"]
 
 [tool.pytest.ini_options]
-# `pytest` with no arguments collects these two trees and nothing else.
-# tools/ also holds third-party checkouts -- pFUnit, serialbox, KGen and
-# others -- which carry their own suites and their own dependencies; left
-# to itself, pytest collects those and fails before a single test of this
-# project runs.
-testpaths = ["equivalent", "tools/regionharness"]
+# `pytest` with no arguments collects this tree and nothing else. Nothing
+# under tools/ is collected: it holds third-party checkouts -- pFUnit,
+# serialbox, KGen and others -- which carry their own suites and their own
+# dependencies, and the region harness's own tests need a built CoarseAIR
+# to run at all. Nothing this project depends on lives there.
+testpaths = ["equivalent"]

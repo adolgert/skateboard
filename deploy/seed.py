@@ -7,14 +7,22 @@ to these bytes, so a seed that quietly picked up an extra file -- or a
 stale one -- would make every later claim describe a starting point
 nobody chose.
 
-The baseline is exactly the files git tracks under the demonstration
-work tree, read out of the commit rather than copied off disk. Copying
-the directory would sweep in build products: that directory is also
-where the Fortran is compiled by hand, so it accumulates .mod files and
-a binary that are not part of the baseline and would change its hash
-from machine to machine.
+The baseline is exactly the files git tracks under the source tree the
+code's manifest names, read out of the commit rather than copied off
+disk. Copying the directory would sweep in build products: that
+directory is also where the Fortran is compiled by hand, so it
+accumulates .mod files and a binary that are not part of the baseline
+and would change its hash from machine to machine.
 
-    python3 deploy/seed.py <out_dir>
+Which code, and so which tree, is named on the command line:
+
+    python3 deploy/seed.py --code tsunami <out_dir>
+
+The manifest is read here with a plain YAML load rather than the
+package's own loader, because this script runs under the machine's own
+Python before anything of this project is installed. It reads one key,
+`source.root`; everything the manifest means is checked where the
+gateway loads it.
 """
 from __future__ import annotations
 
@@ -22,10 +30,15 @@ import argparse
 import subprocess
 from pathlib import Path
 
-# The tracked directory the baseline is taken from, and the commit it is
-# read at. Both are deliberately fixed: a seed is not a place to choose
-# between versions of the code.
-BASELINE_DIR = "demo/work"
+import yaml
+
+# Where a code's directory lives in this repository, and what its
+# manifest is called. One spelling, shared with the deployment's own
+# mount of the same tree.
+PROGRAMS_DIR = "programs"
+MANIFEST_NAME = "manifest.yaml"
+# The commit the baseline is read at. Deliberately fixed: a seed is not a
+# place to choose between versions of the code.
 BASELINE_REF = "HEAD"
 
 
@@ -35,19 +48,33 @@ def _git(repo_root, *args) -> bytes:
     ).stdout
 
 
-def baseline_paths(repo_root) -> list[str]:
+def baseline_dir(repo_root, code: str) -> str:
+    """The tracked directory this code's baseline is taken from, relative to the repository.
+
+    The manifest's `source.root` is relative to the manifest's own
+    directory, so a code that renamed its tree needs no edit here.
+    """
+    manifest_path = Path(repo_root) / PROGRAMS_DIR / code / MANIFEST_NAME
+    if not manifest_path.is_file():
+        raise ValueError(f"no manifest for code '{code}': {manifest_path} does not exist")
+    root = yaml.safe_load(manifest_path.read_text())["source"]["root"]
+    return f"{PROGRAMS_DIR}/{code}/{root}"
+
+
+def baseline_paths(repo_root, code: str) -> list[str]:
     """The tracked files under the baseline directory, named relative to it."""
+    directory = baseline_dir(repo_root, code)
     listing = _git(
-        repo_root, "ls-tree", "-r", "--name-only", BASELINE_REF, "--", BASELINE_DIR,
+        repo_root, "ls-tree", "-r", "--name-only", BASELINE_REF, "--", directory,
     ).decode("utf-8")
-    prefix = f"{BASELINE_DIR}/"
+    prefix = f"{directory}/"
     return sorted(
         line[len(prefix):] for line in listing.splitlines()
         if line.startswith(prefix)
     )
 
 
-def write_seed(repo_root, out_dir) -> list[str]:
+def write_seed(repo_root, out_dir, code: str) -> list[str]:
     """Write the baseline into `out_dir`; return the paths written, relative to it.
 
     Existing files are overwritten and nothing is removed, so running
@@ -56,9 +83,10 @@ def write_seed(repo_root, out_dir) -> list[str]:
     """
     repo_root = Path(repo_root)
     out_dir = Path(out_dir)
+    directory = baseline_dir(repo_root, code)
     written = []
-    for relative in baseline_paths(repo_root):
-        content = _git(repo_root, "show", f"{BASELINE_REF}:{BASELINE_DIR}/{relative}")
+    for relative in baseline_paths(repo_root, code):
+        content = _git(repo_root, "show", f"{BASELINE_REF}:{directory}/{relative}")
         destination = out_dir / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)
@@ -71,13 +99,14 @@ def main(argv=None) -> int:
         prog="seed", description="write the baseline files the gateway's repository starts from",
     )
     parser.add_argument("out_dir", help="directory to write the baseline into")
+    parser.add_argument("--code", required=True, help="the code whose baseline is written")
     parser.add_argument(
         "--repo-root", default=str(Path(__file__).resolve().parents[1]),
         help="the git checkout the baseline is read from",
     )
     args = parser.parse_args(argv)
 
-    for relative in write_seed(args.repo_root, args.out_dir):
+    for relative in write_seed(args.repo_root, args.out_dir, args.code):
         print(f"{args.out_dir}/{relative}")
     return 0
 

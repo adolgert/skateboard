@@ -1,0 +1,24 @@
+# The region a porting session works on: one full time step of the
+# Kelvin-Helmholtz solver -- the periodic fills, the CFL scan, and the three
+# Strang sweeps -- as the onboarding session factored it into kh2d_module.
+#
+# This file is the reference copy; a session's working copy gets it at the
+# path the gateway's configuration names. Line ranges are inclusive and refer
+# to the baseline src/kh2d_module.f90; every callee is in that same file.
+region: kh2d:step
+files:
+  - src/kh2d_module.f90
+anchor:
+  file: src/kh2d_module.f90
+  pst_node: "kh2d_step@11-37"
+  entry_symbol: kh2d_step
+closure:
+  callees:
+    - {name: prims,       file: src/kh2d_module.f90, lines: "39-46"}
+    - {name: flux_x,      file: src/kh2d_module.f90, lines: "48-57"}
+    - {name: flux_y,      file: src/kh2d_module.f90, lines: "59-68"}
+    - {name: rusanov_x,   file: src/kh2d_module.f90, lines: "70-83"}
+    - {name: rusanov_y,   file: src/kh2d_module.f90, lines: "85-98"}
+    - {name: sweep_x,     file: src/kh2d_module.f90, lines: "100-114"}
+    - {name: sweep_y,     file: src/kh2d_module.f90, lines: "116-130"}
+    - {name: bc_periodic, file: src/kh2d_module.f90, lines: "132-144"}

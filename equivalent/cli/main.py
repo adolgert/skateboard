@@ -37,10 +37,13 @@ from pathlib import Path
 
 from equivalent.gateway.config import load_gateway_config
 from equivalent.gateway.submit import current_tree_and_frozen
+from equivalent.ledger.acceptance import PORTING, requirements_for
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
+from equivalent.strategy.schema import load_strategy
 
+from . import promote as promote_module
 from . import render, session
 
 CONFIG_HELP = "gateway configuration file, read with --region-id to show the repository's current tree"
@@ -73,6 +76,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_requests = sub.add_parser("requests", help="the request log as a timeline")
     p_requests.add_argument("region_dir")
 
+    p_promote = sub.add_parser(
+        "promote",
+        help="copy what an onboarding session proved into the code's own directory",
+    )
+    p_promote.add_argument("--config", required=True, help=CONFIG_HELP)
+    p_promote.add_argument(
+        "--region-id", required=True, help="which onboarding region in --config to promote",
+    )
+    p_promote.add_argument(
+        "--programs", default=None,
+        help="where the code's directory is written (default: the config's paths.programs)",
+    )
+    p_promote.add_argument(
+        "--replace", action="store_true",
+        help="empty the destinations that already hold something, rather than refusing",
+    )
+
     p_session = sub.add_parser(
         "session", help="one agent session beside the request log it produced",
     )
@@ -94,11 +114,17 @@ def _named_region(parser: argparse.ArgumentParser, config_path, region_id):
 
 
 def _open_region(parser: argparse.ArgumentParser, args):
-    """The store to read, the current tree and frozen subjects if they are knowable, and a display name.
+    """The store, the current tree and frozen subjects if knowable, the phase, a display name, and the code.
 
     The tree and frozen subjects come back as None when only a directory
     was named: the ledger alone cannot say what the region's current tree
     is, and guessing is the status computation's own documented fallback.
+    A directory named on its own says nothing about the phase either, and
+    a ledger directory holding a port's claims is by far the common case,
+    so that reading is what a bare directory gets. It says nothing about
+    the code either, so there is no manifest to read the property
+    requirement out of, and the fixed acceptance list is what it is judged
+    by.
     """
     named_config = args.config is not None or args.region_id is not None
     if named_config and (args.config is None or args.region_id is None):
@@ -109,16 +135,21 @@ def _open_region(parser: argparse.ArgumentParser, args):
         parser.error("name a region directory, or --config with --region-id")
 
     if args.region_dir is not None:
-        return LedgerStore(args.region_dir), None, None, Path(args.region_dir).name
+        return LedgerStore(args.region_dir), None, None, PORTING, Path(args.region_dir).name, None
 
     _, cfg = _named_region(parser, args.config, args.region_id)
     store = LedgerStore(cfg.ledger_dir)
-    tree_sha, frozen_sha = current_tree_and_frozen(cfg.repo_dir, cfg.region_id, store, cfg.spec_path)
+    tree_sha, frozen_sha = current_tree_and_frozen(
+        cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase,
+        load_strategy(cfg.strategy_path),
+    )
     return (
         store,
         Subject(kind="tree", sha256=tree_sha),
         Subject(kind="frozen", sha256=frozen_sha),
+        cfg.phase,
         cfg.region_id,
+        cfg.manifest,
     )
 
 
@@ -150,7 +181,7 @@ def _run_session(parser: argparse.ArgumentParser, args) -> int:
         _, _, events = session.read_session(path)
 
     joined = session.join(events, requests, session.claim_verdicts(store))
-    summary = session.summarize(store, args.session_id, requests, events, joined)
+    summary = session.summarize(store, args.session_id, requests, events, joined, cfg.phase)
 
     if args.json:
         print(json.dumps({
@@ -170,13 +201,35 @@ def _run_session(parser: argparse.ArgumentParser, args) -> int:
     return 0
 
 
+def _run_promote(parser: argparse.ArgumentParser, args) -> int:
+    """Promote one onboarding region, or say why it was refused.
+
+    A refusal is the expected answer to a session that is not finished or
+    a working copy that has moved on, so it is a message and a non-zero
+    exit rather than a traceback.
+    """
+    config, cfg = _named_region(parser, args.config, args.region_id)
+    try:
+        lines = promote_module.promote(
+            config, cfg, programs=args.programs, replace=args.replace,
+        )
+    except promote_module.PromoteRefused as refusal:
+        print(f"refused: {refusal}", file=sys.stderr)
+        return 1
+    for line in lines:
+        print(line)
+    return 0
+
+
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
     if args.command == "status":
-        store, tree, frozen, name = _open_region(parser, args)
-        status = compute_status(store, tree=tree, frozen=frozen)
+        store, tree, frozen, phase, name, manifest = _open_region(parser, args)
+        status = compute_status(
+            store, requirements_for(phase, manifest), phase, tree=tree, frozen=frozen,
+        )
         if args.json:
             print(json.dumps(status, indent=2, sort_keys=True))
         else:
@@ -184,13 +237,16 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "history":
-        store, _, _, _ = _open_region(parser, args)
+        store, _, _, _, _, _ = _open_region(parser, args)
         history = compute_history(store)
         if args.json:
             print(json.dumps(history, indent=2, sort_keys=True))
         else:
             print(render.render_history(history), end="")
         return 0
+
+    if args.command == "promote":
+        return _run_promote(parser, args)
 
     if args.command == "session":
         return _run_session(parser, args)

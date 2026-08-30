@@ -14,8 +14,24 @@ export interface StatusRow {
 export interface StatusBody {
   tree: string | null;
   frozen: string | null;
+  phase: string;
   rows: StatusRow[];
   accepted: boolean;
+}
+
+/**
+ * The word for a region that has met every requirement of its phase.
+ * They differ because they mean different things: an onboarded code is
+ * ready for a person to review and promote, an accepted port is ready to
+ * merge.
+ */
+const FINISHED_WORD: Record<string, string> = {
+  onboarding: "ONBOARDED",
+  porting: "ACCEPTED",
+};
+
+function finishedWord(phase: string): string {
+  return FINISHED_WORD[phase] ?? "ACCEPTED";
 }
 
 export function renderStatus(body: StatusBody): string {
@@ -24,10 +40,19 @@ export function renderStatus(body: StatusBody): string {
   for (const row of body.rows) {
     if (row.status === "present") {
       lines.push(`  ${row.predicateType}  ${row.verdict}  ${row.claim_id}`);
+    } else if (row.verdict) {
+      // The check ran and did not pass. That is still an unmet
+      // requirement, but "missing" would say it never ran; the claim id
+      // is there to be read, so the row shows it.
+      lines.push(
+        `  ${row.predicateType}  ${row.verdict}  ${row.claim_id}` +
+          `  (fix and run ${row.producing_action} again)`,
+      );
     } else {
       lines.push(`  ${row.predicateType}  missing  (run ${row.producing_action})`);
     }
   }
-  lines.push(body.accepted ? "ACCEPTED" : "not accepted");
+  const word = finishedWord(body.phase);
+  lines.push(body.accepted ? word : `not ${word.toLowerCase()}`);
   return lines.join("\n");
 }

@@ -45,13 +45,13 @@ def test_holdout_is_the_only_verdict_only_predicate():
 
 def test_agent_receipt_drops_detail_for_verdict_only_predicates():
     pred = Predicate(tool="oracle", version="0.3.1", configHash="cfg", verdict="pass",
-                      detail={"case0003": {"u": {"max_rel": 2.1e-3, "pass": False}}})
+                      detail={"case0003": {"field": {"max_rel": 2.1e-3, "pass": False}}})
     receipt = predicates.agent_receipt("regression/holdout", pred)
     assert receipt == {"verdict": "pass"}
 
 
 def test_agent_receipt_includes_whatever_detail_the_tool_recorded():
     pred = Predicate(tool="oracle", version="0.3.1", configHash="cfg", verdict="fail",
-                      detail={"case0003": {"u": {"max_rel": 2.1e-3, "pass": False}}})
+                      detail={"case0003": {"field": {"max_rel": 2.1e-3, "pass": False}}})
     receipt = predicates.agent_receipt("regression/visible", pred)
     assert receipt == {"verdict": "fail", "detail": pred.detail}

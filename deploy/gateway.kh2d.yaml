@@ -1,0 +1,35 @@
+# The gateway's configuration for a deployment built around kh2d, in the
+# container's terms (see gateway.tsunami.yaml for what each path is). One
+# deployment holds one code: the repository is seeded from that code's
+# baseline, so a second code is a second configuration file, chosen by
+# EQUIVALENT_CODE.
+version: 1
+paths:
+  repo: /repo
+  ledger_root: /ledger
+  working_copy: /working
+  programs: /programs
+  strategies: /strategies
+  seed: /seed
+codes:
+  kh2d:
+    manifest: kh2d/manifest.yaml
+regions:
+  # Bringing the code in: no region of it has been chosen yet, so there is
+  # no spec and no dataset. Promoting what this session produces is what
+  # makes a porting region possible; add one here afterwards.
+  "kh2d:onboard":
+    code: kh2d
+    phase: onboarding
+    strategy: onboarding
+    baseline_strategy: cpu_reference
+  # One full time step, as the onboarding session factored it into
+  # kh2d_module. The spec is checked in beside the code; a session's working
+  # copy gets it at the path named here.
+  "kh2d:step":
+    code: kh2d
+    phase: porting
+    spec_path: notes/regions/kh2d-step.sese.yaml
+    strategy: stdpar_managed
+    baseline_strategy: cpu_reference
+    visible_dataset: visible

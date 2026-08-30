@@ -21,6 +21,7 @@ EQUIVALENT_UID="$(id -u)"
 EQUIVALENT_GID="$(id -g)"
 export EQUIVALENT_UID EQUIVALENT_GID
 
+code="${EQUIVALENT_CODE:-tsunami}"
 region="${EQUIVALENT_REGION:-ch04:step}"
 # A region id spelled as a directory name: the gateway files each region's
 # ledger under its id with the colon replaced by a dash.
@@ -29,7 +30,7 @@ region_dir="${region//:/-}"
 mkdir -p state/repo state/ledger state/working state/sessions state/seed state/pi-home/agent
 
 echo "== baseline seed =="
-python3 "${here}/seed.py" state/seed
+python3 "${here}/seed.py" --code "${code}" state/seed
 
 # The agent's working copy starts as the baseline. Only when it is empty: a
 # working copy with anything in it is the person's session in progress.
@@ -66,25 +67,17 @@ baseline="$(git -C state/repo rev-parse main)"
 
 # The same configuration the gateway reads, with the paths of this machine
 # rather than the container's mount points, so the ledger command line and the
-# gateway describe one deployment and not two.
-cat > state/gateway.host.yaml <<YAML
-# Written by up.sh. The gateway reads deploy/gateway.yaml, in the container's
-# terms; this is the same deployment seen from this machine. Edit gateway.yaml
-# and re-run up.sh rather than editing this file.
-version: 1
-paths:
-  repo: ${here}/state/repo
-  ledger_root: ${here}/state/ledger
-  working_copy: ${here}/state/working
-  datasets_root: ${repo_root}/demo/orchestrator/datasets
-  strategies: ${repo_root}/equivalent/strategy/files
-  sessions: ${here}/state/sessions
-regions:
-  "${region}":
-    spec_path: notes/regions/ch04-step.sese.yaml
-    strategy: stdpar_managed
-    visible_dataset: visible
-YAML
+# gateway describe one deployment and not two. The regions come from
+# the code's gateway.<code>.yaml as they are written there; only the paths are rewritten, from
+# the mounts in docker-compose.yml.
+python3 "${here}/hostconfig.py" "${here}/gateway.${EQUIVALENT_CODE:-tsunami}.yaml" state/gateway.host.yaml \
+    --mount "/repo=${here}/state/repo" \
+    --mount "/ledger=${here}/state/ledger" \
+    --mount "/working=${here}/state/working" \
+    --mount "/seed=${here}/state/seed" \
+    --mount "/programs=${repo_root}/programs" \
+    --mount "/strategies=${repo_root}/equivalent/strategy/files" \
+    --sessions "${here}/state/sessions" >/dev/null
 
 echo
 echo "baseline commit ${baseline}"

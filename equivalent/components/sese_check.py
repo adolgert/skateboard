@@ -28,8 +28,6 @@ from equivalent.strategy.schema import Strategy
 
 from .errors import ComponentError
 
-DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
 
 class AnalyzerError(ComponentError):
     """The analyzer subprocess produced no usable verdict.
@@ -40,7 +38,7 @@ class AnalyzerError(ComponentError):
     """
 
 
-def check(repo_dir, ref: str, spec_path: str, strategy: Strategy, project_root: Path | None = None) -> dict:
+def check(repo_dir, ref: str, spec_path: str, strategy: Strategy) -> dict:
     """Run the strategy's analyzer against the region's current tree.
 
     Returns {"verdict": "pass" | "fail", "detail": {...}, "allow_globs": [...] | None}.
@@ -50,14 +48,12 @@ def check(repo_dir, ref: str, spec_path: str, strategy: Strategy, project_root: 
     equivalent.gateway.app), not the frozen value that was current before
     this check ran.
     """
-    project_root = project_root or DEFAULT_PROJECT_ROOT
-
     with tempfile.TemporaryDirectory() as scratch:
         materialize_tree(repo_dir, ref, scratch)
         spec_file = Path(scratch) / spec_path
         result = subprocess.run(
             [*shlex.split(strategy.analyzer_command), str(spec_file), "--repo-root", scratch, "--json"],
-            cwd=project_root, capture_output=True, text=True,
+            capture_output=True, text=True,
         )
         try:
             analysis = json.loads(result.stdout)
@@ -73,7 +69,7 @@ def check(repo_dir, ref: str, spec_path: str, strategy: Strategy, project_root: 
             "allow_globs": None,
         }
 
-    candidate_globs = sorted({analysis["src_file"], spec_path})
+    candidate_globs = sorted({*analysis["src_files"], spec_path})
     outside = [g for g in candidate_globs if not strategy.allows(g)]
     if outside:
         return {
@@ -84,6 +80,6 @@ def check(repo_dir, ref: str, spec_path: str, strategy: Strategy, project_root: 
 
     return {
         "verdict": "pass",
-        "detail": {"file_list": [analysis["src_file"]], "allow_globs": candidate_globs},
+        "detail": {"file_list": analysis["src_files"], "allow_globs": candidate_globs},
         "allow_globs": candidate_globs,
     }

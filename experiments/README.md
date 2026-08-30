@@ -1,7 +1,10 @@
 # Experiments
 
 Results from running the skateboard harness across configurations. Each CSV is a
-copy of the harness ledger (`demo/ledger` volume) for one campaign.
+copy of the ledger for one campaign, written by the first demonstration harness
+-- the batch orchestrator the gateway path has since replaced. The rungs, gates
+and speedups below are that harness's; the gate names and the ledger's shape
+have changed since, and these files are kept as the record of what was run.
 
 ## model-matrix-2026-07-30.csv
 
@@ -35,8 +38,10 @@ Three findings, each a load-bearing point of the design:
    sanitizer, visible AND held-out comparison all pass) that runs **8× slower than
    the CPU** (86.9 s vs 10.9 s). The cause: its kernel keeps extra whole-array
    copies (`h_old = h`, `u = u_new`) that execute on the host, so 2M-element
-   managed-memory arrays migrate host⇄device every step. Sonnet/Opus updated in
-   place and kept the data resident on the device.
+   managed-memory arrays migrate host⇄device every step. Sonnet, the only other
+   accepted run in this campaign, updated in place and kept the data resident on
+   the device. No Opus run exists: the four backends in the table above are the
+   ones that ran, and no ledger here holds an `opus` row.
 
 The speedup spectrum (including Haiku's 0.13×) is kept deliberately: the harness
 records every port, effective or not, rather than gating acceptance on speed.
@@ -190,9 +195,11 @@ an LLVM/Clang offload variable that nvfortran ignores completely (zero bytes of
 stderr, even at `-1`). NVIDIA's runtime uses `NVCOMPILER_ACC_NOTIFY`, which
 covers OpenMP target regions as well as OpenACC/stdpar. A hand-written, verified
 correct OpenMP port scored `kernels_launched = 0` before the fix. Every attempt
-on this rung would have failed the device proof regardless of quality. Fixed in
-`demo/builder/stages.py`; both notify modes now use the NVIDIA notifier and the
-same `launch ` regex.
+on this rung would have failed the device proof regardless of quality. Fixed in what is now
+`services/builder/stages.py`; both notify modes use the NVIDIA notifier. The
+match has since been tightened further: a launch line counts only if it carries
+the runtime's own file, function, line and device fields, which a program
+cannot print for a kernel it never launched.
 
 ### Findings
 

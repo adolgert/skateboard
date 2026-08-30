@@ -288,6 +288,10 @@ class Target:
     comparator: Path
     tolerances: Path
     run_args: list[str] = field(default_factory=lambda: ["{case_dir}"])
+    # How to read a corpus file that is not a .npy. A .npy says for itself
+    # what it holds; a raw stream does not, so a target using one has to
+    # name its element type here (e.g. "<f8").
+    raw_dtype: str | None = None
 
     @staticmethod
     def load(path: Path) -> "Target":
@@ -313,6 +317,7 @@ class Target:
             comparator=r(cmp_["module"]),
             tolerances=r(cmp_["tolerances"]),
             run_args=b.get("run_args", ["{case_dir}"]),
+            raw_dtype=c.get("raw_dtype"),
         )
 
     def cases(self) -> list[str]:
@@ -349,6 +354,22 @@ def _build(t: Target, workdir: Path, flags: list[str], mutant: Mutant | None):
     return p.returncode == 0, p.stderr
 
 
+def _read_array(t: Target, path: Path) -> np.ndarray:
+    """One corpus file as an array.
+
+    A .npy carries its own element type, shape and order. Anything else is
+    a raw stream, and the target has to say what is in it.
+    """
+    if path.suffix == ".npy":
+        return np.load(path, allow_pickle=False)
+    if t.raw_dtype is None:
+        raise ValueError(
+            f"{path} is not a .npy and target '{t.name}' sets no corpus raw_dtype, "
+            f"so there is nothing that says what the file holds"
+        )
+    return np.fromfile(path, dtype=t.raw_dtype)
+
+
 def _replay_case(t: Target, workdir: Path, case: str):
     """Run the driver on one case. Returns (ok, note, {var: ndarray})."""
     run = workdir / "run" / case
@@ -374,7 +395,7 @@ def _replay_case(t: Target, workdir: Path, case: str):
         f = run / fname
         if not f.exists():
             return False, f"missing output {fname}", {}
-        got[var] = np.fromfile(f, dtype="<f4")
+        got[var] = _read_array(t, f)
     return True, "", got
 
 
@@ -387,7 +408,13 @@ def _load_comparator(t: Target):
 
 
 def _bitwise_equal(a: np.ndarray, b: np.ndarray) -> bool:
-    return a.shape == b.shape and np.array_equal(a.view(np.int32), b.view(np.int32))
+    """Identical bit patterns, whatever the element type is.
+
+    Comparing the bytes rather than the values is what makes two NaNs
+    equal and two zeros of opposite sign different, which is what "the
+    mutant changed the answer at all" has to mean.
+    """
+    return a.shape == b.shape and a.dtype == b.dtype and a.tobytes() == b.tobytes()
 
 
 # --------------------------------------------------------------------------- #
@@ -400,7 +427,7 @@ def _score_one(args) -> Mutant:
     cmp_mod, tols = _load_comparator(t)
     ref = {
         c: {
-            v: np.fromfile(t.expected / c / f, dtype="<f4")
+            v: _read_array(t, t.expected / c / f)
             for v, f in t.variables.items()
         }
         for c in cases

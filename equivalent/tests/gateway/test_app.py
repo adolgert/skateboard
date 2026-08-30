@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -5,12 +6,16 @@ from fastapi.testclient import TestClient
 from equivalent.gateway.app import create_app
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import init_baseline_repo
+from equivalent.ledger.acceptance import ONBOARDING, PORTING, requirements_for
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
+from equivalent.manifest.schema import load_manifest
+from equivalent.tests.fakes import write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
 STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
+BASELINE_STRATEGY_PATH = STRATEGY_PATH.parent / "cpu_reference.yaml"
 
 
 def _seed(root):
@@ -19,18 +24,25 @@ def _seed(root):
     return root
 
 
-def _region(tmp_path, region_id="ch04:step"):
+def _region(tmp_path, region_id="ch04:step", phase=PORTING):
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
     working = tmp_path / "working"
     working.mkdir()
     cfg = RegionConfig(
         region_id=region_id,
+        code="tsunami",
+        phase=phase,
         repo_dir=repo_dir,
         spec_path="notes/regions/ch04-step.sese.yaml",
         ledger_dir=tmp_path / "ledger",
         strategy_path=STRATEGY_PATH,
+        baseline_strategy_path=BASELINE_STRATEGY_PATH,
         working_copy_dir=working,
+        # A code that declares its own invariants: the accept row's
+        # preconditions are the longest list a porting region can have,
+        # which is what the table fixture below is a copy of.
+        manifest=load_manifest(write_program(tmp_path, properties=True) / "manifest.yaml"),
     )
     return cfg
 
@@ -41,14 +53,59 @@ def _client(tmp_path, region_id="ch04:step"):
     return TestClient(app), cfg
 
 
-def test_get_table_returns_the_action_rows(tmp_path):
-    client, _ = _client(tmp_path)
+def test_get_table_returns_the_action_rows_of_the_regions_phase(tmp_path):
+    client, cfg = _client(tmp_path)
 
-    r = client.get("/table", headers=HEADERS)
+    r = client.get("/table", params={"region": cfg.region_id}, headers=HEADERS)
 
     assert r.status_code == 200
     names = {row["name"] for row in r.json()}
     assert {"sese_check", "build_replay", "accept"} <= names
+    # Nothing from the other phase: what a session may do is decided by
+    # the region it is for.
+    assert "manifest_check" not in names
+
+
+def test_get_table_for_an_onboarding_region_returns_the_onboarding_rows(tmp_path):
+    cfg = _region(tmp_path, "tsunami:onboarding", phase=ONBOARDING)
+    client = TestClient(create_app({cfg.region_id: cfg}, TOKEN))
+
+    rows = client.get("/table", params={"region": cfg.region_id}, headers=HEADERS).json()
+
+    assert [row["name"] for row in rows] == [
+        "manifest_check", "harness_build", "harness_capture", "harness_replay",
+        "harness_determinism", "harness_timing", "harness_self_check",
+        "harness_property", "onboarded",
+    ]
+    # The row that names the whole list has nothing to dispatch to, the
+    # same way "accept" does not.
+    assert rows[-1]["component"] is None
+
+
+def test_get_table_without_a_region_says_it_needs_one(tmp_path):
+    client, _ = _client(tmp_path)
+
+    r = client.get("/table", headers=HEADERS)
+
+    assert r.status_code == 400
+    assert "region" in r.json()["detail"]
+
+
+def test_get_table_says_which_settings_an_action_takes_and_what_they_mean(tmp_path):
+    # A client that offers these to a model reads the wording from here,
+    # so it cannot drift from what POST /run validates against.
+    client, cfg = _client(tmp_path)
+
+    rows = {row["name"]: row for row in
+            client.get("/table", params={"region": cfg.region_id}, headers=HEADERS).json()}
+
+    assert rows["time_port"]["config_keys"] == ["repeats"]
+    assert rows["time_port"]["config_params"]["repeats"]["type"] == "integer"
+    assert rows["time_port"]["config_params"]["repeats"]["description"]
+    assert rows["property_check"]["config_keys"] == ["seed", "max_examples"]
+    # An action that takes no settings says so rather than leaving it out.
+    assert rows["build_replay"]["config_keys"] == []
+    assert rows["build_replay"]["config_params"] == {}
 
 
 def test_get_table_matches_the_pi_extension_fixture(tmp_path):
@@ -64,9 +121,36 @@ def test_get_table_matches_the_pi_extension_fixture(tmp_path):
     fixture_path = Path(__file__).resolve().parents[3] / "pi-extension" / "test" / "fixtures" / "table.json"
     fixture = json.loads(fixture_path.read_text())
 
-    r = client.get("/table", headers=HEADERS)
+    r = client.get("/table", params={"region": "ch04:step"}, headers=HEADERS)
 
     assert r.json() == fixture
+
+
+def test_the_accept_row_asks_for_the_property_claim_only_from_a_code_that_has_one(tmp_path):
+    # The table is the same rows for every porting region, but what
+    # finishes a port is not: a code with no module of invariants has none
+    # to pass.
+    with_properties = _region(tmp_path / "with")
+    without = _region(tmp_path / "without")
+    without = replace(
+        without,
+        manifest=load_manifest(write_program(tmp_path / "without") / "manifest.yaml"),
+    )
+
+    def accept_row(cfg):
+        client = TestClient(create_app({cfg.region_id: cfg}, TOKEN))
+        rows = client.get("/table", params={"region": cfg.region_id}, headers=HEADERS).json()
+        return next(row for row in rows if row["name"] == "accept")
+
+    assert ["regression/property", "tree"] in accept_row(with_properties)["requires"]
+    assert ["regression/property", "tree"] not in accept_row(without)["requires"]
+    # The action itself is offered either way: the table is one list per
+    # phase, and the gateway's own answer is what says it was not needed.
+    assert "property_check" in [
+        row["name"] for row in TestClient(
+            create_app({without.region_id: without}, TOKEN)
+        ).get("/table", params={"region": without.region_id}, headers=HEADERS).json()
+    ]
 
 
 def test_get_status_reports_the_real_current_tree_before_any_check_has_run(tmp_path):
@@ -82,10 +166,16 @@ def test_get_status_reports_the_real_current_tree_before_any_check_has_run(tmp_p
     # The gateway's answer matches what compute_status itself would say
     # given the same tree/frozen -- one rendering, not two.
     from equivalent.gateway.submit import current_tree_and_frozen
+    from equivalent.ledger.acceptance import requirements_for
     from equivalent.ledger.subjects import Subject
-    tree_sha, frozen_sha = current_tree_and_frozen(cfg.repo_dir, cfg.region_id, store, cfg.spec_path)
+    from equivalent.strategy.schema import load_strategy
+    tree_sha, frozen_sha = current_tree_and_frozen(
+        cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase,
+        load_strategy(cfg.strategy_path),
+    )
     expected = compute_status(
-        store, tree=Subject(kind="tree", sha256=tree_sha), frozen=Subject(kind="frozen", sha256=frozen_sha),
+        store, requirements_for(cfg.phase, cfg.manifest), cfg.phase,
+        tree=Subject(kind="tree", sha256=tree_sha), frozen=Subject(kind="frozen", sha256=frozen_sha),
     )
     assert body == expected
 
@@ -136,7 +226,7 @@ def test_compute_status_and_history_without_repo_info_are_unchanged(tmp_path):
     # The CLI's own behaviour and golden file must keep working: no tree
     # or frozen argument means fall back to the claims-based guess.
     store = LedgerStore(tmp_path / "region")
-    status = compute_status(store)
+    status = compute_status(store, requirements_for(PORTING), PORTING)
     history = compute_history(store)
     assert status["tree"] is None
     assert status["accepted"] is False
@@ -184,3 +274,94 @@ def test_submit_records_the_caller_tool_call_id_when_it_sends_one(tmp_path):
     first, second = store.all_requests()
     assert first.tool_call_id == "tool:1:ccc"
     assert second.tool_call_id is None
+
+
+def _file_a_claim(cfg, predicate_type="harness/self_check", verdict="fail", detail=None):
+    """One claim in the region's ledger, as a check's dispatch would leave it."""
+    from equivalent.ledger.records import Predicate
+    from equivalent.ledger.subjects import Subject
+
+    store = LedgerStore(cfg.ledger_dir)
+    return store.record_claim(
+        [Subject(kind="tree", sha256="a" * 64)],
+        predicate_type,
+        Predicate(tool="builder", version="0.1", configHash="cfg", verdict=verdict,
+                  detail=detail if detail is not None else {"reason": "no fault was caught"}),
+        [Subject(kind="manifest", sha256="b" * 64)],
+        "sess-1",
+    )
+
+
+def test_get_claim_reads_one_claim_back_with_its_detail(tmp_path):
+    # A verdict on its own is not something a session can act on: the
+    # reason is in the detail, and this is how it reads it.
+    client, cfg = _client(tmp_path)
+    claim = _file_a_claim(cfg)
+
+    r = client.get(f"/claims/{claim.id}", params={"region": cfg.region_id}, headers=HEADERS)
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["claim_id"] == claim.id
+    assert body["verdict"] == "fail"
+    assert body["predicateType"] == "harness/self_check"
+    assert body["detail"] == {"reason": "no fault was caught"}
+    assert body["subject"] == [{"kind": "tree", "sha256": "a" * 64}]
+    assert body["materials"] == [{"kind": "manifest", "sha256": "b" * 64}]
+
+
+def test_get_claim_of_a_verdict_only_predicate_still_withholds_the_detail(tmp_path):
+    # Reading a claim back must not be a way around the receipt policy.
+    client, cfg = _client(tmp_path)
+    claim = _file_a_claim(
+        cfg, predicate_type="regression/holdout", verdict="pass", detail={"case0000": {"pass": True}},
+    )
+
+    body = client.get(
+        f"/claims/{claim.id}", params={"region": cfg.region_id}, headers=HEADERS,
+    ).json()
+
+    assert body["verdict"] == "pass"
+    assert "detail" not in body
+
+
+def test_get_claim_of_an_unknown_id_is_not_found(tmp_path):
+    client, cfg = _client(tmp_path)
+
+    r = client.get("/claims/c-9999", params={"region": cfg.region_id}, headers=HEADERS)
+
+    assert r.status_code == 404
+    assert "c-9999" in r.json()["detail"]
+
+
+def test_get_claim_needs_a_token(tmp_path):
+    client, cfg = _client(tmp_path)
+    claim = _file_a_claim(cfg)
+
+    r = client.get(
+        f"/claims/{claim.id}", params={"region": cfg.region_id},
+        headers={**HEADERS, "Authorization": "Bearer wrong"},
+    )
+
+    assert r.status_code == 401
+
+
+def test_get_claim_writes_one_request_log_line_naming_the_claim_endpoint(tmp_path):
+    client, cfg = _client(tmp_path)
+    claim = _file_a_claim(cfg)
+    store = LedgerStore(cfg.ledger_dir)
+
+    client.get(f"/claims/{claim.id}", params={"region": cfg.region_id},
+               headers={**HEADERS, "X-Tool-Call-Id": "tool:1:ccc"})
+    client.get("/claims/c-9999", params={"region": cfg.region_id}, headers=HEADERS)
+
+    read, missed = store.all_requests()
+    assert read.endpoint == "claim"
+    assert read.action == "claim"
+    assert read.session == "sess-1"
+    assert read.claim_id == claim.id
+    # A read files nothing, so it is not logged as a claim.
+    assert read.outcome == "read"
+    assert read.tool_call_id == "tool:1:ccc"
+    assert missed.outcome == "error"
+    assert missed.claim_id == "c-9999"

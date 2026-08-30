@@ -1,0 +1,11 @@
+{
+  "policy_version": "2025-08-28 kh2d",
+  "acceptance": "an element passes if abs OR rel OR ulp is within band",
+  "variables": {
+    "Q": {"abs": 1e-16, "rel": 1e-16, "ulp": 0},
+    "dt": {"abs": 1e-16, "rel": 1e-16, "ulp": 0}
+  },
+  "files": {
+    "kh2d.npy": {"abs": 1e-16, "rel": 1e-16, "ulp": 0}
+  }
+}
