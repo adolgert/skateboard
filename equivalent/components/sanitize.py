@@ -15,9 +15,9 @@ every one of them.
 """
 from __future__ import annotations
 
-from equivalent.gateway.submit import attempt_id_for
 from equivalent.manifest.schema import Manifest
 from equivalent.strategy.schema import Strategy
+from equivalent.tree import attempt_id_for
 
 from .errors import ComponentError
 

@@ -20,14 +20,14 @@ claim.
 """
 from __future__ import annotations
 
-from equivalent.gateway.submit import attempt_id_for_strategy
 from equivalent.ledger.capture_sets import load_capture_set
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.strategy.schema import Strategy
+from equivalent.tree import Tree, attempt_id_for_strategy
 
-from . import harness_capture, harness_replay, property_check, tree_manifest
-from .errors import ComponentError
+from . import harness_capture, harness_replay, property_check
+from .errors import ComponentError, after_the_manifest_check_passed
 
 # The dataset the properties draw their corpus from: the one the agent
 # can see. Held-out inputs are for judging a port, not for a search the
@@ -54,7 +54,8 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
     is. Raises ComponentError if the tree has no passing capture claim or
     the builder could not be reached.
     """
-    manifest = tree_manifest.manifest_of(repo_dir, ref)
+    with after_the_manifest_check_passed():
+        manifest = Tree(repo_dir, ref).manifest()
     if manifest.properties is None:
         return {"verdict": "pass", "detail": {"module": None, "note": NO_PROPERTIES}}
 

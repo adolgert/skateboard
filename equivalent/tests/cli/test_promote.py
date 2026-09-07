@@ -14,15 +14,16 @@ import yaml
 from equivalent.capture import npy
 from equivalent.cli import promote
 from equivalent.cli.main import main
-from equivalent.gateway.submit import baseline_commit, init_baseline_repo, tracked_files
 from equivalent.gateway.config import load_gateway_config
 from equivalent.gateway.evidence import evidence_materials_for
+from equivalent.gateway.submit import baseline_commit, init_baseline_repo
 from equivalent.ledger.acceptance import requirements_for
 from equivalent.ledger.capture_sets import store_capture_set
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject, tree_subject
+from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import IN_TREE_MANIFEST, load_manifest
+from equivalent.tree import Tree
 from equivalent.tests.fakes import (
     fixture_arrays,
     in_tree_manifest,
@@ -120,7 +121,7 @@ def _deployment(tmp_path, *, manifest_text=None, omit: str = "", phase: str = "o
     materials = evidence_materials_for(load_gateway_config(config_path).regions[REGION])
 
     store = LedgerStore(tmp_path / "ledger" / baseline_commit(repo) / REGION_SLUG)
-    tree = tree_subject(tracked_files(repo, "main"))
+    tree = Subject(kind="tree", sha256=Tree.baseline(repo).sha)
     visible = store_capture_set(store, "visible", _cases(0)).sha256
     holdout = store_capture_set(store, "holdout", _cases(50)).sha256
     program = store_capture_set(store, "program", _program_case()).sha256
@@ -177,7 +178,7 @@ def test_rebuilt_binary_invalidates_offline_status_and_promotion(tmp_path, capsy
     deployment = _deployment(tmp_path)
     cfg = load_gateway_config(deployment["config"]).regions[REGION]
     store = LedgerStore(tmp_path / "ledger" / baseline_commit(cfg.repo_dir) / REGION_SLUG)
-    tree = tree_subject(tracked_files(cfg.repo_dir, "main"))
+    tree = Subject(kind="tree", sha256=Tree.baseline(cfg.repo_dir).sha)
     store.record_claim(
         [tree], "harness/builds",
         Predicate(tool="t", version="0.1", configHash="rebuilt", verdict="pass",

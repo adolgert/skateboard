@@ -16,10 +16,11 @@ copy of the same reasoning here.
 """
 from __future__ import annotations
 
-from equivalent.gateway.submit import attempt_id_for_strategy, tree_payload
 from equivalent.strategy.schema import Strategy
+from equivalent.tree import Tree, attempt_id_for_strategy
 
-from . import build_replay, tree_manifest
+from . import build_replay
+from .errors import after_the_manifest_check_passed
 
 
 def check(
@@ -37,8 +38,10 @@ def check(
     command lines it ran, and, on a failure, which of the three statements
     did not hold.
     """
-    manifest = tree_manifest.manifest_of(repo_dir, ref)
-    tree = tree_payload(repo_dir, ref)
+    source_tree = Tree(repo_dir, ref)
+    with after_the_manifest_check_passed():
+        manifest = source_tree.manifest()
+    tree = source_tree.payload()
 
     per_strategy = {}
     for one in (baseline_strategy, strategy):

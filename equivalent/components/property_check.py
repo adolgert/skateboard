@@ -26,8 +26,8 @@ from __future__ import annotations
 
 import random
 
-from equivalent.gateway.submit import attempt_id_for
 from equivalent.manifest.schema import Manifest
+from equivalent.tree import attempt_id_for
 
 from .errors import ComponentError
 

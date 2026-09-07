@@ -19,14 +19,13 @@ from __future__ import annotations
 
 import json
 import math
-import tempfile
 from numbers import Integral, Real
 from pathlib import Path
 
 import yaml
 
-from equivalent.gateway.submit import materialize_tree
 from equivalent.manifest.schema import IN_TREE_MANIFEST, load_tree_manifest
+from equivalent.tree import Tree
 
 # The declared types whose comparison consults a tolerance band, and what
 # a band has to say. This is the same rule the oracle applies to its own
@@ -180,8 +179,7 @@ def check(repo_dir, ref: str) -> dict:
     it declares -- so a person reviewing the ledger reads the description
     that every later claim about this tree was filed under.
     """
-    with tempfile.TemporaryDirectory() as scratch:
-        materialize_tree(repo_dir, ref, scratch)
+    with Tree(repo_dir, ref).materialized() as scratch:
         try:
             manifest = load_tree_manifest(scratch)
         except FileNotFoundError:

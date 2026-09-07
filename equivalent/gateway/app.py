@@ -67,6 +67,7 @@ from equivalent.ledger.status import compute_status, requirement_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject, hash_bytes
 from equivalent.strategy.schema import load_strategy
+from equivalent.tree import Tree
 
 from .regions import RegionConfig
 from .evidence import (
@@ -78,7 +79,6 @@ from .evidence import (
     required_materials_by_predicate,
 )
 from .submit import (
-    baseline_tree_sha,
     ConcurrentSubmissionError,
     current_commit,
     current_tree_and_frozen,
@@ -891,7 +891,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 if builder is None:
                     raise ComponentError("builder not configured")
                 result = program_regression.check(
-                    store, Subject(kind="tree", sha256=baseline_tree_sha(cfg.repo_dir)),
+                    store, Subject(kind="tree", sha256=Tree.baseline(cfg.repo_dir).sha),
                     cfg.region_id, tree_sha, cfg.manifest, builder,
                 )
                 # The two things this verdict rests on, as formal
@@ -921,7 +921,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             if req.action == "time_baseline":
                 if builder is None:
                     raise ComponentError("builder not configured")
-                base_tree = baseline_tree_sha(cfg.repo_dir)
+                base_tree = Tree.baseline(cfg.repo_dir).sha
                 # The floor a speedup is measured against is a strategy
                 # file of the region's own choosing, loaded here so the
                 # claim says which one it was.

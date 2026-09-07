@@ -29,12 +29,12 @@ import base64
 import hashlib
 import math
 
-from equivalent.gateway.submit import attempt_id_for, tree_payload
 from equivalent.ledger.capture_sets import program_arrays, store_program_set
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import Manifest
 from equivalent.strategy.schema import Strategy
+from equivalent.tree import Tree, attempt_id_for
 
 from .build_replay import build_verdict
 from .errors import ComponentError
@@ -175,7 +175,7 @@ def check_baseline(
     """
     attempt_id = attempt_id_for(f"{region_id}-baseline", baseline_tree_sha)
     build_result = build_verdict(
-        builder, attempt_id, tree_payload(repo_dir, "main"), baseline_strategy, manifest,
+        builder, attempt_id, Tree.baseline(repo_dir).payload(), baseline_strategy, manifest,
     )
     if build_result["verdict"] != "pass":
         return {

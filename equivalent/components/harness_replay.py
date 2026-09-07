@@ -27,14 +27,14 @@ import base64
 import numpy as np
 
 from equivalent.capture import npy
-from equivalent.gateway.submit import attempt_id_for_strategy
 from equivalent.ledger.capture_sets import load_capture_set
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.strategy.schema import Strategy
+from equivalent.tree import Tree, attempt_id_for_strategy
 
-from . import harness_capture, tree_manifest
-from .errors import ComponentError
+from . import harness_capture
+from .errors import ComponentError, after_the_manifest_check_passed
 
 # The manifest role of the driver that replays one case.
 REPLAY_ROLE = "replay"
@@ -97,7 +97,8 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
     that did, with how far apart they were. Raises ComponentError if the
     tree has no passing capture claim or the builder could not be reached.
     """
-    manifest = tree_manifest.manifest_of(repo_dir, ref)
+    with after_the_manifest_check_passed():
+        manifest = Tree(repo_dir, ref).manifest()
     sets = harness_capture.captured_sets(store, tree)
     replay = manifest.build.targets[REPLAY_ROLE]
     attempt_id = attempt_id_for_strategy(region_id, tree_sha, baseline_strategy.name)

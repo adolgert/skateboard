@@ -17,11 +17,8 @@ directory.
 """
 from __future__ import annotations
 
-import base64
 import fnmatch
-import hashlib
 import os
-import re
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -30,6 +27,7 @@ from pathlib import Path
 from equivalent.ledger.acceptance import ONBOARDING
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import frozen_subject, tree_subject
+from equivalent.tree import Tree
 
 
 @dataclass(frozen=True)
@@ -89,24 +87,6 @@ def init_baseline_repo(repo_dir, seed_dir) -> str:
     _git(repo_dir, "commit", "-q", "-m", "baseline")
     _git(repo_dir, "branch", "-M", "main")
     return _git(repo_dir, "rev-parse", "HEAD").strip()
-
-
-def tracked_files(repo_dir, ref: str = "main") -> list[dict]:
-    """Every file tracked at `ref`, as {"path": str, "content": bytes} pairs.
-
-    The listing is asked for NUL-separated (`-z`) so that a path git would
-    otherwise quote comes back as the bytes it really is, and the content
-    is read without decoding.
-    """
-    listing = _git_bytes(repo_dir, "ls-tree", "-r", "--name-only", "-z", ref)
-    files = []
-    for raw in listing.split(b"\0"):
-        if raw:
-            path = raw.decode("utf-8")
-            files.append(
-                {"path": path, "content": _git_bytes(repo_dir, "show", f"{ref}:{path}")}
-                )
-    return files
 
 
 def working_copy_files(working_copy_dir) -> dict[str, bytes]:
@@ -223,7 +203,7 @@ def submit(repo_dir, region_id: str, working_copy_dir, allow_globs: list[str], s
     `working_copy_dir` is read directly (a mounted, read-only view of the
     agent's own working copy), not sent as request content.
     """
-    baseline = {f["path"]: f["content"] for f in tracked_files(repo_dir, "main")}
+    baseline = Tree.baseline(repo_dir).files
     working = working_copy_files(working_copy_dir)
 
     applied = {}
@@ -285,83 +265,16 @@ def current_commit(repo_dir, region_id: str) -> str:
 
 def frozen_for_allow_globs(repo_dir, allow_globs: list[str]) -> str:
     """The frozen-set hash for an explicit allow-list: baseline files it doesn't cover."""
-    baseline = tracked_files(repo_dir, "main")
-    frozen_files = [f for f in baseline if not _matches_any(f["path"], allow_globs)]
-    return frozen_subject(frozen_files).sha256
-
-
-def materialize_tree(repo_dir, ref: str, dest_dir) -> None:
-    """Write every file tracked at `ref` into `dest_dir`, for a subprocess to read.
-
-    Reads through git's object store (`git show`), not the shared working
-    tree in `repo_dir` -- which submit() deliberately never checks out --
-    so this never depends on, or races with, whatever happens to be on
-    disk in `repo_dir` itself.
-    """
-    dest_dir = Path(dest_dir)
-    for f in tracked_files(repo_dir, ref):
-        path = dest_dir / f["path"]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(f["content"])
-
-
-def attempt_id_for_strategy(region_id: str, tree_sha: str, strategy_name: str) -> str:
-    """The workspace key for building one tree with one named strategy.
-
-    Onboarding builds the same tree twice, once per strategy, and each
-    build needs its own workspace on the builder -- two builds sharing one
-    would leave the second reading the first's object files. Every later
-    onboarding step that wants one of those builds derives the same key
-    from the same three things rather than being handed it.
-    """
-    safe_strategy = re.sub(r"[^A-Za-z0-9._-]", "-", strategy_name)[:32]
-    strategy_digest = hashlib.sha256(strategy_name.encode("utf-8")).hexdigest()[:12]
-    return f"{attempt_id_for(region_id, tree_sha)}-{safe_strategy}-{strategy_digest}"
-
-
-def attempt_id_for(region_id: str, tree_sha: str) -> str:
-    """A stable workspace key the builder can reuse across build/run/sanitize/time.
-
-    services/builder/stages.py keeps a workspace on disk per attempt_id and
-    never checks a tree hash itself; deriving the id from (region, tree)
-    means every action against the same tree reuses the same workspace
-    without the gateway needing to remember anything extra. This follows
-    the builder's real, stateful behavior; if the builder loses its
-    workspace (a container restart), re-running the build re-creates it
-    under the same id.
-    """
-    safe_region = re.sub(r"[^A-Za-z0-9._-]", "-", region_id)[:48]
-    region_digest = hashlib.sha256(region_id.encode("utf-8")).hexdigest()[:16]
-    return f"{safe_region}-{region_digest}-{tree_sha}"
-
-
-def tree_payload(repo_dir, ref: str) -> list[dict]:
-    """Every file tracked at `ref`, as {"path", "b64"} pairs sorted by path.
-
-    The builder is sent the whole tree, not a filtered list of source
-    files. Its build is the tree's own makefile, which reads include
-    files, namelists, and small data files that no extension test would
-    recognize -- and which the code's manifest is under no obligation to
-    call source. Filtering here would produce a tree that does not build
-    for reasons nobody could see.
-
-    Content is base64 rather than text because the request body is JSON
-    and a real code's tree is not all UTF-8.
-    """
-    return [
-        {"path": f["path"], "b64": base64.b64encode(f["content"]).decode("ascii")}
-        for f in sorted(tracked_files(repo_dir, ref), key=lambda f: f["path"])
+    frozen_files = [
+        f for f in Tree.baseline(repo_dir).file_list()
+        if not _matches_any(f["path"], allow_globs)
     ]
+    return frozen_subject(frozen_files).sha256
 
 
 def baseline_commit(repo_dir) -> str | None:
     """The baseline commit id -- the `main` branch's tip -- or None if the repo isn't initialized."""
     return _rev_parse(repo_dir, "main")
-
-
-def baseline_tree_sha(repo_dir) -> str:
-    """The pristine baseline's own tree hash -- what timing/baseline is filed against."""
-    return tree_subject(tracked_files(repo_dir, "main")).sha256
 
 
 def current_tree_and_frozen(
@@ -383,6 +296,6 @@ def current_tree_and_frozen(
         store, spec_path, phase, strategy, required_materials=required_materials,
     )
     return (
-        tree_subject(tracked_files(repo_dir, ref)).sha256,
+        Tree(repo_dir, ref).sha,
         frozen_for_allow_globs(repo_dir, allow_globs),
     )

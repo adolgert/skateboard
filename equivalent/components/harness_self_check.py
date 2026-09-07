@@ -35,14 +35,14 @@ import hashlib
 import json
 
 from equivalent.capture import npy
-from equivalent.gateway.submit import attempt_id_for_strategy
 from equivalent.ledger.capture_sets import load_capture_set
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.strategy.schema import Strategy
+from equivalent.tree import Tree, attempt_id_for_strategy
 
-from . import build_replay, harness_capture, tree_manifest
-from .errors import ComponentError
+from . import build_replay, harness_capture
+from .errors import ComponentError, after_the_manifest_check_passed
 
 # The manifest role of the driver each mutant is replayed through.
 REPLAY_ROLE = "replay"
@@ -158,7 +158,8 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
     policy cannot be read, or if the builder could not run the mutation
     at all.
     """
-    manifest, policy_bytes = tree_manifest.manifest_and_policy(repo_dir, ref)
+    with after_the_manifest_check_passed():
+        manifest, policy_bytes = Tree(repo_dir, ref).manifest_and_policy()
     sets = harness_capture.captured_sets(store, tree)
     if VISIBLE not in sets:
         raise ComponentError(

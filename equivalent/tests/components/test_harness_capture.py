@@ -17,7 +17,8 @@ import pytest
 from equivalent.capture import npy
 from equivalent.components import harness_capture
 from equivalent.components.errors import ComponentError
-from equivalent.gateway.submit import attempt_id_for_strategy, init_baseline_repo
+from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import attempt_id_for_strategy
 from equivalent.ledger import capture_sets
 from equivalent.ledger.store import LedgerStore
 from equivalent.strategy.schema import load_strategy

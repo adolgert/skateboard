@@ -14,10 +14,9 @@ flags is a `fail` with the offending command line named, not a pass.
 """
 from __future__ import annotations
 
-from equivalent.gateway.submit import attempt_id_for, tree_payload
-from equivalent.gateway.submit import tracked_files
 from equivalent.manifest.schema import Manifest, source_files
 from equivalent.strategy.schema import Strategy
+from equivalent.tree import Tree, attempt_id_for
 
 from .errors import ComponentError
 
@@ -152,14 +151,14 @@ def check(
     ComponentError if the builder call itself couldn't be completed (not a
     verdict about the code).
     """
-    tracked = tracked_files(repo_dir, ref)
-    if not source_files(manifest, sorted(f["path"] for f in tracked)):
+    source_tree = Tree(repo_dir, ref)
+    if not source_files(manifest, sorted(source_tree.files)):
         raise ComponentError(
             f"no file in tree {tree_sha} at ref {ref} matches the source patterns "
             f"of code '{manifest.name}'"
         )
 
     return build_verdict(
-        builder, attempt_id_for(region_id, tree_sha), tree_payload(repo_dir, ref),
+        builder, attempt_id_for(region_id, tree_sha), source_tree.payload(),
         strategy, manifest,
     )

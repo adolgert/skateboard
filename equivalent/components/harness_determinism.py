@@ -25,14 +25,14 @@ from __future__ import annotations
 import base64
 
 from equivalent.capture import npy
-from equivalent.gateway.submit import attempt_id_for_strategy
 from equivalent.ledger.capture_sets import load_capture_set, store_capture_set
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.strategy.schema import Strategy
+from equivalent.tree import Tree, attempt_id_for_strategy
 
-from . import harness_capture, harness_replay, tree_manifest
-from .errors import ComponentError
+from . import harness_capture, harness_replay
+from .errors import ComponentError, after_the_manifest_check_passed
 
 # What the second run of a dataset's capture is called, so it writes into
 # a directory of its own: a program that appends to what is already there
@@ -91,7 +91,8 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
     the repeats disagreed. Raises ComponentError if the tree has no
     passing capture claim or the builder could not be reached.
     """
-    manifest = tree_manifest.manifest_of(repo_dir, ref)
+    with after_the_manifest_check_passed():
+        manifest = Tree(repo_dir, ref).manifest()
     sets = harness_capture.captured_sets(store, tree)
     capture = manifest.build.targets.get(harness_capture.CAPTURE_ROLE)
     if capture is None:

@@ -35,7 +35,6 @@ from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import (
     current_commit,
     current_tree_and_frozen,
-    tracked_files,
     working_copy_files,
 )
 from equivalent.ledger.acceptance import FINISHED_WORD, ONBOARDING, requirements_for
@@ -45,6 +44,7 @@ from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import IN_TREE_MANIFEST, IN_TREE_SOURCE_ROOT
 from equivalent.strategy.schema import load_strategy
+from equivalent.tree import Tree
 
 # Where a code keeps the answers a port is compared against, under its
 # own directory. The oracle spells this too, in its own words: it cannot
@@ -239,7 +239,7 @@ def _onboarded_tree(cfg: RegionConfig, store: LedgerStore) -> tuple[str, Subject
 
 def _reviewed_tree(cfg: RegionConfig, ref: str) -> dict:
     """The files of the tree that passed, refused unless the working copy is them."""
-    tree = {f["path"]: f["content"] for f in tracked_files(cfg.repo_dir, ref)}
+    tree = Tree(cfg.repo_dir, ref).files
     difference = first_difference(tree, working_copy_files(cfg.working_copy_dir))
     if difference is not None:
         raise PromoteRefused(

@@ -23,9 +23,9 @@ from __future__ import annotations
 import base64
 
 from equivalent.capture import npy
-from equivalent.gateway.submit import attempt_id_for
 from equivalent.manifest.schema import Manifest
 from equivalent.strategy.schema import Strategy
+from equivalent.tree import attempt_id_for
 
 from .errors import ComponentError
 

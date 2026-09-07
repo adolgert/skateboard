@@ -15,11 +15,11 @@ not the only thing enforcing it.
 """
 from __future__ import annotations
 
-from equivalent.gateway.submit import attempt_id_for
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import Manifest
 from equivalent.strategy.schema import Strategy
+from equivalent.tree import attempt_id_for
 
 from .errors import ComponentError
 

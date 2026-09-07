@@ -20,11 +20,10 @@ from __future__ import annotations
 import json
 import shlex
 import subprocess
-import tempfile
 from pathlib import Path
 
-from equivalent.gateway.submit import materialize_tree
 from equivalent.strategy.schema import Strategy
+from equivalent.tree import Tree
 
 from .errors import ComponentError
 
@@ -48,8 +47,7 @@ def check(repo_dir, ref: str, spec_path: str, strategy: Strategy) -> dict:
     equivalent.gateway.app), not the frozen value that was current before
     this check ran.
     """
-    with tempfile.TemporaryDirectory() as scratch:
-        materialize_tree(repo_dir, ref, scratch)
+    with Tree(repo_dir, ref).materialized() as scratch:
         spec_file = Path(scratch) / spec_path
         result = subprocess.run(
             [*shlex.split(strategy.analyzer_command), str(spec_file), "--repo-root", scratch, "--json"],

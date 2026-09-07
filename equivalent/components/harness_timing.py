@@ -24,13 +24,12 @@ that compares the region's.
 """
 from __future__ import annotations
 
-from equivalent.gateway.submit import attempt_id_for_strategy
 from equivalent.ledger.capture_sets import PROGRAM_SET, program_arrays, store_program_set
 from equivalent.ledger.store import LedgerStore
 from equivalent.strategy.schema import Strategy
+from equivalent.tree import Tree, attempt_id_for_strategy
 
-from . import tree_manifest
-from .errors import ComponentError
+from .errors import ComponentError, after_the_manifest_check_passed
 
 # The manifest role of the program a timing run measures.
 TIMING_ROLE = "timing"
@@ -64,7 +63,8 @@ def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
     program declared, and the capture set the ledger now holds them
     under. Raises ComponentError if the builder could not be reached.
     """
-    manifest = tree_manifest.manifest_of(repo_dir, ref)
+    with after_the_manifest_check_passed():
+        manifest = Tree(repo_dir, ref).manifest()
     described = {"manifest_sha256": manifest.sha256}
 
     target = manifest.build.targets.get(TIMING_ROLE)

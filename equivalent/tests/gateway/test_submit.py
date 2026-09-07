@@ -1,22 +1,16 @@
-import base64
 from pathlib import Path
-
-import pytest
 
 from equivalent.gateway.submit import (
     current_commit,
     init_baseline_repo,
-    materialize_tree,
     resolve_allow_globs,
     submit,
-    tracked_files,
-    tree_payload,
 )
 from equivalent.ledger.acceptance import ONBOARDING, PORTING
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import tree_subject
 from equivalent.strategy.schema import load_strategy
+from equivalent.tree import Tree
 
 STRATEGY = load_strategy(
     Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
@@ -43,10 +37,6 @@ def _seed(root):
     return root
 
 
-# Fixed by the unambiguous v2 file-set serialization.  Legacy evidence used a
-# different hash and is intentionally invalid under evidence policy v2.
-TEXT_BASELINE_TREE = "3bfd503c5274ffb2387534ad956f632f1a3d5630848b884f53ceeb2c2dc03361"
-
 # A file in an encoding that is not UTF-8, and one that is not text at all.
 # A real code's tree has both -- namelists written on another machine, small
 # reference data next to the source.
@@ -61,7 +51,7 @@ def test_init_baseline_repo_matches_seed_folder(tmp_path):
     baseline_commit = init_baseline_repo(repo_dir, seed)
 
     assert len(baseline_commit) == 40
-    files = {f["path"]: f["content"] for f in tracked_files(repo_dir)}
+    files = Tree.baseline(repo_dir).files
     assert files == {
         "src/mod_kernel.f90": b"subroutine step\nend subroutine\n",
         "Makefile": b"all:\n\techo build\n",
@@ -79,7 +69,7 @@ def test_file_outside_allow_list_is_rejected(tmp_path):
     receipt = submit(repo_dir, "ch04:step", working, ["src/*.f90"], "sess-1")
 
     assert {"path": "Makefile", "reason": "not_allowed"} in receipt.rejected
-    tree = {f["path"]: f["content"] for f in tracked_files(repo_dir, "region/ch04-step")}
+    tree = Tree(repo_dir, "region/ch04-step").files
     assert tree["Makefile"] == b"all:\n\techo build\n"
 
 
@@ -96,7 +86,7 @@ def test_new_allowed_file_is_added_new_disallowed_file_is_rejected(tmp_path):
         repo_dir, "ch04:step", working, ["src/*.f90", "notes/regions/*.yaml"], "sess-1",
     )
 
-    tree = {f["path"]: f["content"] for f in tracked_files(repo_dir, "region/ch04-step")}
+    tree = Tree(repo_dir, "region/ch04-step").files
     assert tree["notes/regions/ch04-step.sese.yaml"] == b"region: ch04:step\n"
     assert "scripts/helper.sh" not in tree
     assert {"path": "scripts/helper.sh", "reason": "not_allowed"} in receipt.rejected
@@ -119,7 +109,7 @@ def test_a_file_the_region_creates_is_committed_and_is_not_a_missing_file(tmp_pa
     assert receipt.committed is True
     assert receipt.rejected == ()
     assert receipt.not_sent == ()
-    tree = {f["path"]: f["content"] for f in tracked_files(repo_dir, "region/ch04-step")}
+    tree = Tree(repo_dir, "region/ch04-step").files
     assert tree["src/mod_stencil.f90"] == b"module mod_stencil\nend module\n"
 
 
@@ -140,13 +130,13 @@ def test_bytes_that_are_not_utf8_survive_seed_repo_submit_and_materialize(tmp_pa
 
     submit(repo_dir, "ch04:step", working, ["src/*.f90"], "sess-1")
 
-    tree = {f["path"]: f["content"] for f in tracked_files(repo_dir, "region/ch04-step")}
+    tree = Tree(repo_dir, "region/ch04-step").files
     assert tree["data/coeffs.nml"] == LATIN1_BYTES
     assert tree["data/table.bin"] == BINARY_BYTES
     assert tree["src/table.f90"] == BINARY_BYTES
 
     out = tmp_path / "materialized"
-    materialize_tree(repo_dir, "region/ch04-step", out)
+    Tree(repo_dir, "region/ch04-step").write_to(out)
     assert (out / "data" / "coeffs.nml").read_bytes() == LATIN1_BYTES
     assert (out / "data" / "table.bin").read_bytes() == BINARY_BYTES
     assert (out / "src" / "table.f90").read_bytes() == BINARY_BYTES
@@ -162,15 +152,8 @@ def test_a_file_that_is_not_text_is_no_longer_a_rejection_reason(tmp_path):
     receipt = submit(repo_dir, "ch04:step", working, ["src/*.f90"], "sess-1")
 
     assert receipt.rejected == ()
-    tree = {f["path"]: f["content"] for f in tracked_files(repo_dir, "region/ch04-step")}
+    tree = Tree(repo_dir, "region/ch04-step").files
     assert tree["src/mod_kernel.f90"] == BINARY_BYTES
-
-
-def test_an_all_text_baseline_hash_is_stable_under_v2_serialization(tmp_path):
-    repo_dir = tmp_path / "repo"
-    init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
-
-    assert tree_subject(tracked_files(repo_dir, "main")).sha256 == TEXT_BASELINE_TREE
 
 
 def test_resolved_commit_remains_the_same_snapshot_after_a_later_submit(tmp_path):
@@ -184,49 +167,10 @@ def test_resolved_commit_remains_the_same_snapshot_after_a_later_submit(tmp_path
     _write(working, "src/mod_kernel.f90", "subroutine step\n  x = 2\nend subroutine\n")
     submit(repo_dir, "ch04:step", working, ["src/*.f90"], "sess-2")
 
-    old = {f["path"]: f["content"] for f in tracked_files(repo_dir, snapshot)}
-    current = {f["path"]: f["content"] for f in tracked_files(repo_dir, current_commit(repo_dir, "ch04:step"))}
+    old = Tree(repo_dir, snapshot).files
+    current = Tree(repo_dir, current_commit(repo_dir, "ch04:step")).files
     assert b"x = 1" in old["src/mod_kernel.f90"]
     assert b"x = 2" in current["src/mod_kernel.f90"]
-
-
-def test_the_whole_tree_is_handed_to_the_builder_as_bytes(tmp_path):
-    # The builder builds the tree with the tree's own makefile, which may
-    # read a namelist or a data file no extension test would recognize --
-    # so everything tracked goes, base64 because the request is JSON and
-    # a real code's tree is not all UTF-8.
-    repo_dir = tmp_path / "repo"
-    init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
-
-    files = tree_payload(repo_dir, "main")
-
-    assert [f["path"] for f in files] == ["Makefile", "src/mod_kernel.f90"]
-    assert base64.b64decode(files[1]["b64"]) == b"subroutine step\nend subroutine\n"
-
-
-def test_a_file_the_manifest_does_not_call_source_is_sent_anyway(tmp_path):
-    # Which files the code calls source decides what the builder may
-    # compile, not what it is given: a README costs nothing to carry, and
-    # guessing wrong about a build input costs a build.
-    seed = _seed(tmp_path / "seed")
-    _write(seed, "README.md", "how to build this\n")
-    repo_dir = tmp_path / "repo"
-    init_baseline_repo(repo_dir, seed)
-
-    files = tree_payload(repo_dir, "main")
-
-    assert "README.md" in [f["path"] for f in files]
-
-
-def test_a_file_that_is_not_utf8_travels_unchanged(tmp_path):
-    seed = _seed(tmp_path / "seed")
-    _write(seed, "src/legacy.f90", LATIN1_BYTES)
-    repo_dir = tmp_path / "repo"
-    init_baseline_repo(repo_dir, seed)
-
-    files = {f["path"]: base64.b64decode(f["b64"]) for f in tree_payload(repo_dir, "main")}
-
-    assert files["src/legacy.f90"] == LATIN1_BYTES
 
 
 def test_submitting_the_same_contents_twice_creates_no_second_commit(tmp_path):
@@ -278,7 +222,7 @@ def test_constructed_tree_never_contains_a_disallowed_file(tmp_path):
 
     submit(repo_dir, "ch04:step", working, ["src/*.f90"], "sess-1")
 
-    tree_paths = {f["path"] for f in tracked_files(repo_dir, "region/ch04-step")}
+    tree_paths = set(Tree(repo_dir, "region/ch04-step").files)
     assert tree_paths == {"src/mod_kernel.f90", "Makefile"}
 
 
@@ -341,7 +285,7 @@ def test_submit_with_nothing_matching_allow_list_is_a_no_op(tmp_path):
     receipt = submit(repo_dir, "ch04:step", working, ["src/*.f90"], "sess-1")
 
     assert receipt.committed is False
-    baseline_tree = tree_subject(tracked_files(repo_dir, "main")).sha256
+    baseline_tree = Tree.baseline(repo_dir).sha
     assert receipt.tree == baseline_tree
 
 
@@ -380,20 +324,3 @@ def test_an_onboarding_regions_frozen_set_is_whatever_its_allow_list_leaves(tmp_
     )
 
     assert frozen_sha == frozen_subject([]).sha256
-
-
-def test_attempt_ids_bind_the_full_tree_and_unambiguous_region_identity():
-    from equivalent.gateway.submit import attempt_id_for
-
-    common_prefix = "a" * 63
-    first_tree = common_prefix + "1"
-    second_tree = common_prefix + "2"
-
-    first = attempt_id_for("code:a/b", first_tree)
-    second = attempt_id_for("code:a?b", first_tree)
-
-    assert first_tree in first
-    assert attempt_id_for("code:a/b", second_tree) != first
-    # Both ids have the same filesystem-safe spelling of the region, so
-    # their region digest is what keeps their builder workspaces distinct.
-    assert second != first

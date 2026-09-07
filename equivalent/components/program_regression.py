@@ -34,7 +34,7 @@ import json
 from pathlib import Path
 
 from equivalent.capture import compare
-from equivalent.gateway.submit import attempt_id_for
+from equivalent.tree import attempt_id_for
 from equivalent.ledger.capture_sets import (
     PROGRAM_SET,
     load_capture_set,

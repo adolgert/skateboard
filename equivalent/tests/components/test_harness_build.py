@@ -9,7 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from equivalent.components import harness_build
-from equivalent.gateway.submit import attempt_id_for_strategy, init_baseline_repo
+from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import attempt_id_for_strategy
 from equivalent.strategy.schema import load_strategy
 from equivalent.tests.fakes import FakeBuilder, write_tree
 

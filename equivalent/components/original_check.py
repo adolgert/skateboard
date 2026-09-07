@@ -11,13 +11,12 @@ import base64
 
 from equivalent.capture import npy
 from equivalent.capture.compare import compare_variable
-from equivalent.gateway.submit import attempt_id_for_strategy
 from equivalent.ledger.subjects import hash_bytes
 from equivalent.reference.schema import load_reference
+from equivalent.tree import Tree, attempt_id_for_strategy
 
-from . import tree_manifest
 from .build_replay import fortran_of
-from .errors import ComponentError
+from .errors import ComponentError, after_the_manifest_check_passed
 
 
 def _comparison(expected: bytes, actual: bytes, spec: dict) -> dict:
@@ -51,7 +50,8 @@ def check(store, tree, repo_dir, ref, region_id, tree_sha, baseline_strategy,
         original = load_reference(original_reference_path)
     except (ValueError, OSError) as exc:
         raise ComponentError(f"cannot read reviewed original reference: {exc}") from exc
-    manifest = tree_manifest.manifest_of(repo_dir, ref)
+    with after_the_manifest_check_passed():
+        manifest = Tree(repo_dir, ref).manifest()
     candidate = manifest.build.targets.get("timing")
     if candidate is None:
         return {"verdict": "fail", "detail": {"problems": ["candidate declares no timing target"]}}
