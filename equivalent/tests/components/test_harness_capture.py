@@ -10,6 +10,7 @@ after this one compare against the bytes this one approved.
 from __future__ import annotations
 
 import base64
+from functools import partial
 
 import pytest
 
@@ -18,17 +19,20 @@ from equivalent.components import harness_capture
 from equivalent.components.errors import ComponentError
 from equivalent.tree import attempt_id_for_strategy
 from equivalent.ledger import capture_sets
-from equivalent.tests.fakes import FakeBuilder, captured_cases, write_tree
+from equivalent.gateway.backend_client import CaptureResponse
+from equivalent.tests.fakes import FakeBuilder, captured, captured_cases, write_tree
 
 REGION = "tsunami:onboarding"
 VISIBLE_ARGS = ["100", "5000", "25", "0.02"]
 HOLDOUT_ARGS = ["100", "5000", "60", "0.01"]
 
 
-def _check(harness, seed=None):
+def _check(harness, seed=None, builder=None):
     """The capture check, with what it packed filed the way the gateway files it."""
     harness.repo(seed)
-    result = harness_capture.check(harness.context(region_id=REGION), {})
+    result = harness_capture.check(
+        harness.context(region_id=REGION, builder=builder or harness.builder), {},
+    )
     harness.keep(result)
     return result
 
@@ -67,11 +71,12 @@ def test_each_dataset_is_captured_with_its_own_arguments(harness):
 def test_two_datasets_that_are_the_same_run_hold_nothing_back(harness):
     # A capture program that ignores its arguments writes the held-out
     # cases the agent can already see.
-    builder = harness.builder
     same = captured_cases(VISIBLE_ARGS)
-    builder.capture_cases = {tuple(VISIBLE_ARGS): same, tuple(HOLDOUT_ARGS): same}
+    builder = FakeBuilder(capture=partial(captured, by_args={
+        tuple(VISIBLE_ARGS): same, tuple(HOLDOUT_ARGS): same,
+    }))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
     assert "visible" in result.detail["problems"][0]
@@ -79,12 +84,11 @@ def test_two_datasets_that_are_the_same_run_hold_nothing_back(harness):
 
 
 def test_a_case_missing_a_declared_output_fails_naming_it(harness):
-    builder = harness.builder
     cases = captured_cases(HOLDOUT_ARGS)
     del cases["case0001"]["outputs"]["flux"]
-    builder.capture_cases = {tuple(HOLDOUT_ARGS): cases}
+    builder = FakeBuilder(capture=partial(captured, by_args={tuple(HOLDOUT_ARGS): cases}))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
     problem = "\n".join(result.detail["problems"])
@@ -92,35 +96,34 @@ def test_a_case_missing_a_declared_output_fails_naming_it(harness):
 
 
 def test_a_case_holding_a_variable_the_region_does_not_declare_fails_naming_it(harness):
-    builder = harness.builder
     cases = captured_cases(VISIBLE_ARGS)
     cases["case0000"]["inputs"]["scratch"] = cases["case0000"]["inputs"]["field"]
-    builder.capture_cases = {tuple(VISIBLE_ARGS): cases}
+    builder = FakeBuilder(capture=partial(captured, by_args={tuple(VISIBLE_ARGS): cases}))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
     assert "scratch" in "\n".join(result.detail["problems"])
 
 
 def test_an_array_of_the_wrong_element_type_fails_naming_the_variable(harness):
-    builder = harness.builder
     cases = captured_cases(VISIBLE_ARGS)
     wrong = npy.decode(base64.b64decode(cases["case0000"]["inputs"]["field"])).astype("<f8")
     cases["case0000"]["inputs"]["field"] = base64.b64encode(npy.encode(wrong)).decode()
-    builder.capture_cases = {tuple(VISIBLE_ARGS): cases}
+    builder = FakeBuilder(capture=partial(captured, by_args={tuple(VISIBLE_ARGS): cases}))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
     assert "field" in "\n".join(result.detail["problems"])
 
 
 def test_a_dataset_with_no_cases_at_all_fails_naming_the_dataset(harness):
-    builder = harness.builder
-    builder.capture_ok = False
+    builder = FakeBuilder(capture=CaptureResponse(
+        ok=False, stdout_tail="the capture run wrote no case directory",
+    ))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
     assert "visible" in "\n".join(result.detail["problems"])
@@ -130,12 +133,11 @@ def test_nothing_is_stored_when_a_dataset_is_refused(harness):
     # A capture set is what every later comparison is made against, so a
     # set that failed its own check must not be sitting in the ledger for
     # something to compare against later.
-    builder = harness.builder
     cases = captured_cases(VISIBLE_ARGS)
     del cases["case0000"]["outputs"]["field"]
-    builder.capture_cases = {tuple(VISIBLE_ARGS): cases}
+    builder = FakeBuilder(capture=partial(captured, by_args={tuple(VISIBLE_ARGS): cases}))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
     assert list(harness.store.capture_sets_dir.iterdir()) == []

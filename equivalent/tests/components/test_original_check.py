@@ -8,6 +8,7 @@ import yaml
 from equivalent.capture import npy
 from equivalent.components import original_check
 from equivalent.reference.schema import load_reference, fingerprint_reference
+from equivalent.gateway.backend_client import TimeResponse
 from equivalent.tests.fakes import FakeBuilder
 
 
@@ -28,20 +29,22 @@ def reference(tmp_path):
     return path
 
 
-class ReferenceBuilder(FakeBuilder):
+def reference_builder(*, wrong_candidate=False, drift=False, incomplete=False) -> FakeBuilder:
     """Both programs may be internally repeatable while disagreeing with one another."""
-    wrong_candidate = False
-    drift = False
-    incomplete = False
 
-    def time(self, attempt_id, executable, args, env, outputs, repeats=5, budget_s=300):
-        original = "-original-" in attempt_id
-        value = 42.0 if original or not self.wrong_candidate else -42.0
-        written = [{name: base64.b64encode(npy.encode(np.array([value + (i if self.drift else 0)]))).decode()
-                    for name in outputs} for i in range(repeats)]
-        if self.incomplete:
+    def timed_runs(request):
+        original = "-original-" in request["attempt_id"]
+        value = 42.0 if original or not wrong_candidate else -42.0
+        written = [
+            {name: base64.b64encode(npy.encode(np.array([value + (i if drift else 0)]))).decode()
+             for name in request["outputs"]}
+            for i in range(request["repeats"])
+        ]
+        if incomplete:
             written = written[:1]
-        return {"ok": True, "outputs": written, "runs_s": [0.1] * len(written)}
+        return TimeResponse(ok=True, outputs=written, runs_s=[0.1] * len(written))
+
+    return FakeBuilder(time=timed_runs)
 
 
 def check(harness, builder, path):
@@ -56,7 +59,7 @@ def check(harness, builder, path):
 
 
 def test_independent_original_comparison_records_outputs(harness):
-    result = check(harness, ReferenceBuilder(), reference(harness.tmp_path))
+    result = check(harness, reference_builder(), reference(harness.tmp_path))
     assert result.verdict == "pass"
     compared = result.detail["runs"][0]["outputs"][0]
     assert compared["original_artifacts"] == compared["candidate_artifacts"]
@@ -64,9 +67,7 @@ def test_independent_original_comparison_records_outputs(harness):
 
 
 def test_self_consistent_but_wrong_onboarded_program_fails(harness):
-    builder = ReferenceBuilder()
-    builder.wrong_candidate = True
-    result = check(harness, builder, reference(harness.tmp_path))
+    result = check(harness, reference_builder(wrong_candidate=True), reference(harness.tmp_path))
     assert result.verdict == "fail"
     comparison = result.detail["runs"][0]["outputs"][0]
     assert comparison["deterministic"] is True
@@ -75,13 +76,12 @@ def test_self_consistent_but_wrong_onboarded_program_fails(harness):
 
 @pytest.mark.parametrize("failure", ["drift", "incomplete"])
 def test_nonrepeatable_or_incomplete_reference_fails(harness, failure):
-    builder = ReferenceBuilder()
-    setattr(builder, failure, True)
+    builder = reference_builder(**{failure: True})
     assert check(harness, builder, reference(harness.tmp_path)).verdict == "fail"
 
 
 def test_no_reference_cannot_establish_onboarding(harness):
-    result = check(harness, ReferenceBuilder(), None)
+    result = check(harness, reference_builder(), None)
     assert result.verdict == "fail"
     assert "original_reference" in result.detail["problems"][0]
 

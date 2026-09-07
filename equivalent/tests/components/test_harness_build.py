@@ -6,6 +6,9 @@ strategy's own flags, and compiled nothing from outside the tree.
 """
 from __future__ import annotations
 
+from functools import partial
+from itertools import count
+
 from equivalent.components import harness_build
 from equivalent.tree import attempt_id_for_strategy
 from equivalent.tests.components.conftest import (
@@ -13,22 +16,21 @@ from equivalent.tests.components.conftest import (
     ONBOARDING_STRATEGY,
     strategy as strategy_named,
 )
-from equivalent.tests.fakes import FakeBuilder
+from equivalent.tests.fakes import FakeBuilder, built
 
 REGION = "tsunami:onboarding"
 
 
-class BuilderThatDropsTheFlagsAfterOneBuild(FakeBuilder):
+def drops_the_flags_after_one_build():
     """A builder whose second build ignores the flags it was given.
 
     A makefile that honors one compiler's flags and hard-codes another's
     is exactly the thing two builds are asked for; this is that makefile.
     """
-
-    def build(self, *args, **kwargs):
-        result = super().build(*args, **kwargs)
-        self.flags_reached = False
-        return result
+    builds = count()
+    return FakeBuilder(
+        build=lambda request: built(request, flags_reached_every_compile=next(builds) == 0),
+    )
 
 
 def _strategies():
@@ -74,7 +76,7 @@ def test_each_strategy_builds_in_a_workspace_of_its_own(harness):
 
 
 def test_a_build_that_ignored_the_second_strategys_flags_fails_and_names_that_strategy(harness):
-    builder = BuilderThatDropsTheFlagsAfterOneBuild()
+    builder = drops_the_flags_after_one_build()
 
     result = _check(harness, builder)
 
@@ -88,8 +90,7 @@ def test_a_build_that_ignored_the_second_strategys_flags_fails_and_names_that_st
 
 
 def test_a_build_that_did_not_compile_at_all_fails(harness):
-    builder = FakeBuilder()
-    builder.build_ok = False
+    builder = FakeBuilder(build=partial(built, ok=False))
 
     result = _check(harness, builder)
 

@@ -168,13 +168,13 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
             ctx, attempt_id, capture.executable, manifest.datasets[name].args, name,
         )
 
-        cases = resp.get("cases", {}) if resp.get("ok") else {}
-        executable_identity = executable_identity or resp.get("executable_identity")
+        cases = resp.cases if resp.ok else {}
+        executable_identity = executable_identity or resp.executable_identity
         per_dataset[name] = {"cases": len(cases)}
         if not cases:
             problems.append(
                 f"dataset '{name}': the capture program wrote no case; "
-                f"{resp.get('stdout_tail', '')}".strip()
+                f"{resp.stdout_tail}".strip()
             )
             continue
         captured[name] = cases

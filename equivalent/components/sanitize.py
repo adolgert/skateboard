@@ -53,49 +53,40 @@ def check(ctx: CheckContext, config: dict) -> dict:
     except Exception as exc:
         raise ComponentError(f"builder /v1/sanitize call failed: {exc}") from exc
 
-    per_tool = resp.get("per_tool")
+    # One statement about the whole run: the builder said yes exactly when
+    # every tool the strategy asked for said yes. A disagreement makes
+    # every one of this run's verdicts a failure, because the answer as a
+    # whole cannot be read.
+    expected_ok = all(
+        isinstance(resp.per_tool.get(tool), dict) and resp.per_tool[tool].get("ok") is True
+        for tool in tools
+    )
     response_problem = None
-    if resp.get("stage") != "sanitize":
-        response_problem = f"builder returned stage {resp.get('stage')!r}, expected 'sanitize'"
-    elif not isinstance(resp.get("ok"), bool):
-        response_problem = "builder returned no boolean top-level sanitizer outcome"
-    elif not isinstance(per_tool, dict):
-        response_problem = "builder returned no per_tool sanitizer results"
-        per_tool = {}
-    else:
-        expected_ok = all(
-            isinstance(per_tool.get(tool), dict) and per_tool[tool].get("ok") is True
-            for tool in tools
+    if resp.ok is not expected_ok:
+        response_problem = (
+            "builder's top-level sanitizer outcome is inconsistent with its "
+            "requested per-tool outcomes"
         )
-        if resp["ok"] is not expected_ok:
-            response_problem = (
-                "builder's top-level sanitizer outcome is inconsistent with its "
-                "requested per-tool outcomes"
-            )
 
     results = {}
     for tool in tools:
-        t = per_tool.get(tool) if isinstance(per_tool, dict) else None
+        t = resp.per_tool.get(tool)
         detail = {
-            "errors": t.get("errors") if isinstance(t, dict) else None,
-            "log_tail": t.get("log_tail", "") if isinstance(t, dict) else "",
+            "errors": t.get("errors") if t else None,
+            "log_tail": t.get("log_tail", "") if t else "",
             "cases": sorted(cases),
         }
-        if "executable_identity" in resp:
-            detail["executable_identity"] = resp["executable_identity"]
+        if resp.executable_identity is not None:
+            detail["executable_identity"] = resp.executable_identity
         if response_problem:
             reason = response_problem
-        elif not isinstance(t, dict):
+        elif t is None:
             reason = f"requested sanitizer '{tool}' is missing from the builder response"
-            detail["log_tail"] = resp.get("log_tail", "")
+            detail["log_tail"] = resp.log_tail
         elif t.get("ok") is not True:
             reason = t.get("error") or f"sanitizer '{tool}' did not complete successfully"
-        elif (
-            isinstance(t.get("errors"), bool)
-            or not isinstance(t.get("errors"), int)
-            or t["errors"] != 0
-        ):
-            reason = f"sanitizer '{tool}' returned an invalid or nonzero error count"
+        elif t.get("errors") != 0:
+            reason = f"sanitizer '{tool}' did not report a zero error count"
         else:
             reason = None
         if reason is None:

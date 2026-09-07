@@ -1,11 +1,13 @@
 import base64
+from functools import partial
+
 import pytest
 
 from equivalent.components import build_replay
 from equivalent.components.errors import ComponentError
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.components.conftest import PORT_STRATEGY, strategy as strategy_named
-from equivalent.tests.fakes import write_program
+from equivalent.tests.fakes import OUTSIDE_FILE, FakeBuilder, built, write_program
 
 
 def _manifest(tmp_path):
@@ -31,7 +33,7 @@ def _tree(harness):
     })
 
 
-def _check(harness, repo_dir=None):
+def _check(harness, repo_dir=None, builder=None):
     if repo_dir is None:
         _tree(harness)
     return build_replay.check(
@@ -39,6 +41,7 @@ def _check(harness, repo_dir=None):
             region_id="ch04:step", phase="porting",
             strategy=strategy_named(PORT_STRATEGY),
             manifest=_manifest(harness.tmp_path),
+            builder=builder or harness.builder,
         ),
         {},
     )
@@ -90,10 +93,9 @@ def test_a_pass_records_every_compile_the_builder_saw(harness):
 
 
 def test_fail_when_the_builder_reports_a_compile_error(harness):
-    builder = harness.builder
-    builder.build_ok = False
+    builder = FakeBuilder(build=partial(built, ok=False))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
     assert "log_tail" in result.detail
@@ -102,10 +104,9 @@ def test_fail_when_the_builder_reports_a_compile_error(harness):
 def test_a_build_whose_flags_never_reached_the_compiler_fails_naming_the_command(harness):
     # The makefile set its own FFLAGS. It compiled, it linked, and what
     # ran on the GPU was not what the strategy says was measured.
-    builder = harness.builder
-    builder.flags_reached = False
+    builder = FakeBuilder(build=partial(built, flags_reached_every_compile=False))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
     assert result.detail["compiles_without_flags"] == [builder.build_calls[0]["flags"] + [
@@ -114,13 +115,12 @@ def test_a_build_whose_flags_never_reached_the_compiler_fails_naming_the_command
 
 
 def test_a_build_that_compiled_a_file_from_outside_the_tree_fails_naming_the_file(harness):
-    builder = harness.builder
-    builder.only_tree_source = False
+    builder = FakeBuilder(build=partial(built, compiled_only_tree_source=False))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
-    assert result.detail["files_outside_tree"] == [builder.outside_file]
+    assert result.detail["files_outside_tree"] == [OUTSIDE_FILE]
 
 
 def test_raises_component_error_when_the_tree_holds_no_source(harness):

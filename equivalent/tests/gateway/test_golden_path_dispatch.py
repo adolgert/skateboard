@@ -4,6 +4,7 @@ equivalent/tests/fakes.py for why: no nvfortran/compute-sanitizer/GPU in
 this environment).
 """
 import base64
+from functools import partial
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -16,7 +17,18 @@ from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
 from equivalent.tests.gateway.conftest import region_config
-from equivalent.tests.fakes import FakeBuilder, FakeOracle, timing_array, write_program
+from equivalent.tests.fakes import (
+    EXECUTABLE_IDENTITY,
+    FakeBuilder,
+    FakeOracle,
+    built,
+    property_run,
+    replayed,
+    sanitized,
+    timed,
+    timing_array,
+    write_program,
+)
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
@@ -206,17 +218,14 @@ def test_initcheck_failure_blocks_visible_regression_and_acceptance(tmp_path):
     for action in ("sese_check", "build_replay", "run_replay"):
         _run(client, cfg, action)
 
-    original_sanitize = builder.sanitize
+    def initcheck_fails(request):
+        answer = sanitized(request)
+        return sanitized(request, ok=False, per_tool={
+            **answer.per_tool,
+            "initcheck": {"ok": False, "errors": 1, "log_tail": "uninitialized read"},
+        })
 
-    def initcheck_fails(attempt_id, executable, cases, tools):
-        response = original_sanitize(attempt_id, executable, cases, tools)
-        response["ok"] = False
-        response["per_tool"]["initcheck"] = {
-            "ok": False, "errors": 1, "log_tail": "uninitialized read",
-        }
-        return response
-
-    builder.sanitize = initcheck_fails
+    builder.answers["sanitize"] = initcheck_fails
     sanitize_result = _run(client, cfg, "sanitize")
     refused = _run(client, cfg, "regression_visible")
     status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
@@ -255,9 +264,9 @@ def test_runtime_binary_must_match_the_current_build_claim(tmp_path):
     client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
     _run(client, cfg, "sese_check")
     _run(client, cfg, "build_replay")
-    builder.executable_identity = {
-        **builder.executable_identity, "sha256": "c" * 64,
-    }
+    builder.answers["run"] = partial(replayed, executable_identity={
+        **EXECUTABLE_IDENTITY, "sha256": "c" * 64,
+    })
 
     result = _run(client, cfg, "run_replay")
 
@@ -274,9 +283,7 @@ def test_a_rebuilt_binary_cohort_makes_dependent_claims_stale(tmp_path):
     for action in ("sese_check", "build_replay", "run_replay"):
         _run(client, cfg, action)
 
-    builder.executable_identity = {
-        **builder.executable_identity, "sha256": "c" * 64,
-    }
+    builder.answers["build"] = partial(built, sha256="c" * 64)
     builder.artifact_records.clear()
     rebuilt = _run(client, cfg, "build_replay")
     status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
@@ -345,15 +352,15 @@ def test_a_port_that_is_wrong_at_the_timing_size_cannot_be_timed(tmp_path):
     # run, and so the stored reference, is already behind us.
     drifted = cfg.manifest.timing.outputs[0]
 
-    def wrong_at_scale(outputs, run):
+    def wrong_at_scale(paths, run):
         return {
-            name: base64.b64encode(
-                npy.encode(timing_array(name) + (1.0 if name == drifted else 0.0))
+            path: base64.b64encode(
+                npy.encode(timing_array(path) + (1.0 if path == drifted else 0.0))
             ).decode()
-            for name in outputs
+            for path in paths
         }
 
-    builder.timing_outputs = wrong_at_scale
+    builder.answers["time"] = partial(timed, files=wrong_at_scale)
 
     body = _run(client, cfg, "program_regression")
     assert body["verdict"] == "fail"
@@ -379,9 +386,10 @@ def test_a_port_whose_invariants_do_not_hold_cannot_be_accepted(tmp_path):
     for action in GATES[: GATES.index("property_check")]:
         _run(client, cfg, action)
 
-    builder.properties_ok = False
-    builder.properties_counts = {"passed": 2, "failed": 1, "errors": 0}
-    builder.properties_log = "Falsifying example: test_mass_is_conserved(k=1)"
+    builder.answers["properties"] = partial(
+        property_run, ok=False, passed=2, failed=1, collected=3, executed=3,
+        log_tail="Falsifying example: test_mass_is_conserved(k=1)",
+    )
 
     body = _run(client, cfg, "property_check")
     assert body["verdict"] == "fail"
@@ -454,10 +462,7 @@ def test_a_builder_that_cannot_be_asked_about_its_artifacts_is_not_a_lost_build(
     _run(client, cfg, "sese_check")
     _run(client, cfg, "build_replay")
 
-    def unreachable(attempt_id):
-        raise ConnectionError("connection reset")
-
-    builder.artifacts = unreachable
+    builder.answers["artifacts"] = ConnectionError("connection reset")
     response = client.post(
         "/run", json={"action": "run_replay", "region": cfg.region_id, "config": {}},
         headers=HEADERS,

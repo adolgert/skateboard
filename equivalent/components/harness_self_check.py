@@ -180,35 +180,20 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         )
     except Exception as exc:
         raise ComponentError(f"builder /v1/mutate call failed: {exc}") from exc
-    if not resp.get("ok"):
+    if not resp.ok:
         # The builder refused to run at all -- an unbuilt tree, a file
         # that is not in it. That is the harness's own footing, not a
         # verdict about whether this gate can tell right from wrong.
-        raise ComponentError(f"the mutation run did not start: {resp.get('log_tail', '')}")
+        raise ComponentError(f"the mutation run did not start: {resp.log_tail}")
 
-    rows = resp.get("results")
-    counts = resp.get("counts")
-    generated = resp.get("generated")
-    scored = resp.get("scored")
+    rows = resp.results
+    counts = resp.counts
     response_problems = []
-    if isinstance(generated, bool) or not isinstance(generated, int) or generated < 0:
-        response_problems.append("builder returned an invalid generated count")
-        generated = 0
-    if isinstance(scored, bool) or not isinstance(scored, int) or scored < 0:
-        response_problems.append("builder returned an invalid scored count")
-        scored = 0
-    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-        response_problems.append("builder returned no valid mutation result list")
-        rows = []
-    if not isinstance(counts, dict):
-        response_problems.append("builder returned no valid mutation status counts")
-        counts = {}
-
     derived_counts = {}
     for row in rows:
         status = row.get("status")
         derived_counts[status] = derived_counts.get(status, 0) + 1
-    if scored != len(rows) or counts != derived_counts:
+    if resp.scored != len(rows) or counts != derived_counts:
         response_problems.append(
             "builder returned mutation counts inconsistent with its result rows"
         )
@@ -217,7 +202,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         response_problems.append("builder returned missing or duplicate mutant identifiers")
 
     gap = _named(rows, GAP)
-    problems = [*response_problems, *_problems(generated, rows, counts, gap)]
+    problems = [*response_problems, *_problems(resp.generated, rows, counts, gap)]
     incomplete = [
         {field: row.get(field) for field in NAMED_FIELDS}
         for row in rows if row.get("status") in INCOMPLETE_STATUSES
@@ -228,8 +213,8 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         "policy_sha256": policy_sha256,
         "files": list(manifest.interface.files),
         "datasets": {VISIBLE: {"cases": len(cases), "capture_set": sets[VISIBLE]}},
-        "generated": generated,
-        "scored": scored,
+        "generated": resp.generated,
+        "scored": resp.scored,
         "counts": counts,
         "gap": gap,
         "adequacy_policy": {
@@ -243,7 +228,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         # deliberately labels these only as unchanged outputs.
         "survivors": _named(rows, EQUIVALENT),
         "build_failures": _named(rows, BUILD_FAIL),
-        "kept_dirs": resp.get("kept_dirs", []),
+        "kept_dirs": resp.kept_dirs,
     }
     # The two things this verdict rests on: the answers the mutants were
     # scored against, and the bands that decided whether a changed answer

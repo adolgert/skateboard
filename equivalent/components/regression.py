@@ -68,11 +68,11 @@ def check_holdout(ctx: CheckContext, config: dict) -> CheckResult:
         # Transport errors can include backend response bodies. During a
         # held-out run those bodies are influenced by the submitted code.
         raise ComponentError("could not execute the held-out cases; private diagnostic withheld") from exc
-    if not run_resp.get("ok"):
+    if not run_resp.ok:
         raise ComponentError("held-out run failed; private diagnostic withheld")
 
     try:
-        resp = ctx.oracle.compare(dataset=HOLDOUT, outputs=run_resp["outputs"])
+        resp = ctx.oracle.compare(dataset=HOLDOUT, outputs=run_resp.outputs)
     except Exception as exc:
         raise ComponentError("held-out comparison unavailable; private diagnostic withheld") from exc
 

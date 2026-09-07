@@ -100,22 +100,21 @@ def time_program(ctx: CheckContext, attempt_id: str, manifest: Manifest, repeats
     except Exception as exc:
         raise ComponentError(f"builder /v1/time call failed: {exc}") from exc
 
-    if not resp.get("ok"):
+    if not resp.ok:
         # An exceeded budget and a declared file the program never wrote
         # both arrive this way, and the builder's own words say which.
         return resp, failed(
-            {**described, "runs_s": resp.get("runs_s", []),
-             "log_tail": resp.get("log_tail", "")},
+            {**described, "runs_s": resp.runs_s, "log_tail": resp.log_tail},
             ["the timed program did not finish inside its budget, or did not write every "
              "file the manifest declares"],
         )
 
-    durations = resp.get("runs_s", [])
-    runs = resp.get("outputs", [])
-    if (not isinstance(durations, list) or len(durations) != repeats
+    durations = resp.runs_s
+    runs = resp.outputs
+    if (len(durations) != repeats
             or any(type(t) not in (int, float) or not math.isfinite(t) or t <= 0
                    for t in durations)
-            or not isinstance(runs, list) or len(runs) != repeats
+            or len(runs) != repeats
             or any(not isinstance(run, dict) or set(timing.outputs) - run.keys()
                    for run in runs)):
         problems = ["timing requires every requested repetition, positive finite durations, "

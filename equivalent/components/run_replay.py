@@ -68,15 +68,15 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         mandatory=ctx.strategy.device_proof.mandatory,
     )
 
-    measured = {"executable_identity": resp.get("executable_identity")}
+    measured = {"executable_identity": resp.executable_identity}
 
-    if not resp.get("ok"):
+    if not resp.ok:
         return failed(
-            {**measured, "log_tail": resp.get("log_tail", "")},
+            {**measured, "log_tail": resp.log_tail},
             ["the replay driver did not run to completion"],
         )
 
-    problems = _output_problems(manifest, resp.get("outputs", {}))
+    problems = _output_problems(manifest, resp.outputs)
     if problems:
         hint = (f"the replay driver must write every output code "
                 f"'{manifest.name}' declares, with the declared type and rank")
@@ -85,7 +85,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
             [*problems, hint],
         )
 
-    kernels = resp.get("kernels_launched", 0)
+    kernels = resp.kernels_launched
     if kernels <= 0:
         hint = ("code compiled but no GPU kernel launched; loops must be do concurrent / "
                 "omp target for nvfortran to offload them")
@@ -97,7 +97,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
             # Where the builder's runtime said the launches came from --
             # file, function, and line, one entry per distinct source
             # line. A reviewer reads this against the region's own code.
-            "launches": resp.get("launches", []),
-            "outputs": resp["outputs"],
+            "launches": resp.launches,
+            "outputs": resp.outputs,
         },
     )

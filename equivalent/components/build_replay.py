@@ -45,7 +45,7 @@ def fortran_of(strategy: Strategy):
 
 
 def build_tree(builder, attempt_id: str, tree: list[dict], strategy: Strategy,
-               manifest: Manifest) -> dict:
+               manifest: Manifest):
     """One /v1/build call, described entirely by the strategy and the manifest."""
     fortran = fortran_of(strategy)
     try:
@@ -84,48 +84,46 @@ def build_verdict(builder, attempt_id: str, tree: list[dict], strategy: Strategy
     """
     resp = build_tree(builder, attempt_id, tree, strategy, manifest)
 
-    compiles = resp.get("compiles", [])
     common = {
-        "attempt_id": attempt_id, "flags": resp.get("flags"),
-        "targets": resp.get("targets"), "compiles": compiles,
-        "executor_identity": resp.get("executor_identity"),
-        "image_id": resp.get("image_id"),
+        "attempt_id": attempt_id, "flags": resp.flags,
+        "targets": resp.targets, "compiles": resp.compiles,
+        "executor_identity": resp.executor_identity,
+        "image_id": resp.image_id,
     }
 
-    if not resp.get("ok"):
-        missing = resp.get("missing_targets") or []
+    if not resp.ok:
+        missing = resp.missing_targets or []
         return failed(
             {
-                **common, "stage": resp.get("stage"),
-                "missing_targets": resp.get("missing_targets"),
-                "log_tail": resp.get("log_tail", ""),
+                **common, "missing_targets": resp.missing_targets,
+                "log_tail": resp.log_tail,
             },
-            [f"the build did not finish at stage {resp.get('stage')!r}",
+            ["the build did not finish",
              *(f"the build produced no '{target}'" for target in missing)],
         )
 
-    if not resp.get("flags_reached_every_compile"):
+    if not resp.flags_reached_every_compile:
         hint = ("the makefile compiled without the strategy's flags; it must pass "
                 "FFLAGS through to every compile rather than setting its own")
         return failed(
-            {**common, "compiles_without_flags": _without_flags(compiles), "hint": hint},
+            {**common, "compiles_without_flags": _without_flags(resp.compiles), "hint": hint},
             [hint],
         )
 
-    if not resp.get("compiled_only_tree_source"):
+    if not resp.compiled_only_tree_source:
         hint = ("the build compiled a file that is not this code's own source; "
                 "every compiled file must be in the submitted tree and match the "
                 "manifest's source patterns")
         return failed(
-            {**common, "files_outside_tree": _outside_tree(compiles), "hint": hint},
+            {**common, "files_outside_tree": _outside_tree(resp.compiles), "hint": hint},
             [hint],
         )
 
     return CheckResult(
         verdict="pass",
         detail={
-            **common, "minfo_excerpt": resp.get("minfo_excerpt", ""),
-            "log_tail": resp.get("log_tail", ""),
+            **common, "minfo_excerpt": resp.minfo_excerpt,
+            "log_tail": resp.log_tail,
         },
     )
 

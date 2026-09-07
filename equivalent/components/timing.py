@@ -53,7 +53,7 @@ DEFAULT_REPEATS = 5
 PROGRAM_SET_ABSENT = "program_set_absent"
 
 
-def _measured(resp: dict, manifest: Manifest, extra: dict) -> dict:
+def _measured(resp, manifest: Manifest, extra: dict) -> dict:
     """The part of a timing claim's detail both of these record.
 
     The timing target is read straight from the manifest: a measurement
@@ -62,15 +62,15 @@ def _measured(resp: dict, manifest: Manifest, extra: dict) -> dict:
     """
     timing = manifest.timing
     return {
-        "runs_s": resp["runs_s"],
-        "gpu_exclusive": resp.get("gpu_exclusive"),
+        "runs_s": resp.runs_s,
+        "gpu_exclusive": resp.gpu_exclusive,
         # What was run, so a later reader can tell two timing claims apart
         # without going back to the manifest of the day.
         "executable": manifest.build.targets[TIMING_ROLE].executable,
         "args": list(timing.args),
         "env": dict(timing.env),
-        "outputs": program_outputs.collected(resp.get("outputs", [])),
-        "executable_identity": resp.get("executable_identity"),
+        "outputs": program_outputs.collected(resp.outputs),
+        "executable_identity": resp.executable_identity,
         **extra,
     }
 
@@ -107,7 +107,7 @@ def check_port(ctx: CheckContext, config: dict) -> CheckResult:
     bands, policy_sha = program_outputs.tolerance_policy(manifest)
     comparisons = [
         program_outputs.compare_outputs(ctx.sets, program_set, manifest, run, bands)
-        for run in response["outputs"]
+        for run in response.outputs
     ]
     detail = {
         **_measured(response, manifest, {"flags": flags}),
@@ -188,7 +188,7 @@ def check_baseline(ctx: CheckContext, config: dict) -> CheckResult:
     )
 
 
-def _packed_program(manifest: Manifest, resp: dict) -> tuple[dict, object, list]:
+def _packed_program(manifest: Manifest, resp) -> tuple[dict, object, list]:
     """What this run leaves as a reference, the set itself, and what is wrong.
 
     A code that declares no timing outputs leaves no reference and is
@@ -206,7 +206,7 @@ def _packed_program(manifest: Manifest, resp: dict) -> tuple[dict, object, list]
                                 "left nothing a port's own program run could be "
                                 "compared against",
         }, None, []
-    runs = resp.get("outputs", [])
+    runs = resp.outputs
     arrays, unreadable = program_arrays(runs[-1] if runs else {}, declared)
     if unreadable:
         problems = sorted(unreadable.values())

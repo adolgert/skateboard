@@ -249,9 +249,9 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 raise HTTPException(
                     status_code=503, detail=f"cannot establish builder identity: {exc}",
                 ) from exc
-            if builder_health.get("ok") is not True:
+            if not builder_health.ok:
                 raise HTTPException(status_code=503, detail="builder executor is not ready")
-            builder_identity = builder_health.get("executor_identity")
+            builder_identity = builder_health.executor_identity
             if not builder_identity:
                 raise HTTPException(status_code=503, detail="builder returned no executor_identity")
             if (
@@ -332,11 +332,11 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                     status_code=503,
                     detail=f"cannot read the builder's record of what it built: {exc}",
                 ) from exc
-            if report.get("ok") is not True:
+            if not report.ok:
                 return False
-            if report.get("executor_identity") != executor_identity:
+            if report.executor_identity != executor_identity:
                 return False
-            executables = report.get("executables", {})
+            executables = report.executables
             for target in targets.values():
                 if not isinstance(target, dict):
                     return False

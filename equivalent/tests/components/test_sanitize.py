@@ -1,8 +1,11 @@
+from functools import partial
 
 import pytest
 import yaml
 
 from equivalent.components import sanitize
+from equivalent.components.errors import ComponentError
+from equivalent.gateway.backend_client import SanitizeResponse
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
 from equivalent.tests.components.conftest import (
@@ -10,7 +13,7 @@ from equivalent.tests.components.conftest import (
     STRATEGY_DIR,
     write_visible_dataset,
 )
-from equivalent.tests.fakes import FakeBuilder, write_program
+from equivalent.tests.fakes import FakeBuilder, sanitized, write_program
 
 STRATEGY_PATH = STRATEGY_DIR / f"{PORT_STRATEGY}.yaml"
 # Two cases, so a strategy that asks for the first is telling the check
@@ -68,8 +71,7 @@ def test_a_strategy_asking_for_every_case_sends_every_case(harness, tmp_path):
 
 def test_one_failing_tool_does_not_fail_the_others(harness, tmp_path):
     strategy = _strategy_sanitizing(harness.tmp_path, "first")
-    builder = harness.builder
-    builder.sanitize_ok = False
+    builder = FakeBuilder(sanitize=partial(sanitized, ok=False))
 
     results = _check(harness, strategy, builder=builder)
 
@@ -78,30 +80,24 @@ def test_one_failing_tool_does_not_fail_the_others(harness, tmp_path):
 
 
 def test_a_failed_top_level_run_with_no_tool_results_fails_every_requested_tool(harness, tmp_path):
-    class Incomplete(FakeBuilder):
-        def sanitize(self, *args, **kwargs):
-            return {"ok": False, "stage": "sanitize", "per_tool": {},
-                    "log_tail": "replay executable is missing"}
+    incomplete = FakeBuilder(sanitize=SanitizeResponse(
+        ok=False, log_tail="replay executable is missing",
+    ))
 
-    results = _check(harness, _strategy_sanitizing(harness.tmp_path, "first"), builder=Incomplete())
+    results = _check(harness, _strategy_sanitizing(harness.tmp_path, "first"), builder=incomplete)
 
     assert all(row.verdict == "fail" for row in results.values())
     assert all("missing" in row.detail["reason"] for row in results.values())
 
 
 def test_an_unavailable_tool_is_a_failure_not_a_vacuous_pass(harness, tmp_path):
-    class Unavailable(FakeBuilder):
-        def sanitize(self, *args, **kwargs):
-            return {
-                "ok": False, "stage": "sanitize",
-                "per_tool": {
-                    "memcheck": {"ok": None, "error": "compute-sanitizer not found"},
-                    "racecheck": {"ok": True, "errors": 0, "log_tail": ""},
-                    "initcheck": {"ok": True, "errors": 0, "log_tail": ""},
-                },
-            }
+    unavailable = FakeBuilder(sanitize=SanitizeResponse(ok=False, per_tool={
+        "memcheck": {"ok": None, "error": "compute-sanitizer not found"},
+        "racecheck": {"ok": True, "errors": 0, "log_tail": ""},
+        "initcheck": {"ok": True, "errors": 0, "log_tail": ""},
+    }))
 
-    results = _check(harness, _strategy_sanitizing(harness.tmp_path, "first"), builder=Unavailable())
+    results = _check(harness, _strategy_sanitizing(harness.tmp_path, "first"), builder=unavailable)
 
     assert results["sanitize/memcheck"].verdict == "fail"
     assert "not found" in results["sanitize/memcheck"].detail["reason"]
@@ -109,31 +105,41 @@ def test_an_unavailable_tool_is_a_failure_not_a_vacuous_pass(harness, tmp_path):
 
 
 def test_a_malformed_tool_result_fails_closed(harness, tmp_path):
-    class Malformed(FakeBuilder):
-        def sanitize(self, *args, **kwargs):
-            return {"ok": True, "stage": "sanitize", "per_tool": {
-                "memcheck": {"ok": "yes", "errors": 0},
-                "racecheck": {"ok": True, "errors": 0},
-                "initcheck": {"ok": True, "errors": 0},
-            }}
+    malformed = FakeBuilder(sanitize=SanitizeResponse(ok=True, per_tool={
+        "memcheck": {"ok": "yes", "errors": 0},
+        "racecheck": {"ok": True, "errors": 0},
+        "initcheck": {"ok": True, "errors": 0},
+    }))
 
-    results = _check(harness, _strategy_sanitizing(harness.tmp_path, "first"), builder=Malformed())
+    results = _check(harness, _strategy_sanitizing(harness.tmp_path, "first"), builder=malformed)
 
     assert results["sanitize/memcheck"].verdict == "fail"
 
 
-@pytest.mark.parametrize("errors", [None, -1, 1, True, "0"])
-def test_a_passing_tool_requires_a_zero_integer_error_count(harness, errors):
-    class BadCount(FakeBuilder):
-        def sanitize(self, *args, **kwargs):
-            response = super().sanitize(*args, **kwargs)
-            response["per_tool"]["memcheck"]["errors"] = errors
-            return response
+@pytest.mark.parametrize("errors", [None, 1])
+def test_a_passing_tool_requires_a_zero_error_count(harness, errors):
+    counted = FakeBuilder(sanitize=partial(sanitized, per_tool={
+        "memcheck": {"ok": True, "errors": errors},
+        "racecheck": {"ok": True, "errors": 0},
+        "initcheck": {"ok": True, "errors": 0},
+    }))
 
-    results = _check(harness, _strategy_sanitizing(harness.tmp_path, "first"), builder=BadCount())
+    results = _check(harness, _strategy_sanitizing(harness.tmp_path, "first"), builder=counted)
 
     assert results["sanitize/memcheck"].verdict == "fail"
     assert "error count" in results["sanitize/memcheck"].detail["reason"]
+
+
+@pytest.mark.parametrize("errors", [-1, True, "0"])
+def test_an_error_count_that_is_not_a_count_is_an_error_not_a_verdict(harness, errors):
+    # A sanitizer answer nobody can read says nothing about the port, so
+    # it must not become a claim saying the port failed one.
+    unreadable = FakeBuilder(sanitize=partial(sanitized, per_tool={
+        "memcheck": {"ok": True, "errors": errors},
+    }))
+
+    with pytest.raises(ComponentError):
+        _check(harness, _strategy_sanitizing(harness.tmp_path, "first"), builder=unreadable)
 
 
 def test_the_shipped_strategy_sanitizes_the_first_case(harness, tmp_path):

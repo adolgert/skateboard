@@ -9,21 +9,26 @@ anything that cannot be compared is a failure naming what it was.
 from __future__ import annotations
 
 import json
+from functools import partial
 
 import numpy as np
 import pytest
 
 from equivalent.components import program_regression
 from equivalent.components.errors import ComponentError
+from equivalent.gateway.backend_client import TimeResponse
 from equivalent.ledger.capture_sets import program_variable
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.fakes import (
     FakeBuilder,
     keep_program_set,
     program_tolerances,
+    timed,
     timing_array,
+    timing_files,
     write_program,
 )
+
 
 def _manifest(tmp_path):
     return load_manifest(write_program(tmp_path) / "manifest.yaml")
@@ -110,13 +115,12 @@ def test_an_output_the_ported_program_did_not_write_fails_and_names_it(harness):
     _with_baseline(harness, manifest)
     missing = manifest.timing.outputs[0]
 
-    class Forgetful(FakeBuilder):
-        def timing_outputs(self, outputs, run: int) -> dict:
-            written = super().timing_outputs(outputs, run)
-            del written[missing]
-            return written
+    def forgetful(paths, run: int) -> dict:
+        return {path: data for path, data in timing_files(paths, run).items()
+                if path != missing}
 
-    result = _check(harness, manifest, builder=Forgetful())
+    result = _check(harness, manifest,
+                    builder=FakeBuilder(time=partial(timed, files=forgetful)))
 
     assert result.verdict == "fail"
     assert missing in result.detail["per_var"][program_variable(missing)]["error"]
@@ -127,18 +131,18 @@ def test_an_output_of_a_different_shape_fails(harness):
     _with_baseline(harness, manifest)
     shorter = manifest.timing.outputs[0]
 
-    class Truncating(FakeBuilder):
-        def timing_outputs(self, outputs, run: int) -> dict:
-            import base64
+    def truncating(paths, run: int) -> dict:
+        import base64
 
-            from equivalent.capture import npy
-            written = super().timing_outputs(outputs, run)
-            written[shorter] = base64.b64encode(
-                npy.encode(timing_array(shorter)[:-1])
-            ).decode()
-            return written
+        from equivalent.capture import npy
+        written = timing_files(paths, run)
+        written[shorter] = base64.b64encode(
+            npy.encode(timing_array(shorter)[:-1])
+        ).decode()
+        return written
 
-    result = _check(harness, manifest, builder=Truncating())
+    result = _check(harness, manifest,
+                    builder=FakeBuilder(time=partial(timed, files=truncating)))
 
     assert result.verdict == "fail"
     assert "shape" in result.detail["per_var"][program_variable(shorter)]["error"]
@@ -200,8 +204,7 @@ def test_the_claim_can_name_the_policy_and_the_set_it_was_judged_against(harness
 def test_a_timing_run_that_does_not_finish_is_a_verdict_and_not_an_error(harness):
     manifest = _manifest(harness.tmp_path)
     _with_baseline(harness, manifest)
-    builder = FakeBuilder()
-    builder.time_ok = False
+    builder = FakeBuilder(time=TimeResponse(ok=False, log_tail="timing binary not built"))
 
     result = _check(harness, manifest, builder=builder)
 

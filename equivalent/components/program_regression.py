@@ -94,24 +94,24 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         )
     except Exception as exc:
         raise ComponentError(f"builder /v1/time call failed: {exc}") from exc
-    if not resp.get("ok"):
+    if not resp.ok:
         # An exceeded budget and a declared file the program never wrote
         # both arrive this way, and the builder's own words say which.
         return CheckResult(
             verdict="fail",
-            detail={**rests_on, "log_tail": resp.get("log_tail", "")},
+            detail={**rests_on, "log_tail": resp.log_tail},
             reasons=("the program did not finish inside its budget, or did not write "
                      "every file the manifest declares",),
             materials=materials,
         )
 
-    runs = resp.get("outputs", [])
+    runs = resp.outputs
     last_run = runs[-1] if runs else {}
     per_var = compare_outputs(ctx.sets, program_set, manifest, last_run, bands)
 
     detail = {
-        **rests_on, "per_var": per_var, "runs_s": resp.get("runs_s", []),
-        "executable_identity": resp.get("executable_identity"),
+        **rests_on, "per_var": per_var, "runs_s": resp.runs_s,
+        "executable_identity": resp.executable_identity,
     }
     if all(entry["pass"] for entry in per_var.values()):
         return CheckResult(verdict="pass", detail=detail, materials=materials)

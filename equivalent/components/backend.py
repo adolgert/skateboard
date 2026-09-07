@@ -19,7 +19,7 @@ from .errors import ComponentError
 
 
 def replay(ctx: CheckContext, attempt_id: str, executable: str, cases: dict,
-           *, notify=None, mandatory: bool = False) -> dict:
+           *, notify=None, mandatory: bool = False):
     """Run the replay driver over a set of cases in one builder workspace.
 
     `notify` and `mandatory` are the strategy's device proof, asked for
@@ -32,7 +32,7 @@ def replay(ctx: CheckContext, attempt_id: str, executable: str, cases: dict,
         raise ComponentError(f"builder /v1/run call failed: {exc}") from exc
 
 
-def capture(ctx: CheckContext, attempt_id: str, executable: str, args, dataset: str) -> dict:
+def capture(ctx: CheckContext, attempt_id: str, executable: str, args, dataset: str):
     """Run the capture program for one dataset, into a directory of its own."""
     try:
         return ctx.builder.capture(attempt_id, executable, list(args), dataset)

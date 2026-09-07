@@ -11,13 +11,15 @@ person to read.
 from __future__ import annotations
 
 import hashlib
+from functools import partial
 
 import pytest
 
 from equivalent.components import harness_self_check
 from equivalent.components.errors import ComponentError
+from equivalent.gateway.backend_client import MutateResponse
 from equivalent.tree import attempt_id_for_strategy
-from equivalent.tests.fakes import TOLERANCES_IN_TREE, FakeBuilder, mutant_row
+from equivalent.tests.fakes import TOLERANCES_IN_TREE, FakeBuilder, mutant_row, mutated
 
 REGION = "tsunami:onboarding"
 
@@ -53,11 +55,10 @@ def test_a_pass_lists_the_survivors_for_the_person_to_read(harness):
 
 
 def test_a_mutant_the_bands_let_through_fails_and_is_named(harness):
-    builder = harness.builder
-    builder.mutate_results = [
+    builder = FakeBuilder(mutate=partial(mutated, results=[
         mutant_row("m-0001", "KILLED"),
         mutant_row("m-0007", "GAP", line=19, op="CRP", note="case 'case0000': changed within the band: h"),
-    ]
+    ]))
 
     result = _check(harness, builder)
 
@@ -73,11 +74,10 @@ def test_a_mutant_the_bands_let_through_fails_and_is_named(harness):
 def test_a_harness_that_kills_nothing_fails(harness):
     # Every mutant survives: the region's answers can be changed and no
     # comparison this harness makes would say so.
-    builder = harness.builder
-    builder.mutate_results = [
+    builder = FakeBuilder(mutate=partial(mutated, results=[
         mutant_row("m-0001", "EQUIVALENT"),
         mutant_row("m-0002", "EQUIVALENT"),
-    ]
+    ]))
 
     result = _check(harness, builder)
 
@@ -86,9 +86,7 @@ def test_a_harness_that_kills_nothing_fails(harness):
 
 
 def test_a_region_no_mutant_could_be_made_of_fails(harness):
-    builder = harness.builder
-    builder.mutate_results = []
-    builder.generated = 0
+    builder = FakeBuilder(mutate=partial(mutated, results=[]))
 
     result = _check(harness, builder)
 
@@ -120,8 +118,7 @@ def test_the_builder_is_asked_for_the_regions_files_under_the_baseline_strategy(
 
 
 def test_a_limit_the_caller_names_reaches_the_builder(harness):
-    builder = harness.builder
-    builder.generated = 90
+    builder = FakeBuilder(mutate=partial(mutated, generated=90))
 
     result = _check(harness, builder, limit=2)
 
@@ -135,11 +132,10 @@ def test_a_limit_the_caller_names_reaches_the_builder(harness):
 
 @pytest.mark.parametrize("status", ["SKIPPED", "PENDING", "RUNTIME_FAIL"])
 def test_an_incomplete_mutant_prevents_an_adequacy_pass(harness, status):
-    builder = harness.builder
-    builder.mutate_results = [
+    builder = FakeBuilder(mutate=partial(mutated, results=[
         mutant_row("m-0001", "KILLED"),
         mutant_row("m-0002", status),
-    ]
+    ]))
 
     result = _check(harness, builder)
 
@@ -148,13 +144,9 @@ def test_an_incomplete_mutant_prevents_an_adequacy_pass(harness, status):
 
 
 def test_malformed_or_inconsistent_mutation_counts_fail_closed(harness):
-    class Inconsistent(FakeBuilder):
-        def mutate(self, *args, **kwargs):
-            response = super().mutate(*args, **kwargs)
-            response["scored"] = 99
-            return response
+    inconsistent = FakeBuilder(mutate=partial(mutated, scored=99))
 
-    result = _check(harness, Inconsistent())
+    result = _check(harness, inconsistent)
 
     assert result.verdict == "fail"
     assert any("inconsistent" in p for p in result.detail["problems"])
@@ -171,13 +163,11 @@ def test_the_verdict_names_the_capture_set_and_the_policy_it_rests_on(harness):
 
 
 def test_a_builder_that_could_not_run_the_mutation_is_an_error_not_a_verdict(harness):
-    class Refusing(FakeBuilder):
-        def mutate(self, *args, **kwargs):
-            return {"ok": False, "stage": "mutate", "generated": 0, "scored": 0,
-                    "results": [], "counts": {}, "kept_dirs": [],
-                    "log_tail": "there is no built tree for attempt 'x'"}
+    refusing = FakeBuilder(mutate=MutateResponse(
+        ok=False, log_tail="there is no built tree for attempt 'x'",
+    ))
 
     with pytest.raises(ComponentError) as excinfo:
-        _check(harness, Refusing())
+        _check(harness, refusing)
 
     assert "no built tree" in str(excinfo.value)

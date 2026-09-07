@@ -10,6 +10,8 @@ wrote it.
 """
 from __future__ import annotations
 
+from functools import partial
+
 import pytest
 
 from equivalent.components import harness_timing, program_outputs, timing
@@ -20,7 +22,7 @@ from equivalent.tests.components.conftest import (
     Harness,
     strategy as strategy_named,
 )
-from equivalent.tests.fakes import FakeBuilder, write_program, write_tree
+from equivalent.tests.fakes import FakeBuilder, timed, write_program, write_tree
 
 
 def _baseline_seed(harness):
@@ -93,10 +95,9 @@ def test_the_stored_program_set_is_named_the_same_in_both_claims(harness, tmp_pa
 
 
 def test_a_builder_answer_that_is_not_a_measurement_fails_in_both_phases(harness, tmp_path):
-    class ShortOfRepetitions(FakeBuilder):
-        def time(self, *args, **kwargs):
-            answer = super().time(*args, **kwargs)
-            return {**answer, "runs_s": answer["runs_s"][:1], "outputs": answer["outputs"][:1]}
+    def short_of_repetitions():
+        """A builder that answers with fewer runs than it was asked for."""
+        return FakeBuilder(time=partial(timed, repetitions=1))
 
     manifest = load_manifest(write_program(harness.tmp_path) / "manifest.yaml")
     harness.repo(_baseline_seed(harness))
@@ -104,12 +105,12 @@ def test_a_builder_answer_that_is_not_a_measurement_fails_in_both_phases(harness
         harness.porting(
             region_id="ch04:step", manifest=manifest,
             baseline_strategy=strategy_named(BASELINE_STRATEGY),
-            builder=ShortOfRepetitions(),
+            builder=short_of_repetitions(),
         ),
         {"repeats": 3},
     )
 
-    times = _time_harness(tmp_path / "onboarding", ShortOfRepetitions())
+    times = _time_harness(tmp_path / "onboarding", short_of_repetitions())
 
     assert baseline.verdict == "fail"
     assert times.verdict == "fail"

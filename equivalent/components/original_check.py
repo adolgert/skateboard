@@ -85,12 +85,11 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     except Exception as exc:
         raise ComponentError(f"original reference build failed: {exc}") from exc
     detail = {"reference_sha256": original.sha256, "provenance": original.provenance,
-              "reference_build": build, "runs": [], "problems": []}
+              "reference_build": build.as_dict(), "runs": [], "problems": []}
     # The reviewed original is what this verdict is a comparison against,
     # so it is a formal material rather than a note in the detail.
     materials = (Subject(kind="reference", sha256=original.sha256),)
-    if (build.get("ok") is not True or build.get("flags_reached_every_compile") is not True
-            or build.get("compiled_only_tree_source") is not True):
+    if not (build.ok and build.flags_reached_every_compile and build.compiled_only_tree_source):
         detail["problems"].append("original reference did not build under the reviewed baseline strategy")
         return CheckResult(
             verdict="fail", detail=detail, reasons=tuple(detail["problems"]),
@@ -108,13 +107,13 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         except Exception as exc:
             raise ComponentError(f"original comparison run {run['name']!r} could not finish: {exc}") from exc
         report = {"name": run["name"], "outputs": [], "pass": False,
-                  "original_runs_s": expected.get("runs_s", []),
-                  "candidate_runs_s": actual.get("runs_s", []),
-                  "original_binary": {"executable_identity": expected.get("executable_identity")},
-                  "candidate_binary": {"executable_identity": actual.get("executable_identity")}}
+                  "original_runs_s": expected.runs_s,
+                  "candidate_runs_s": actual.runs_s,
+                  "original_binary": {"executable_identity": expected.executable_identity},
+                  "candidate_binary": {"executable_identity": actual.executable_identity}}
         detail["runs"].append(report)
-        if any(r.get("ok") is not True or len(r.get("outputs", [])) != 2
-               or len(r.get("runs_s", [])) != 2 for r in (expected, actual)):
+        if any(not r.ok or len(r.outputs) != 2 or len(r.runs_s) != 2
+               for r in (expected, actual)):
             detail["problems"].append(f"{run['name']}: both programs must complete two runs")
             continue
         for output in run["outputs"]:
@@ -122,8 +121,8 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
                       "comparison": output["comparison"], "pass": False}
             report["outputs"].append(result)
             try:
-                reference_files = [_artifact(kept, r[output["original"]]) for r in expected["outputs"]]
-                candidate_files = [_artifact(kept, r[output["candidate"]]) for r in actual["outputs"]]
+                reference_files = [_artifact(kept, r[output["original"]]) for r in expected.outputs]
+                candidate_files = [_artifact(kept, r[output["candidate"]]) for r in actual.outputs]
                 result["original_artifacts"] = [f[1] for f in reference_files]
                 result["candidate_artifacts"] = [f[1] for f in candidate_files]
                 result["deterministic"] = (reference_files[0][0] == reference_files[1][0]

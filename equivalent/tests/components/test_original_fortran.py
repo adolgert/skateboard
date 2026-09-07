@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 from equivalent.components import original_check
+from equivalent.gateway.backend_client import BuildResponse, TimeResponse
 from equivalent.tree import attempt_id_for_strategy
 from equivalent.strategy.schema import Language, load_strategy
 from equivalent.tests.fakes import in_tree_manifest, write_tree
@@ -35,7 +36,8 @@ class FixtureRunner:
             path.write_bytes(base64.b64decode(entry["b64"]))
         subprocess.run([compiler, *flags, "heat.f90", "-o", targets[0]["executable"]],
                        cwd=workspace, check=True, capture_output=True, timeout=30)
-        return {"ok": True, "flags_reached_every_compile": True, "compiled_only_tree_source": True}
+        return BuildResponse(ok=True, flags_reached_every_compile=True,
+                             compiled_only_tree_source=True)
 
     def time(self, attempt_id, executable, args, env, outputs, repeats, budget_s):
         workspace = self.root / attempt_id
@@ -44,7 +46,7 @@ class FixtureRunner:
             subprocess.run([str(workspace / executable), *args], cwd=workspace, check=True,
                            capture_output=True, timeout=budget_s)
             result.append({o: base64.b64encode((workspace / o).read_bytes()).decode() for o in outputs})
-        return {"ok": True, "runs_s": [0.01] * repeats, "outputs": result}
+        return TimeResponse(ok=True, runs_s=[0.01] * repeats, outputs=result)
 
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="requires a host gfortran compiler")

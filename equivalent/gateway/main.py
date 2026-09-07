@@ -84,8 +84,8 @@ def check_required_tools(regions, builder) -> None:
             f"the builder did not answer /healthz, so its tools could not be checked "
             f"against the strategies: {exc}"
         ) from exc
-    present = report.get("tools", {})
-    importable = report.get("python_modules", {})
+    present = report.tools
+    importable = report.python_modules
 
     def has(tool: str) -> bool:
         if tool.startswith(MODULE_PREFIX):

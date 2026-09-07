@@ -10,14 +10,24 @@ later compared against.
 from __future__ import annotations
 
 import base64
+from functools import partial
 
 import numpy as np
 
 from equivalent.capture import npy
 from equivalent.components import harness_timing
+from equivalent.gateway.backend_client import TimeResponse
 from equivalent.tree import attempt_id_for_strategy
 from equivalent.ledger import capture_sets
-from equivalent.tests.fakes import FakeBuilder, in_tree_manifest, timing_array, write_tree
+from equivalent.tests.fakes import (
+    FakeBuilder,
+    in_tree_manifest,
+    run_seconds,
+    timed,
+    timing_array,
+    timing_files,
+    write_tree,
+)
 
 REGION = "tsunami:onboarding"
 DECLARED_OUTPUTS = ["field.npy", "results/flux.npy"]
@@ -37,7 +47,7 @@ def test_two_runs_that_agree_pass_and_store_what_the_program_wrote(harness):
     result = _check(harness, builder)
 
     assert result.verdict == "pass"
-    assert result.detail["runs_s"] == builder.runs_s
+    assert result.detail["runs_s"] == run_seconds(harness_timing.REPEATS)
     assert result.detail["gpu_exclusive"] is True
     assert result.detail["outputs"] == DECLARED_OUTPUTS
     # The program's own outputs are a capture set of one case, whose
@@ -63,20 +73,18 @@ def test_the_program_is_timed_the_way_the_manifest_says_and_run_twice(harness):
     assert call["attempt_id"] == attempt_id_for_strategy(REGION, harness.tree.sha, "cpu_reference")
 
 
-class DriftingTimer(FakeBuilder):
+def _drifting_files(paths, run: int) -> dict:
     """A program that writes a different array the second time it runs."""
-
-    def timing_outputs(self, outputs, run: int) -> dict:
-        written = super().timing_outputs(outputs, run)
-        if run > 0:
-            drifted = npy.decode(base64.b64decode(written["field.npy"]))
-            drifted[0] += 1
-            written["field.npy"] = base64.b64encode(npy.encode(drifted)).decode()
-        return written
+    written = timing_files(paths, run)
+    if run > 0:
+        drifted = npy.decode(base64.b64decode(written["field.npy"]))
+        drifted[0] += 1
+        written["field.npy"] = base64.b64encode(npy.encode(drifted)).decode()
+    return written
 
 
 def test_a_program_that_writes_something_else_the_second_time_fails_naming_the_file(harness):
-    result = _check(harness, DriftingTimer())
+    result = _check(harness, FakeBuilder(time=partial(timed, files=_drifting_files)))
 
     assert result.verdict == "fail"
     assert "field.npy" in "\n".join(result.detail["problems"])
@@ -85,8 +93,7 @@ def test_a_program_that_writes_something_else_the_second_time_fails_naming_the_f
 def test_a_run_the_builder_refused_fails_with_what_it_said(harness):
     # An exceeded budget or a missing declared output comes back from the
     # builder as a failed run, and the reason is the builder's own words.
-    builder = harness.builder
-    builder.time_ok = False
+    builder = FakeBuilder(time=TimeResponse(ok=False, log_tail="timing binary not built"))
 
     result = _check(harness, builder)
 
@@ -94,15 +101,13 @@ def test_a_run_the_builder_refused_fails_with_what_it_said(harness):
     assert "timing binary not built" in result.detail["log_tail"]
 
 
-class TimerWritingSomethingElse(FakeBuilder):
+def _not_arrays(paths, run: int) -> dict:
     """A program whose declared output is not an array at all."""
-
-    def timing_outputs(self, outputs, run: int) -> dict:
-        return {name: base64.b64encode(b"3.14, 2.71\n").decode() for name in outputs}
+    return {path: base64.b64encode(b"3.14, 2.71\n").decode() for path in paths}
 
 
 def test_an_output_that_is_not_an_array_fails_naming_the_file(harness):
-    result = _check(harness, TimerWritingSomethingElse())
+    result = _check(harness, FakeBuilder(time=partial(timed, files=_not_arrays)))
 
     assert result.verdict == "fail"
     assert "field.npy" in "\n".join(result.detail["problems"])

@@ -1,12 +1,24 @@
 """Timing a port and timing the baseline it is measured against."""
+from functools import partial
+
 import pytest
 
 from equivalent.components import timing
 from equivalent.components.errors import ComponentError
+from equivalent.gateway.backend_client import TimeResponse
 from equivalent.ledger.capture_sets import load_capture_set, program_variable
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.components.conftest import BASELINE_STRATEGY, strategy as strategy_named
-from equivalent.tests.fakes import FakeBuilder, keep_program_set, timing_array, write_program
+from equivalent.tests.fakes import (
+    FakeBuilder,
+    built,
+    keep_program_set,
+    run_seconds,
+    timed,
+    timing_array,
+    timing_files,
+    write_program,
+)
 
 
 def _manifest(tmp_path):
@@ -64,7 +76,7 @@ def test_port_pass_reports_the_measured_runs_and_the_build_claims_flags(harness)
     result = _port(harness, _manifest(harness.tmp_path), builder)
 
     assert result.verdict == "pass"
-    assert result.detail["runs_s"] == builder.runs_s
+    assert result.detail["runs_s"] == run_seconds(timing.DEFAULT_REPEATS)
     # The timing claim records the flags the binary was actually built
     # with, read back from the tree's own build/replay claim.
     assert result.detail["flags"] == ["-O2", "-stdpar=gpu"]
@@ -110,8 +122,7 @@ def test_the_claim_records_the_arguments_and_environment_the_run_was_given(harne
 
 
 def test_port_fail_when_the_binary_is_not_built(harness):
-    builder = FakeBuilder()
-    builder.time_ok = False
+    builder = FakeBuilder(time=TimeResponse(ok=False, log_tail="timing binary not built"))
     _already_built(harness)
 
     result = _port(harness, _manifest(harness.tmp_path), builder)
@@ -123,15 +134,17 @@ def test_a_wrong_intermediate_timed_result_fails_even_if_the_last_run_is_right(h
     import base64
     from equivalent.capture import npy
 
-    class WrongSecondRun(FakeBuilder):
-        def timing_outputs(self, outputs, run):
-            result = super().timing_outputs(outputs, run)
-            if run == 1:
-                result[outputs[0]] = base64.b64encode(npy.encode(timing_array(outputs[0]) + 1)).decode()
-            return result
+    def wrong_second_run(paths, run):
+        written = timing_files(paths, run)
+        if run == 1:
+            written[paths[0]] = base64.b64encode(
+                npy.encode(timing_array(paths[0]) + 1)
+            ).decode()
+        return written
 
     _already_built(harness)
-    result = _port(harness, _manifest(harness.tmp_path), WrongSecondRun())
+    result = _port(harness, _manifest(harness.tmp_path),
+                   FakeBuilder(time=partial(timed, files=wrong_second_run)))
     assert result.verdict == "fail"
     assert result.detail["compared_repetitions"] == 5
     assert not result.detail["per_run"][1]["field"]["pass"]
@@ -141,21 +154,17 @@ def test_a_wrong_intermediate_timed_result_fails_even_if_the_last_run_is_right(h
 @pytest.mark.parametrize("field,value", [("outputs", []), ("runs_s", []),
                                          ("runs_s", [0.0] * 5), ("runs_s", [float("nan")] * 5)])
 def test_incomplete_or_invalid_timing_cannot_pass(harness, field, value):
-    class Incomplete(FakeBuilder):
-        def time(self, *args, **kwargs):
-            return {**super().time(*args, **kwargs), field: value}
+    incomplete = FakeBuilder(time=partial(timed, **{field: value}))
 
     _already_built(harness)
-    result = _port(harness, _manifest(harness.tmp_path), Incomplete())
+    result = _port(harness, _manifest(harness.tmp_path), incomplete)
     assert result.verdict == "fail"
 
 
 def test_baseline_cannot_pass_after_ignoring_the_requested_flags(harness):
-    class IgnoringFlags(FakeBuilder):
-        def build(self, *args, **kwargs):
-            return {**super().build(*args, **kwargs), "flags_reached_every_compile": False}
+    ignoring_flags = FakeBuilder(build=partial(built, flags_reached_every_compile=False))
 
-    result = _baseline(harness, _manifest(harness.tmp_path), IgnoringFlags(), baseline_strategy=strategy_named(BASELINE_STRATEGY))
+    result = _baseline(harness, _manifest(harness.tmp_path), ignoring_flags, baseline_strategy=strategy_named(BASELINE_STRATEGY))
     assert result.verdict == "fail"
 
 
@@ -191,8 +200,7 @@ def test_baseline_builds_the_pristine_tree_with_the_regions_baseline_strategy(ha
 
 
 def test_baseline_fail_when_the_baseline_itself_does_not_build(harness):
-    builder = FakeBuilder()
-    builder.build_ok = False
+    builder = FakeBuilder(build=partial(built, ok=False))
 
     result = _baseline(harness, _manifest(harness.tmp_path), builder, baseline_strategy=strategy_named(BASELINE_STRATEGY))
 

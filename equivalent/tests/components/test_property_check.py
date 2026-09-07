@@ -6,6 +6,8 @@ in this development environment. What is being checked is the component's
 side of the contract -- the module it names, the seed it draws or is
 given, and what the claim carries afterwards.
 """
+from functools import partial
+
 import pytest
 
 from equivalent.components import property_check
@@ -16,6 +18,7 @@ from equivalent.tests.fakes import (
     PROPERTIES_IN_TREE,
     FakeBuilder,
     fixture_case,
+    property_run,
     write_program,
 )
 
@@ -43,11 +46,6 @@ def _cases():
 
 def test_a_passing_property_run_is_a_pass_naming_the_module_and_the_counts(harness):
     builder = harness.builder
-    builder.properties_counts = {
-        "passed": 3, "failed": 0, "errors": 0, "skipped": 0,
-        "deselected": 0, "xfailed": 0, "xpassed": 0,
-        "collected": 3, "executed": 3,
-    }
 
     result = _check(harness, seed=1234, max_examples=25)
 
@@ -66,12 +64,12 @@ def test_a_passing_property_run_is_a_pass_naming_the_module_and_the_counts(harne
 def test_a_failing_property_is_a_fail_carrying_the_falsifying_example(harness):
     # Hypothesis prints the minimized example into pytest's own output, so
     # what the claim has to keep is that output.
-    builder = harness.builder
-    builder.properties_ok = False
-    builder.properties_counts = {"passed": 2, "failed": 1, "errors": 0}
-    builder.properties_log = "Falsifying example: test_mass_is_conserved(shift=1)\n1 failed, 2 passed"
+    builder = FakeBuilder(properties=partial(
+        property_run, ok=False, passed=2, failed=1, collected=3, executed=3,
+        log_tail="Falsifying example: test_mass_is_conserved(shift=1)\n1 failed, 2 passed",
+    ))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
     assert result.detail["failed"] == 1
@@ -79,69 +77,67 @@ def test_a_failing_property_is_a_fail_carrying_the_falsifying_example(harness):
 
 
 @pytest.mark.parametrize("counts", [
-    {"passed": 0, "failed": 0, "errors": 0, "skipped": 1,
-     "deselected": 0, "xfailed": 0, "xpassed": 0, "collected": 1, "executed": 0},
-    {"passed": 0, "failed": 0, "errors": 0, "skipped": 0,
-     "deselected": 0, "xfailed": 0, "xpassed": 0, "collected": 0, "executed": 0},
+    {"passed": 0, "skipped": 1, "collected": 1, "executed": 0},
+    {"passed": 0, "collected": 0, "executed": 0},
 ])
 def test_no_executed_passing_property_can_never_be_a_pass(harness, counts):
-    builder = harness.builder
-    builder.properties_counts = counts
+    builder = FakeBuilder(properties=partial(property_run, ok=False, **counts))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
     assert "no property test passed" in result.detail["problems"]
 
 
 def test_inconsistent_success_and_failure_counts_fail_closed(harness):
-    builder = harness.builder
-    builder.properties_ok = True
-    builder.properties_counts = {
-        "passed": 2, "failed": 1, "errors": 0, "skipped": 0,
-        "deselected": 0, "xfailed": 0, "xpassed": 0,
-        "collected": 3, "executed": 3,
-    }
+    builder = FakeBuilder(properties=partial(
+        property_run, ok=True, passed=2, failed=1, collected=3, executed=3,
+    ))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
     assert any("inconsistent" in problem for problem in result.detail["problems"])
 
 
 def test_backend_must_echo_the_requested_property_configuration(harness):
-    class WrongRun(FakeBuilder):
-        def properties(self, *args, **kwargs):
-            response = super().properties(*args, **kwargs)
-            response["seed"] += 1
-            return response
+    wrong = FakeBuilder(properties=lambda request: property_run(
+        request, seed=request["seed"] + 1,
+    ))
 
-    result = _check(harness, builder=WrongRun(), seed=4, max_examples=10)
+    result = _check(harness, builder=wrong, seed=4, max_examples=10)
 
     assert result.verdict == "fail"
     assert any("seed" in problem for problem in result.detail["problems"])
 
 
-@pytest.mark.parametrize("observed", [None, 0, -1, True, "3"])
+@pytest.mark.parametrize("observed", [None, 0])
 def test_a_pass_requires_a_protected_observation_of_the_replay_executable(harness, observed):
-    builder = harness.builder
-    builder.replays_observed = observed
+    builder = FakeBuilder(properties=partial(property_run, replays_observed=observed))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
     assert any("replay" in problem for problem in result.detail["problems"])
 
 
+@pytest.mark.parametrize("observed", [-1, True, "3"])
+def test_an_observation_count_that_is_not_a_count_is_an_error_not_a_verdict(harness, observed):
+    # A number nobody can read is not a search that failed; it is an
+    # answer the harness cannot use, and no claim may be filed from it.
+    builder = FakeBuilder(properties=partial(property_run, replays_observed=observed))
+
+    with pytest.raises(ComponentError):
+        _check(harness, builder=builder)
+
+
 @pytest.mark.parametrize("status", ["xfailed", "xpassed"])
 def test_an_expected_failure_or_unexpected_pass_cannot_hide_in_a_property_pass(harness, status):
-    builder = harness.builder
-    builder.properties_counts["passed"] = 1
-    builder.properties_counts[status] = 1
-    builder.properties_counts["collected"] = 2
-    builder.properties_counts["executed"] = 2
+    builder = FakeBuilder(properties=partial(
+        property_run, ok=False, passed=1, collected=2, executed=2, **{status: 1},
+    ))
 
-    result = _check(harness)
+    result = _check(harness, builder=builder)
 
     assert result.verdict == "fail"
     assert any(status in problem for problem in result.detail["problems"])
@@ -209,11 +205,9 @@ def test_a_region_with_no_visible_dataset_is_an_error(harness):
 
 
 def test_a_builder_that_cannot_be_reached_is_an_error_not_a_failed_property(harness):
-    class Unreachable(FakeBuilder):
-        def properties(self, *args, **kwargs):
-            raise OSError("connection refused")
+    unreachable = FakeBuilder(properties=OSError("connection refused"))
 
     with pytest.raises(ComponentError) as excinfo:
-        _check(harness, builder=Unreachable())
+        _check(harness, builder=unreachable)
 
     assert "connection refused" in str(excinfo.value)

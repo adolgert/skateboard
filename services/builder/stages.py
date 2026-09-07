@@ -355,36 +355,6 @@ def _notify_env(base, notify, mandatory):
     return env
 
 
-# One kernel launch as NVCOMPILER_ACC_NOTIFY=1 writes it. Both offload
-# flavors print the same first four fields, differing only in what follows
-# and in whether one or two spaces sit after "kernel":
-#
-#   launch CUDA kernel  file=... function=p line=5 device=0 threadid=1 num_gangs=...
-#   launch CUDA kernel file=... function=q line=5 device=0 host-threadid=0 num_teams=...
-#
-# Requiring those four fields is what makes the count proof: a program can
-# print the words "launch CUDA kernel" itself, but not the runtime's own
-# file/function/line/device fields for a kernel it never launched.
-LAUNCH_LINE = re.compile(r"^launch CUDA kernel\s+file=(\S+) function=(\S+) line=(\d+) device=(\d+)")
-
-
-def kernel_launches(stderr, notify):
-    """(how many kernels launched, [(file, function, line), ...]) from one run's stderr.
-
-    Returns nothing counted for a strategy that asked for no notify
-    output: without NVCOMPILER_ACC_NOTIFY set there are no lines to read,
-    so any that appear were written by the program itself.
-    """
-    if notify not in ("acc", "omp"):
-        return 0, []
-    found = [
-        (m.group(1), m.group(2), m.group(3))
-        for m in (LAUNCH_LINE.match(line) for line in stderr.splitlines())
-        if m
-    ]
-    return len(found), found
-
-
 def _write_case(cdir, arrs):
     """One case directory holding the inputs the caller sent, and nothing else.
 

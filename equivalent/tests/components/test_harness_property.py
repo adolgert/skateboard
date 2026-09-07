@@ -9,10 +9,11 @@ a fact in the ledger rather than a row nobody filed.
 """
 from __future__ import annotations
 
+from functools import partial
 
 from equivalent.components import harness_property
 from equivalent.tree import attempt_id_for_strategy
-from equivalent.tests.fakes import write_tree
+from equivalent.tests.fakes import FakeBuilder, property_run, write_tree
 
 REGION = "tsunami:onboarding"
 
@@ -35,10 +36,10 @@ def test_properties_that_hold_on_the_baseline_pass(harness):
 
 
 def test_a_property_that_does_not_hold_on_the_baseline_fails_with_what_it_printed(harness):
-    builder = harness.builder
-    builder.properties_ok = False
-    builder.properties_counts = {"passed": 1, "failed": 1, "errors": 0}
-    builder.properties_log = "Falsifying example: run_replay(h=array([0.]))"
+    builder = FakeBuilder(properties=partial(
+        property_run, ok=False, passed=1, failed=1, collected=2, executed=2,
+        log_tail="Falsifying example: run_replay(h=array([0.]))",
+    ))
 
     result = _check(harness, builder)
 

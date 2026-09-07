@@ -102,13 +102,13 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         resp = backend.replay(ctx, attempt_id, replay.executable, wire_inputs(cases))
 
         entry = {"cases": len(cases), "capture_set": sets[name]}
-        executable_identity = executable_identity or resp.get("executable_identity")
-        if not resp.get("ok"):
-            entry["log_tail"] = resp.get("log_tail", "")
+        executable_identity = executable_identity or resp.executable_identity
+        if not resp.ok:
+            entry["log_tail"] = resp.log_tail
             disagreed.append(name)
             reasons.append(f"the replay of dataset '{name}' would not run")
         else:
-            first = _first_difference(cases, resp.get("outputs", {}))
+            first = _first_difference(cases, resp.outputs)
             if first is not None:
                 entry["first_difference"] = first
                 disagreed.append(name)

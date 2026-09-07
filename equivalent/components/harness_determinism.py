@@ -94,10 +94,10 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         resp = backend.capture(
             ctx, attempt_id, capture.executable, dataset.args, f"{name}{AGAIN}",
         )
-        cases = resp.get("cases", {}) if resp.get("ok") else {}
+        cases = resp.cases if resp.ok else {}
         if not cases:
             entry["same"] = False
-            entry["stdout_tail"] = resp.get("stdout_tail", "")
+            entry["stdout_tail"] = resp.stdout_tail
             differed.append(f"the second capture of dataset '{name}' wrote no case")
         else:
             again = pack_capture_set(
@@ -126,15 +126,15 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         backend.replay(ctx, attempt_id, replay.executable, cases),
     ]
     replay_detail["executable_identity"] = next(
-        (run.get("executable_identity") for run in runs if run.get("executable_identity")), None,
+        (run.executable_identity for run in runs if run.executable_identity), None,
     )
-    if not all(run.get("ok") for run in runs):
-        failing = next(run for run in runs if not run.get("ok"))
+    if not all(run.ok for run in runs):
+        failing = next(run for run in runs if not run.ok)
         replay_detail["same"] = False
-        replay_detail["log_tail"] = failing.get("log_tail", "")
+        replay_detail["log_tail"] = failing.log_tail
         differed.append("a repeat of the replay would not run")
     else:
-        first = _repeat_difference(runs[0].get("outputs", {}), runs[1].get("outputs", {}))
+        first = _repeat_difference(runs[0].outputs, runs[1].outputs)
         replay_detail["same"] = first is None
         if first is not None:
             replay_detail["first_difference"] = first

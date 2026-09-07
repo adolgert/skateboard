@@ -10,11 +10,13 @@ the harness is not describing the code.
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 
 from equivalent.capture import npy
 from equivalent.components import harness_replay
+from equivalent.gateway.backend_client import RunResponse
 from equivalent.tree import attempt_id_for_strategy
-from equivalent.tests.fakes import FakeBuilder
+from equivalent.tests.fakes import FakeBuilder, replayed
 
 REGION = "tsunami:onboarding"
 
@@ -25,14 +27,8 @@ def _check(harness, builder):
     return harness_replay.check(harness.context(builder=builder), {})
 
 
-def _replaying_builder():
-    builder = FakeBuilder()
-    builder.replays_capture = True
-    return builder
-
-
 def test_a_driver_that_reproduces_every_captured_output_passes(harness):
-    builder = _replaying_builder()
+    builder = FakeBuilder()
 
     result = _check(harness, builder)
 
@@ -49,7 +45,7 @@ def test_a_driver_that_reproduces_every_captured_output_passes(harness):
 
 
 def test_the_replay_is_given_the_captured_inputs(harness):
-    builder = _replaying_builder()
+    builder = FakeBuilder()
 
     _check(harness, builder)
 
@@ -58,20 +54,18 @@ def test_the_replay_is_given_the_captured_inputs(harness):
     assert sorted(sent["case0000"]) == ["field", "flux"]
 
 
-class DriftingBuilder(FakeBuilder):
+def _drifting(request):
     """A driver whose answer is one element off in one case's one variable."""
-
-    def run(self, attempt_id, executable, cases, notify=None, mandatory=False):
-        result = super().run(attempt_id, executable, cases, notify, mandatory)
-        drifted = npy.decode(base64.b64decode(result["outputs"]["case0001"]["flux"]))
-        drifted[0, 0] += 1
-        result["outputs"]["case0001"]["flux"] = base64.b64encode(npy.encode(drifted)).decode()
-        return result
+    resp = replayed(request)
+    drifted = npy.decode(base64.b64decode(resp.outputs["case0001"]["flux"]))
+    drifted[0, 0] += 1
+    case = {**resp.outputs["case0001"],
+            "flux": base64.b64encode(npy.encode(drifted)).decode()}
+    return replace(resp, outputs={**resp.outputs, "case0001": case})
 
 
 def test_one_element_out_of_place_fails_naming_the_case_and_the_variable(harness):
-    builder = DriftingBuilder()
-    builder.replays_capture = True
+    builder = FakeBuilder(run=_drifting)
 
     result = _check(harness, builder)
 
@@ -82,18 +76,15 @@ def test_one_element_out_of_place_fails_naming_the_case_and_the_variable(harness
     assert difference["max_abs"] == 1.0
 
 
-class SilentBuilder(FakeBuilder):
+def _silent(request):
     """A driver that writes no file at all for one declared output."""
-
-    def run(self, attempt_id, executable, cases, notify=None, mandatory=False):
-        result = super().run(attempt_id, executable, cases, notify, mandatory)
-        del result["outputs"]["case0000"]["field"]
-        return result
+    resp = replayed(request)
+    case = {k: v for k, v in resp.outputs["case0000"].items() if k != "field"}
+    return replace(resp, outputs={**resp.outputs, "case0000": case})
 
 
 def test_an_output_the_driver_never_wrote_fails_naming_it(harness):
-    builder = SilentBuilder()
-    builder.replays_capture = True
+    builder = FakeBuilder(run=_silent)
 
     result = _check(harness, builder)
 
@@ -104,8 +95,7 @@ def test_an_output_the_driver_never_wrote_fails_naming_it(harness):
 
 
 def test_a_replay_that_would_not_run_fails_with_what_the_builder_said(harness):
-    builder = _replaying_builder()
-    builder.run_ok = False
+    builder = FakeBuilder(run=RunResponse(ok=False, log_tail="runtime crash"))
 
     result = _check(harness, builder)
 

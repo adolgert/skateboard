@@ -10,7 +10,8 @@ from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.gateway.conftest import region_config
-from equivalent.tests.fakes import FakeBuilder, write_program
+from equivalent.gateway.backend_client import HealthResponse
+from equivalent.tests.fakes import EXECUTOR_IDENTITY, FakeBuilder, write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
@@ -260,12 +261,10 @@ def test_healthz_answers_without_a_token(tmp_path):
 
 
 def test_a_pinned_builder_identity_does_not_override_an_unhealthy_backend(tmp_path):
-    class UnhealthyBuilder(FakeBuilder):
-        def healthz(self):
-            return {"ok": False, "executor_identity": self.executor_identity}
-
-    builder = UnhealthyBuilder()
-    cfg = replace(_region(tmp_path), executor_identity=builder.executor_identity)
+    builder = FakeBuilder(healthz=HealthResponse(
+        ok=False, executor_identity=EXECUTOR_IDENTITY,
+    ))
+    cfg = replace(_region(tmp_path), executor_identity=EXECUTOR_IDENTITY)
     client = TestClient(create_app({cfg.region_id: cfg}, TOKEN, builder=builder))
 
     response = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS)

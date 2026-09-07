@@ -4,6 +4,7 @@ from equivalent.components import regression
 from equivalent.components.errors import ComponentError
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.components.conftest import PORT_STRATEGY, strategy as strategy_named
+from equivalent.gateway.backend_client import RunResponse
 from equivalent.tests.fakes import FakeBuilder, FakeOracle, fixture_case, write_program
 
 
@@ -53,13 +54,10 @@ def test_holdout_fetches_inputs_from_the_oracle_and_runs_them_through_the_builde
 
 @pytest.mark.parametrize("transport", [False, True])
 def test_failed_holdout_does_not_echo_candidate_output(harness, transport):
-    class LeakingBuilder(FakeBuilder):
-        def run(self, *args, **kwargs):
-            if transport:
-                raise RuntimeError("SECRET_HELD_OUT_INPUT")
-            return {"ok": False, "log_tail": "SECRET_HELD_OUT_INPUT"}
-
-    harness.builder = LeakingBuilder()
+    harness.builder = FakeBuilder(run=(
+        RuntimeError("SECRET_HELD_OUT_INPUT") if transport
+        else RunResponse(ok=False, log_tail="SECRET_HELD_OUT_INPUT")
+    ))
 
     with pytest.raises(ComponentError) as raised:
         regression.check_holdout(_porting(harness), {})

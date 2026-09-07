@@ -76,13 +76,13 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     if refusal is not None:
         return refusal
 
-    runs = resp["outputs"]
+    runs = resp.outputs
     measured = {
         **described,
-        "runs_s": resp["runs_s"],
-        "gpu_exclusive": resp.get("gpu_exclusive"),
+        "runs_s": resp.runs_s,
+        "gpu_exclusive": resp.gpu_exclusive,
         "outputs": list(timing.outputs),
-        "executable_identity": resp.get("executable_identity"),
+        "executable_identity": resp.executable_identity,
     }
 
     problems = _drifted(runs[0], runs[1], timing.outputs)

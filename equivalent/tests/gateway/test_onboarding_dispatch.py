@@ -18,7 +18,7 @@ from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.gateway.conftest import ONBOARDING_STRATEGY_PATH, region_config
 from equivalent.tests.fakes import write_program, write_tree
-from equivalent.tests.components.test_original_check import ReferenceBuilder, reference
+from equivalent.tests.components.test_original_check import reference, reference_builder
 
 TOKEN = "test-token"
 # Every action of the onboarding phase that has something to dispatch to,
@@ -43,10 +43,9 @@ def _client(tmp_path, *, oracle=None):
         manifest=load_manifest(program / "manifest.yaml"),
         original_reference_path=reference(tmp_path),
     )
-    builder = ReferenceBuilder()
     # The tree's own replay driver reproduces what its capture program
     # recorded, which is what an onboarding that is going well looks like.
-    builder.replays_capture = True
+    builder = reference_builder()
     client = TestClient(create_app({REGION: cfg}, TOKEN, builder=builder, oracle=oracle))
     return client, cfg, LedgerStore(cfg.ledger_dir), builder
 

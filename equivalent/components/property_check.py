@@ -65,7 +65,8 @@ def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
     the caller's to name. A seed of None is drawn here and written into
     the detail, because a search nobody can repeat is not evidence.
 
-    Raises ComponentError if the builder could not be reached.
+    Raises ComponentError if the builder could not be reached, or answered
+    something that cannot be read as a property run at all.
     """
     if isinstance(max_examples, bool):
         raise ComponentError("property max_examples must be a positive integer")
@@ -87,29 +88,14 @@ def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
         raise ComponentError(f"builder /v1/properties call failed: {exc}") from exc
 
     problems = []
-    if resp.get("stage") != "properties":
-        problems.append(f"builder returned stage {resp.get('stage')!r}, expected 'properties'")
-    if resp.get("seed") != drawn:
+    if resp.seed != drawn:
         problems.append("builder returned a different seed from the property run requested")
-    if resp.get("max_examples") != examples:
+    if resp.max_examples != examples:
         problems.append(
             "builder returned a different max_examples from the property run requested"
         )
-    if not isinstance(resp.get("ok"), bool):
-        problems.append("builder returned no boolean property outcome")
 
-    counts = {}
-    for name in (
-        "passed", "failed", "errors", "skipped", "deselected", "xfailed", "xpassed",
-        "collected", "executed",
-    ):
-        value = resp.get(name)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            problems.append(f"builder returned an invalid {name} count")
-            counts[name] = 0
-        else:
-            counts[name] = value
-
+    counts = resp.counts()
     successful = (
         counts["passed"] > 0
         and counts["failed"] == 0
@@ -139,16 +125,11 @@ def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
     for name in ("xfailed", "xpassed"):
         if counts[name]:
             problems.append(f"{counts[name]} property test(s) were {name}")
-    replays_observed = resp.get("replays_observed")
-    if (
-        isinstance(replays_observed, bool)
-        or not isinstance(replays_observed, int)
-        or replays_observed <= 0
-    ):
+    if not resp.replays_observed:
         problems.append(
             "protected execution evidence observed no invocation of the bound replay executable"
         )
-    if resp.get("ok") is not successful:
+    if resp.ok is not successful:
         problems.append("builder's property outcome is inconsistent with its test counts")
 
     detail = {
@@ -156,12 +137,12 @@ def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
         "seed": drawn,
         "max_examples": examples,
         **counts,
-        "replays_observed": replays_observed,
-        "counts_source": resp.get("counts_source"),
-        "log_tail": (resp.get("log_tail") or "")[-LOG_TAIL_CHARS:],
+        "replays_observed": resp.replays_observed,
+        "counts_source": resp.counts_source,
+        "log_tail": resp.log_tail[-LOG_TAIL_CHARS:],
     }
-    if "executable_identity" in resp:
-        detail["executable_identity"] = resp["executable_identity"]
+    if resp.executable_identity is not None:
+        detail["executable_identity"] = resp.executable_identity
     if problems:
         detail["problems"] = problems
         return CheckResult(verdict="fail", detail=detail, reasons=tuple(problems))
