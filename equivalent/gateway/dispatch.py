@@ -79,6 +79,7 @@ CHECKS = {
     'program_regression': program_regression.check,
     'time_port': timing.check_port,
     'time_baseline': timing.check_baseline,
+    'performance_check': timing.check_performance,
     'manifest_check': manifest_check.check,
     'harness_build': harness_build.check,
     'harness_capture': harness_capture.check,

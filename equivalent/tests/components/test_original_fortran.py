@@ -6,6 +6,7 @@ integration test, not evidence about sandbox or GPU operation.
 """
 import base64
 from dataclasses import replace
+import hashlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -36,8 +37,15 @@ class FixtureRunner:
             path.write_bytes(base64.b64decode(entry["b64"]))
         subprocess.run([compiler, *flags, "heat.f90", "-o", targets[0]["executable"]],
                        cwd=workspace, check=True, capture_output=True, timeout=30)
+        produced = workspace / targets[0]["executable"]
         return BuildResponse(ok=True, flags_reached_every_compile=True,
-                             compiled_only_tree_source=True)
+                             compiled_only_tree_source=True, targets={
+                                 targets[0].get("role", "fixture"): {
+                                     "executable": targets[0]["executable"], "built": True,
+                                     "sha256": hashlib.sha256(produced.read_bytes()).hexdigest(),
+                                     "size": produced.stat().st_size,
+                                 },
+                             })
 
     def time(self, attempt_id, executable, args, env, outputs, repeats, budget_s):
         workspace = self.root / attempt_id

@@ -15,16 +15,14 @@ allow_globs:
 languages:
   fortran:
     compiler: nvfortran
-    # Exactly what services/builder/stages.py PROFILES["stdpar_managed"] passes to
-    # nvfortran today, including mem:managed.
+    # The builder requires these flags on observed Fortran compiles.
     flags:
       - "-O2"
       - "-stdpar=gpu"
       - "-gpu=cc89,mem:managed"
       - "-Minfo=accel"
 
-# No separate link step today (one nvfortran call compiles and links).
-# Reserved for the future manifest-driven multi-language build (D13).
+# This strategy needs no additional linker flags; nvfortran compiles and links.
 link_flags: []
 
 required_tools:

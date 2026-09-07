@@ -38,26 +38,38 @@ def _asked(who: str, endpoint: str, call, *args, **kwargs):
 
 
 def build(builder: Builder, attempt_id: str, tree: list, makefile: str, targets: list,
-          compiler: str, flags, link_flags, source_patterns):
+          compiler: str | None, flags, link_flags, source_patterns, *, toolchains=None):
     """Build one tree with its own makefile, under one strategy's compiler."""
+    arguments = (
+        attempt_id, tree, makefile, targets, compiler, list(flags),
+        list(link_flags), list(source_patterns),
+    )
+    if toolchains is None:
+        return _asked("builder", "build", builder.build, *arguments)
     return _asked(
-        "builder", "build", builder.build, attempt_id, tree, makefile, targets,
-        compiler, list(flags), list(link_flags), list(source_patterns),
+        "builder", "build", builder.build, *arguments,
+        toolchains={
+            language: {
+                "compiler": specification["compiler"],
+                "flags": list(specification["flags"]),
+            }
+            for language, specification in toolchains.items()
+        },
     )
 
 
 def replay(builder: Builder, attempt_id: str, executable: str, cases: dict,
-           *, notify=None, mandatory: bool = False):
+           *, notify=None, mandatory: bool = False, profile: bool | None = None):
     """Run the replay driver over a set of cases in one builder workspace.
 
     `notify` and `mandatory` are the strategy's device proof, asked for
     only where whether anything offloaded is the question: a harness
     replay is two halves of one CPU harness agreeing.
     """
-    return _asked(
-        "builder", "run", builder.run, attempt_id, executable, cases,
-        notify=notify, mandatory=mandatory,
-    )
+    options = {"notify": notify, "mandatory": mandatory}
+    if profile is not None:
+        options["profile"] = profile
+    return _asked("builder", "run", builder.run, attempt_id, executable, cases, **options)
 
 
 def capture(builder: Builder, attempt_id: str, executable: str, args, dataset: str):

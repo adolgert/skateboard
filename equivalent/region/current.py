@@ -22,7 +22,7 @@ from pathlib import Path
 from equivalent.ledger.acceptance import ONBOARDING
 from equivalent.ledger.evidence import claim_matches_context
 from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import frozen_subject, glob_matches
+from equivalent.ledger.subjects import Subject, frozen_subject, glob_matches
 from equivalent.region.config import region_branch
 from equivalent.tree import Tree, rev_parse
 
@@ -123,6 +123,15 @@ def frozen_for_allow_globs(repo_dir, allow_globs: list[str]) -> str:
         if not matches_any(f["path"], allow_globs)
     ]
     return frozen_subject(frozen_files).sha256
+
+
+def baseline_tree_subject(repo_dir) -> Subject:
+    """The pristine baseline tree as the subject timing comparisons require.
+
+    This stays with the region reader rather than making a CLI or status
+    renderer decide how a deployment identifies its baseline.
+    """
+    return Subject(kind="tree", sha256=Tree.baseline(repo_dir).sha)
 
 
 def current_tree_and_frozen(

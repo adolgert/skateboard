@@ -72,8 +72,8 @@ def score_mutant(job) -> dict:
     try:
         shutil.rmtree(mutant_dir, ignore_errors=True)
         shutil.copytree(workspace.tree_dir, mutant_dir, symlinks=True)
+        workspace.prepare_writable_job_subtree(mutant_dir)
         _write_mutated(mutant_dir, mutant)
-        workspace.prepare_job_files()
 
         try:
             made = _make(
@@ -97,7 +97,9 @@ def score_mutant(job) -> dict:
             return mutant.as_result()
         if made.returncode != 0 or not os.path.isfile(replay):
             mutant.status = mutants.BUILD_FAIL
-            mutant.note = _last_line(made.output) or "make left no executable"
+            mutant.note = (
+                made.output.strip()[-1500:] or "make left no executable"
+            )
             return mutant.as_result()
         if not compile_log.flags_reached_every_compile(made.compiles):
             # A mutant built with other flags than the port faces is not a
@@ -111,6 +113,7 @@ def score_mutant(job) -> dict:
             case_dir = os.path.join(mutant_dir, "cases", name)
             shutil.rmtree(case_dir, ignore_errors=True)
             shutil.copytree(os.path.join(job["inputs_root"], name), case_dir)
+            workspace.prepare_writable_job_subtree(case_dir)
             try:
                 replayed = workspace.execute(
                     [replay, case_dir], cwd=mutant_dir, timeout=_remaining(deadline),
@@ -259,12 +262,16 @@ def mutate(workspace, *, makefile, replay_target, files, cases, bands, compiler,
         # One shim log per mutant: mutants are built at the same time, and
         # a log they shared would say that some other mutant's compile was
         # this one's.
-        log_path = workspace.path("mutants", f"{mutant.mid}.fc.jsonl")
+        mutant_dir = workspace.path("mutants", mutant.mid)
+        # Keeping the shim log inside the worker's directory also keeps the
+        # executor's minimal volume mount inside it.  A sibling must never be
+        # visible to, or made writable by, this job.
+        log_path = os.path.join(mutant_dir, ".compiler.jsonl")
         env = workspace.build_env(compiler, flags, link_flags, log_path, harness_dir)
         payloads.append({
             "mutant": mutant,
             "workspace": workspace,
-            "mutant_dir": workspace.path("mutants", mutant.mid),
+            "mutant_dir": mutant_dir,
             "makefile": makefile,
             "target": replay_target["target"],
             "executable": replay_target["executable"],

@@ -142,12 +142,15 @@ class BuilderAnswer(Answer):
 @dataclass(frozen=True)
 class BuildResponse(BuilderAnswer):
     KIND = STAGE = "build"
-    TABLES = ("targets",)
-    LISTS = ("compiles",)
+    TABLES = ("targets", "toolchains", "compiler_audit")
+    LISTS = ("compiles", "languages_compiled")
 
     targets: dict = field(default_factory=dict)   # role -> {executable, built, sha256, size}
     compiles: list = field(default_factory=list)  # one record per compiler invocation
+    compiler_audit: dict = field(default_factory=dict)
     flags: list = field(default_factory=list)
+    toolchains: dict = field(default_factory=dict)
+    languages_compiled: list = field(default_factory=list)
     # The two statements the compiler log exists to make.
     flags_reached_every_compile: bool = False
     compiled_only_tree_source: bool = False
@@ -415,11 +418,13 @@ class Builder(Protocol):
     """
 
     def build(self, attempt_id: str, tree: list[dict], makefile: str, targets: list[dict],
-              compiler: str, flags: list[str], link_flags: list[str],
-              source_patterns: list[str]) -> BuildResponse: ...
+              compiler: str | None, flags: list[str], link_flags: list[str],
+              source_patterns: list[str], *, toolchains: dict | None = None,
+              ) -> BuildResponse: ...
 
     def run(self, attempt_id: str, executable: str, cases: dict,
-            notify: str | None = None, mandatory: bool = False) -> RunResponse: ...
+            notify: str | None = None, mandatory: bool = False,
+            profile: bool | None = None) -> RunResponse: ...
 
     def capture(self, attempt_id: str, executable: str, args: list[str],
                 run_name: str) -> CaptureResponse: ...

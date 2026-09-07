@@ -236,6 +236,8 @@ names the file, case, variable, or compile line it objected to.
       outputs: [<file>.npy, ...]   # what the timing run writes; compared against the baseline's run
       budget_s: <seconds per run>
       env: {"NAME": "value"}       # optional; values are strings, so quote numbers
+      performance:                   # optional; default requires a 1.10 median speedup
+        min_median_speedup: 1.10     # finite number above 1, baseline median / port median
     tolerances: harness/tolerances.json
     properties: harness/properties.py   # or null
 
@@ -252,7 +254,12 @@ that matter here look like numbers and must reach the program exactly as
 written. A manifest either says only `version`, `name`, and `source` --
 the minimal form, enough to seed a baseline and start a session -- or
 says all six of the rest as well. Anything in between is refused, naming
-what is absent.
+what is absent. Timing measures end-to-end isolated builder-job wall time,
+including container setup and teardown; workspace copying precedes the timer.
+A port can be accepted only after at least five baseline and five port samples
+meet `min_median_speedup` by their medians. This is a same-builder comparison,
+not a confidence interval or cross-machine guarantee, and it does not claim
+the GPU was exclusive while measurements ran.
 
 ### The build contract
 
@@ -266,7 +273,7 @@ with these in the environment: `FC` (the strategy's compiler), `FFLAGS`,
 (the directory holding `npy_io.f90`). The Makefile must:
 
 - pass `$(FFLAGS)` to every compile and `$(LDFLAGS)` to every link --
-  a protected `strace/execve` observer records compiler invocations, and a
+  a protected `strace/process+cwd` observer records compiler invocations, and a
   compile without the strategy's flags fails `harness_build`;
 - compile only files from the tree and `$(HARNESS)/npy_io.f90`; a
   compile that reaches anywhere else fails the same check, naming the

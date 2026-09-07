@@ -32,6 +32,7 @@ class PlayedJobs:
     """
 
     docker = "docker"
+    volume = "played-work-volume"
 
     def __init__(self, *, driver=False, script=None):
         self.driver = driver
@@ -68,7 +69,10 @@ def good_build(role="replay"):
         ok=True, flags_reached_every_compile=True, compiled_only_tree_source=True,
         targets={role: {"executable": role, "built": True, "sha256": "a" * 64, "size": 10}},
         compiles=[{"argv": ["nvfortran", "-O1"], "has_flags": True}],
-        compiler_audit={"protected": True, "collector": "strace/execve", "compiler_invocations": 1},
+        compiler_audit={
+            "protected": True, "collector": "strace/process+cwd",
+            "compiler_invocations": 1,
+        },
         image_id=IMAGE, executor_identity=IDENTITY,
     )
 
@@ -204,6 +208,24 @@ def test_a_container_that_outlives_its_job_fails_both_cleanup_checks(boundary):
     answer = preflight.qualify()
     assert answer["checks"]["normal_descendants_cleaned"] is False
     assert answer["checks"]["timed_out_descendants_cleaned"] is False
+
+
+def test_cleanup_probe_is_scoped_to_this_executors_work_volume(monkeypatch):
+    calls = []
+
+    def record(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(preflight.subprocess, "run", record)
+    jobs = PlayedJobs()
+
+    assert preflight._no_disposable_containers(jobs) is True
+    assert calls == [[
+        "docker", "ps", "-aq",
+        "--filter", f"label={executor.DISPOSABLE_LABEL}=true",
+        "--filter", f"label={executor.WORK_VOLUME_LABEL}={jobs.volume}",
+    ]]
 
 
 def test_a_missing_profiler_is_recorded_with_what_it_said(boundary):

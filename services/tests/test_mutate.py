@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import io
+import os
 import shutil
 import subprocess
 import sys
@@ -22,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from services.builder import mutate, mutation_source, stage_mutation, stages
+from services.builder import executor, mutate, mutation_source, stage_mutation, stages
 
 HARNESS = Path(__file__).resolve().parents[1] / "builder" / "harness"
 
@@ -232,6 +233,51 @@ def _mutate(attempt, bands, **kwargs) -> dict:
         flags=FLAGS, link_flags=[], source_patterns=PATTERNS, jobs=2,
         harness_dir=HARNESS, **kwargs,
     )
+
+
+class _FrozenLocalPolicy:
+    """Exercise production file modes while commands stay local to this test."""
+
+    owns_files = False
+    audited = False
+    records_artifacts = False
+
+    def run(self, cmd, *, cwd, env, timeout, mode="plain", gpu=False):
+        return executor.local_run(cmd, cwd=cwd, env=env, timeout=timeout, gpu=gpu)
+
+    def identity(self):
+        return {"executor_identity": "frozen-local-test", "image_id": None}
+
+
+@needs_gfortran
+def test_mutants_rebuild_from_a_frozen_tree_without_touching_siblings(tmp_path, monkeypatch):
+    policy = _FrozenLocalPolicy()
+    attempt = stages.workspace_for("frozen-mutants", work_root=tmp_path, policy=policy)
+    cases = _cases()
+    scored = _reference(attempt, cases)
+
+    # The deployed builder owns/chowns these files as root. This local test
+    # uses the current uid but preserves the production 0444/0555 source-tree
+    # modes that originally prevented each copied mutant from rebuilding.
+    monkeypatch.setattr(os, "chown", lambda *args, **kwargs: None)
+    policy.owns_files = True
+    attempt.freeze_tree({"replay": {"kind": "executable"}})
+
+    result = stages.mutate(
+        attempt, makefile="Makefile", replay_target=REPLAY_TARGET,
+        files=["src/mod_kernel.f90"], cases=scored, bands=TIGHT,
+        compiler="gfortran", flags=FLAGS, link_flags=[], source_patterns=PATTERNS,
+        jobs=2, limit=6, harness_dir=HARNESS,
+    )
+
+    assert result.ok is True
+    assert result.scored == 6
+    assert any(row["status"] in {"KILLED", "EQUIVALENT", "GAP"} for row in result.results)
+    assert not any(
+        "Permission denied" in row["note"] or "No such file" in row["note"]
+        for row in result.results
+    )
+    assert (Path(attempt.tree_dir) / "src/mod_kernel.f90").stat().st_mode & 0o777 == 0o444
 
 
 def _by_line(result: dict, line: int, status: str) -> list:

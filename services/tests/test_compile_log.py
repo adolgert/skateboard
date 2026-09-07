@@ -170,6 +170,97 @@ def test_a_log_with_no_compile_at_all_reaches_no_flags(tmp_path):
     assert compile_log.flags_reached_every_compile(records) is False
 
 
+def test_mixed_compiles_are_attributed_to_language_and_its_own_flags(tmp_path):
+    tree = _tree(tmp_path, "src/kernel.c", "src/driver.cpp", "src/device.cu", "src/load.ptx")
+    toolchains = {
+        "c": {"compiler": "gcc", "flags": ["-O2", "-DC_ONLY"]},
+        "cxx": {"compiler": "g++", "flags": ["-O3", "-std=c++20"]},
+        "cuda": {"compiler": "nvcc", "flags": ["-O3", "-arch=sm_89"]},
+        "ptx": {"compiler": "ptxas", "flags": ["-arch=sm_89"]},
+    }
+    log = _log(
+        {"language": "c", "argv": ["-O2", "-DC_ONLY", "-c", "src/kernel.c"], "cwd": str(tree)},
+        {"language": "cxx", "argv": ["-O3", "-std=c++20", "-c", "src/driver.cpp"], "cwd": str(tree)},
+        {"language": "cuda", "argv": ["-O3", "-arch=sm_89", "-c", "src/device.cu"], "cwd": str(tree)},
+        {"language": "ptx", "argv": ["-arch=sm_89", "src/load.ptx"], "cwd": str(tree)},
+    )
+
+    records = compile_log.compile_records(
+        log, tree, source_patterns=["src/*"], toolchains=toolchains,
+    )
+
+    assert [record["language"] for record in records] == ["c", "cxx", "cuda", "ptx"]
+    assert all(record["has_flags"] for record in records)
+    assert compile_log.declared_languages_compiled(records, toolchains)
+
+
+def test_response_files_and_unknown_declared_source_suffix_fail_audit(tmp_path):
+    tree = _tree(tmp_path, "src/kernel.hip")
+    records = compile_log.compile_records(
+        _log({
+            "language": "cuda", "argv": ["@options", "src/kernel.hip"],
+            "cwd": str(tree),
+        }),
+        tree,
+        source_patterns=["src/*"],
+        toolchains={"cuda": {"compiler": "nvcc", "flags": []}},
+    )
+
+    assert "response file" in records[0]["audit_errors"][0]
+    assert "unsupported source suffix" in records[0]["audit_errors"][1]
+
+
+def test_a_language_compiler_cannot_claim_another_languages_source(tmp_path):
+    tree = _tree(tmp_path, "src/kernel.cu")
+    records = compile_log.compile_records(
+        _log({"language": "cxx", "argv": ["-c", "src/kernel.cu"], "cwd": str(tree)}),
+        tree,
+        source_patterns=["src/*"],
+        toolchains={"cxx": {"compiler": "g++", "flags": []}},
+    )
+
+    assert "received cuda source" in records[0]["audit_errors"][0]
+
+
+def test_uppercase_dot_c_is_cxx_while_lowercase_is_c():
+    assert compile_log.source_language("src/legacy.C") == "cxx"
+    assert compile_log.source_language("src/legacy.c") == "c"
+
+
+def test_stdin_forced_language_and_flags_after_double_dash_fail_audit(tmp_path):
+    tree = _tree(tmp_path, "src/real.c")
+    records = compile_log.compile_records(
+        _log({
+            "language": "c", "argv": ["-x", "c", "-", "--", "-O2", "src/real.c"],
+            "cwd": str(tree),
+        }),
+        tree,
+        source_patterns=["src/*"],
+        toolchains={"c": {"compiler": "gcc", "flags": ["-O2"]}},
+    )
+
+    assert records[0]["has_flags"] is False
+    assert any("source-forcing" in error for error in records[0]["audit_errors"])
+    assert any("cannot be attributed" in error for error in records[0]["audit_errors"])
+
+
+def test_object_only_compiler_link_is_auditable_without_compile_flags(tmp_path):
+    tree = _tree(tmp_path, "main.o")
+    records = compile_log.compile_records(
+        _log({
+            "language": "cxx", "argv": ["main.o", "-o", "replay"],
+            "cwd": str(tree),
+        }),
+        tree,
+        source_patterns=["src/*"],
+        toolchains={"cxx": {"compiler": "g++", "flags": ["-O2"]}},
+    )
+
+    assert records[0]["kind"] == "link"
+    assert records[0]["link_inputs"] == ["main.o"]
+    assert records[0]["audit_errors"] == []
+
+
 def test_an_uppercase_extension_is_still_fortran_source(tmp_path):
     tree = _tree(tmp_path, "src/MOD_KERNEL.F90")
     log = _log({"argv": [*FLAGS, "-c", "src/MOD_KERNEL.F90"], "cwd": str(tree)})

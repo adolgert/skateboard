@@ -89,7 +89,11 @@ end program qualification_gpu
 
 def _no_disposable_containers(jobs: executor.DockerJobExecutor) -> bool:
     listed = subprocess.run(
-        [jobs.docker, "ps", "-aq", "--filter", "label=skateboard.disposable-job=true"],
+        [
+            jobs.docker, "ps", "-aq",
+            "--filter", f"label={executor.DISPOSABLE_LABEL}=true",
+            "--filter", f"label={executor.WORK_VOLUME_LABEL}={jobs.volume}",
+        ],
         capture_output=True, text=True, timeout=15,
     )
     return listed.returncode == 0 and not listed.stdout.strip()
@@ -112,7 +116,7 @@ GPU_CHECKS = (
     "protected_kernel_profile", "required_sanitizers",
 )
 
-SCHEMA = "skateboard-builder-qualification-v1"
+SCHEMA = "skateboard-builder-qualification-v2"
 
 # What this record does not establish, said in the record itself.
 LIMITATIONS = [
@@ -137,7 +141,7 @@ def _build_checks(attempt, jobs, readiness, evidence) -> dict:
         ),
         "protected_compiler_audit": bool(
             audit.get("protected") is True
-            and audit.get("collector") == "strace/execve"
+            and audit.get("collector") == "strace/process+cwd"
             and audit.get("compiler_invocations", 0) >= 1
             and build.compiles
         ),

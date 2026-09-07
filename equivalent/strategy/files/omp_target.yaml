@@ -12,10 +12,8 @@ allow_globs:
 languages:
   fortran:
     compiler: nvfortran
-    # Exactly what services/builder/stages.py PROFILES["omp_target"] passes to
-    # nvfortran today. Note this includes mem:managed even though the current
-    # agent-runner prompt text says "there is NO managed memory on this rung"
-    # -- the flags below are what actually gets compiled; the prompt is wrong.
+    # The builder requires these flags on observed Fortran compiles,
+    # including managed memory for this OpenMP strategy.
     flags:
       - "-O2"
       - "-mp=gpu"

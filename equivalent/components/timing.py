@@ -24,12 +24,23 @@ set of one case whose variables are the files themselves. That set is the
 reference a port's own program run is later compared against, and it is a
 run of this deployment's baseline rather than anything checked in: a
 program at a real timing size writes megabytes every run.
+
+The builder currently measures the entire isolated timing job's wall time.
+That includes container setup and teardown around the program (the writable
+workspace copy is prepared before the timer starts),
+so these observations are deliberately labelled end-to-end job timings, not
+kernel-only or process-only timings.  A false `gpu_exclusive` observation is
+recorded for review but does not reject a measurement: shared GPU hosts are
+noisy, and a compute-only process listing cannot establish exclusivity.
 """
 from __future__ import annotations
 
 from dataclasses import replace
+import math
+from statistics import median
 
 from equivalent.ledger.artifacts import binary_artifacts
+from equivalent.ledger.evidence import timing_claim_material
 from equivalent.ledger.subjects import Subject
 from equivalent.ledger.vocabulary import (
     EXECUTABLE_IDENTITY_KEY,
@@ -58,9 +69,86 @@ BASELINE_SUBJECT = "baseline_tree"
 BASELINE = "baseline"
 # How many timed runs a request that says nothing asks for.
 DEFAULT_REPEATS = 5
+MIN_PERFORMANCE_REPEATS = 5
+MEASUREMENT_SCOPE = "end_to_end_isolated_job_wall_time"
 # What the baseline claim's detail says instead when there was nothing
 # to store.
 PROGRAM_SET_ABSENT = "program_set_absent"
+
+
+def _timing_samples(claim, label: str) -> tuple[float, ...]:
+    """Read measured wall-clock samples from a prior timing claim strictly."""
+    samples = claim.predicate.detail.get("runs_s")
+    if not isinstance(samples, list) or len(samples) < MIN_PERFORMANCE_REPEATS:
+        raise ComponentError(
+            f"the {label} timing claim has fewer than {MIN_PERFORMANCE_REPEATS} samples; "
+            "run its timing action again before checking performance"
+        )
+    checked = []
+    for value in samples:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ComponentError(
+                f"the {label} timing claim has an invalid wall-clock sample: {value!r}"
+            )
+        try:
+            observed = float(value)
+        except OverflowError:
+            observed = float("inf")
+        if not math.isfinite(observed) or observed <= 0:
+            raise ComponentError(
+                f"the {label} timing claim has an invalid wall-clock sample: {value!r}"
+            )
+        checked.append(observed)
+    return tuple(checked)
+
+
+def check_performance(ctx: CheckContext, config: dict) -> CheckResult:
+    """Judge an accepted port's median whole-program speedup.
+
+    This is a same-builder comparative threshold, not a confidence interval or
+    a portability claim.  Its two claim materials bind the verdict to these
+    exact timing observations, so either timing action being rerun requires a
+    new performance verdict.
+    """
+    baseline_claim = ctx.claims["timing/baseline"]
+    port_claim = ctx.claims["timing/port"]
+    baseline_samples = _timing_samples(baseline_claim, "baseline")
+    port_samples = _timing_samples(port_claim, "port")
+    baseline_median = median(baseline_samples)
+    port_median = median(port_samples)
+    speedup = baseline_median / port_median
+    threshold = ctx.manifest.timing.min_median_speedup
+    detail = {
+        "baseline_claim_id": baseline_claim.id,
+        "port_claim_id": port_claim.id,
+        "baseline_samples_s": list(baseline_samples),
+        "port_samples_s": list(port_samples),
+        "baseline_median_s": baseline_median,
+        "port_median_s": port_median,
+        "median_speedup": speedup if math.isfinite(speedup) else None,
+        "min_median_speedup": threshold,
+        "minimum_samples": MIN_PERFORMANCE_REPEATS,
+        "measurement_scope": MEASUREMENT_SCOPE,
+        "gpu_exclusivity_required": False,
+    }
+    materials = (timing_claim_material(port_claim), timing_claim_material(baseline_claim))
+    if not math.isfinite(speedup):
+        return CheckResult(
+            verdict=FAIL, detail=detail,
+            reasons=(
+                "baseline and port timing medians do not produce a finite speedup; "
+                "run the timing actions again before checking performance",
+            ),
+            materials=materials,
+        )
+    if speedup >= threshold:
+        return CheckResult(verdict=PASS, detail=detail, materials=materials)
+    reason = (
+        f"median speedup {speedup:.3f} is below the required "
+        f"{threshold:.3f} (baseline median {baseline_median:.6g}s, "
+        f"port median {port_median:.6g}s)"
+    )
+    return CheckResult(verdict=FAIL, detail=detail, reasons=(reason,), materials=materials)
 
 
 def _measured(resp, manifest: Manifest, extra: dict) -> dict:
@@ -74,6 +162,7 @@ def _measured(resp, manifest: Manifest, extra: dict) -> dict:
     return {
         "runs_s": resp.runs_s,
         "gpu_exclusive": resp.gpu_exclusive,
+        "measurement_scope": MEASUREMENT_SCOPE,
         # What was run, so a later reader can tell two timing claims apart
         # without going back to the manifest of the day.
         "executable": manifest.build.targets[TIMING_ROLE].executable,

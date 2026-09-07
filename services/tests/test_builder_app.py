@@ -134,6 +134,78 @@ def test_each_endpoint_hands_its_stage_the_fields_it_was_sent(
     assert recorded == {"attempt_id": "attempt-1", **expected}
 
 
+def test_build_forwards_runtime_artifacts_to_the_stage(client, monkeypatch):
+    recorded = {}
+
+    def record(workspace, **fields):
+        recorded.update(fields)
+        return contract.BuildResponse(ok=True)
+
+    monkeypatch.setattr(service.stages, "build", record)
+    target = {
+        **TARGET,
+        "runtime_artifacts": [
+            {"path": "lib/kernel.so", "kind": "shared_library"},
+            {"path": "modules/kernel.ptx", "kind": "gpu_module"},
+        ],
+    }
+    body = {
+        "attempt_id": "attempt-1", "tree": TREE, "makefile": "Makefile",
+        "targets": [target], "compiler": "nvfortran", "flags": [],
+        "link_flags": [], "source_patterns": ["src/*.f90"],
+    }
+
+    answer = client.post("/v1/build", json=body)
+
+    assert answer.status_code == 200
+    assert recorded["targets"] == [target]
+
+
+def test_build_forwards_mixed_toolchains_without_legacy_flags(client, monkeypatch):
+    recorded = {}
+
+    def record(workspace, **fields):
+        recorded.update(fields)
+        return contract.BuildResponse(ok=True)
+
+    monkeypatch.setattr(service.stages, "build", record)
+    body = {
+        "attempt_id": "attempt-1", "tree": TREE, "makefile": "Makefile",
+        "targets": [TARGET], "link_flags": [], "source_patterns": ["src/*"],
+        "toolchains": {
+            "cxx": {"compiler": "g++", "flags": ["-O2"]},
+            "cuda": {"compiler": "nvcc", "flags": ["-arch=sm_89"]},
+        },
+    }
+
+    answer = client.post("/v1/build", json=body)
+
+    assert answer.status_code == 200
+    assert recorded["compiler"] is None
+    assert recorded["flags"] == []
+    assert recorded["toolchains"] == body["toolchains"]
+
+
+def test_run_forwards_an_explicit_profile_request(client, monkeypatch):
+    recorded = {}
+
+    def record(workspace, **fields):
+        recorded.update(fields)
+        return contract.RunResponse(ok=True)
+
+    monkeypatch.setattr(service.stages, "run", record)
+    body = {
+        "attempt_id": "attempt-1", "executable": "replay", "cases": CASES,
+        "notify": None, "mandatory": False, "profile": True,
+    }
+
+    answer = client.post("/v1/run", json=body)
+
+    assert answer.status_code == 200
+    assert recorded["profile"] is True
+    assert recorded["notify"] is None
+
+
 @pytest.mark.parametrize(
     "endpoint,response", [(call[0], call[1]) for call in CALLS], ids=[call[0] for call in CALLS],
 )

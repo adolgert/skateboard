@@ -1,0 +1,21 @@
+name: fortran_ptx
+version: 1
+allow_globs: ['src/*.f90', 'src/*.cpp', 'src/*.ptx', 'notes/regions/*.yaml']
+languages:
+  fortran:
+    compiler: nvfortran
+    flags: ['-O2']
+  cxx:
+    compiler: nvc++
+    flags: ['-O2', '-cuda']
+  ptx:
+    compiler: ptxas
+    flags: ['-arch=sm_89']
+# Build jobs have no driver mount. Resolve symbols against the SDK stub;
+# execution jobs load libcuda.so.1 from the actual NVIDIA driver instead.
+link_flags: ['-cuda', '-c++libs', '-L/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib/stubs', '-lcuda']
+required_tools: [nvfortran, nvc++, ptxas, compute-sanitizer, 'python:pytest', 'python:hypothesis']
+device_proof: {notify: null, mandatory: false}
+sanitizers: [memcheck, racecheck, initcheck]
+sanitize_cases: all
+analyzer_command: python3 -m equivalent.analyzers.check_sese

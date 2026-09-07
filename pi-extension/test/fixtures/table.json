@@ -202,6 +202,26 @@
     }
   },
   {
+    "name": "performance_check",
+    "emits": [
+      "performance/speedup"
+    ],
+    "requires": [
+      [
+        "timing/port",
+        "tree"
+      ],
+      [
+        "timing/baseline",
+        "baseline_tree"
+      ]
+    ],
+    "deterministic": true,
+    "component": "gateway:performance",
+    "config_keys": [],
+    "config_params": {}
+  },
+  {
     "name": "accept",
     "emits": [],
     "requires": [
@@ -243,6 +263,10 @@
       ],
       [
         "timing/port",
+        "tree"
+      ],
+      [
+        "performance/speedup",
         "tree"
       ],
       [

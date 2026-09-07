@@ -191,6 +191,24 @@ After promotion and rebuilding the oracle with captures, copy its `/healthz`
 `oracle_identity` into each porting region beside `executor_identity`, then
 rerun `up.sh`.
 
+## Complete GPU application demonstration
+
+From the repository root, run:
+
+```sh
+.venv/bin/python deploy/gpu_pilot.py --state deploy/state/potential-gpu
+```
+
+This creates an isolated deployment for the [charged-cloud application](../programs/potential/README.md),
+qualifies the GPU, runs every onboarding gate, promotes the reviewed baseline,
+and exercises rejected attempts followed by Fortran, CUDA C++, and PTX ports.
+Acceptance requires the configured median speedup as well as correctness and
+GPU evidence. The PTX run also checks that changing its external GPU module
+invalidates acceptance. This scripts public gateway client calls; it does not
+run a language model. Each invocation requires a fresh state directory. Its
+containers and networks are removed afterward; images, work volume, source
+snapshots, and evidence remain for review.
+
 ## Stopping
 
 ```sh

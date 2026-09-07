@@ -22,7 +22,7 @@ from pathlib import Path
 # against another.
 SUBJECT_KINDS = (
     "tree", "frozen", "capture_set", "strategy", "manifest", "binary", "outputs", "policy",
-    "evidence_policy", "reference", "executor", "oracle",
+    "evidence_policy", "reference", "executor", "oracle", "timing_claim",
 )
 
 # A claim made before this policy existed is readable history, but is not

@@ -8,7 +8,9 @@ from equivalent.ledger.acceptance import (
     ONBOARDING_REQUIREMENTS,
     PORTING,
 )
-from equivalent.ledger.evidence import BUILD_PREDICATE, FOUNDATION_PREDICATES
+from equivalent.ledger.evidence import (
+    BUILD_PREDICATE, FOUNDATION_PREDICATES, timing_claim_material,
+)
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.status import compute_status
 from equivalent.ledger.store import LedgerStore
@@ -22,10 +24,23 @@ GOLDEN_DIR = Path(__file__).parent / "golden"
 # on a build counts only when it names that executable, so a ledger that
 # is meant to read as finished says so.
 BINARY = Subject(kind="binary", sha256="e" * 64)
+BASELINE_TREE = Subject(kind="tree", sha256="c" * 64)
 
 
 def _file_passing_claims(store, requirements, phase, tree, frozen):
     """A ledger in which every requirement of one phase has passed."""
+    baseline = None
+    claims = {}
+    if phase == PORTING:
+        # The performance verdict names observations, so a finished synthetic
+        # port needs the separate baseline observation as well as every
+        # acceptance-row claim.  It is filed first: the normal port claims
+        # below remain the reader's newest tree evidence.
+        baseline = store.record_claim(
+            [Subject(kind="tree", sha256="c" * 64)], "timing/baseline",
+            Predicate(tool="t", version="0.1", configHash="cfg", verdict="pass", detail={}),
+            (), "sess-1",
+        )
     for req in requirements:
         sha256 = frozen if req.subject_kind == "frozen" else tree
         subject = Subject(kind=req.subject_kind, sha256=sha256)
@@ -34,9 +49,13 @@ def _file_passing_claims(store, requirements, phase, tree, frozen):
             tool="t", version="0.1", configHash="cfg", verdict="pass",
             detail=build_claim_detail(phase, BINARY.sha256) if built else {},
         )
-        store.record_claim(
+        materials = () if req.predicate_type in FOUNDATION_PREDICATES else (BINARY,)
+        if req.predicate_type == "performance/speedup":
+            materials = (*materials, timing_claim_material(claims["timing/port"]),
+                         timing_claim_material(baseline))
+        claims[req.predicate_type] = store.record_claim(
             [subject], req.predicate_type, predicate,
-            () if req.predicate_type in FOUNDATION_PREDICATES else (BINARY,), "sess-1",
+            materials, "sess-1",
         )
 
 
@@ -51,6 +70,7 @@ def test_status_text_matches_golden_file(tmp_path):
 
     status = compute_status(
         store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
         required_materials=(), context_verified=True,
     )
     text = render.render_status(status, "ch04:step")
@@ -184,6 +204,7 @@ def test_an_advisory_reading_prints_the_sentence_that_says_so(tmp_path):
 
     status = compute_status(
         store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
         required_materials=(), context_verified=False,
     )
     text = render.render_status(status, "ch04:step")

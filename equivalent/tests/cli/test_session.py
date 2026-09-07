@@ -17,7 +17,7 @@ from equivalent.ledger.acceptance import (
     ONBOARDING_REQUIREMENTS,
     PORTING,
 )
-from equivalent.ledger.evidence import FOUNDATION_PREDICATES
+from equivalent.ledger.evidence import FOUNDATION_PREDICATES, timing_claim_material
 from equivalent.ledger.records import Claim, Predicate, RequestLogLine
 from equivalent.ledger.status import compute_status
 from equivalent.ledger.store import LedgerStore
@@ -364,6 +364,7 @@ def test_a_claim_reached_under_a_strategy_nobody_uses_finishes_nothing(tmp_path)
     status = compute_status(
         store, ACCEPTANCE_REQUIREMENTS, PORTING,
         tree=Subject(kind="tree", sha256=tree), frozen=Subject(kind="frozen", sha256=frozen),
+        baseline_tree=Subject(kind="tree", sha256="c" * 64),
         required_materials=current, context_verified=True,
     )
     summary = session.summarize(
@@ -373,7 +374,7 @@ def test_a_claim_reached_under_a_strategy_nobody_uses_finishes_nothing(tmp_path)
 
     assert status["accepted"] is False
     assert [row["predicateType"] for row in status["rows"] if row["status"] == "missing"] == [
-        "timing/port",
+        "timing/port", "performance/speedup",
     ]
     assert summary.time_to_acceptance == "not accepted"
 
@@ -386,18 +387,29 @@ def test_the_summary_and_the_status_table_agree_that_one_ledger_is_finished(tmp_
         ts="2026-01-01T00:00:00Z", session="sess-1", model="m", endpoint="submit", action="submit",
         region="ch04:step", tree=tree, config_hash=None, outcome="submitted",
     )]
+    baseline = _claim(
+        "baseline-time", "2026-01-01T00:00:00Z", "timing/baseline", "tree", "c" * 64,
+        "pass", "sess-1", materials=current,
+    )
+    store.append_claim(baseline)
+    claims = {}
     for i, req in enumerate(ACCEPTANCE_REQUIREMENTS, start=1):
         sha = frozen if req.subject_kind == "frozen" else tree
-        store.append_claim(_claim(
+        materials = (*current, *((BINARY,) if _rests_on_the_build(req.predicate_type) else ()))
+        if req.predicate_type == "performance/speedup":
+            materials = (*materials, timing_claim_material(claims["timing/port"]),
+                         timing_claim_material(baseline))
+        claims[req.predicate_type] = store.append_claim(_claim(
             f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", req.predicate_type, req.subject_kind,
             sha, "pass", "sess-1",
-            materials=(*current, *((BINARY,) if _rests_on_the_build(req.predicate_type) else ())),
+            materials=materials,
             detail=BUILT if req.predicate_type == "build/replay" else None,
         ))
 
     status = compute_status(
         store, ACCEPTANCE_REQUIREMENTS, PORTING,
         tree=Subject(kind="tree", sha256=tree), frozen=Subject(kind="frozen", sha256=frozen),
+        baseline_tree=Subject(kind="tree", sha256="c" * 64),
         required_materials=current, context_verified=True,
     )
     summary = session.summarize(

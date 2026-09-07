@@ -1,0 +1,5 @@
+Repository-owned demonstration application, authored September 2026.
+Computes the softened electrostatic potential of a charged point cloud.
+This small application is a reproducible engineering demonstration, not a
+validated scientific production solver or an external benchmark.
+The original/ directory is preserved before adding Skateboard's drivers.

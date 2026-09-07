@@ -1,0 +1,17 @@
+version: 1
+provenance: Repository-owned charged-cloud application preserved before adding capture/replay and NPY output.
+source:
+  root: original
+  patterns: ['*.f90', Makefile]
+build: {makefile: Makefile, target: potential, executable: potential}
+runs:
+  - name: odd-small
+    original_args: ['17', '1', '1']
+    candidate_args: ['17', '1', '1']
+    outputs:
+      - {original: phi.bin, candidate: phi.bin, comparison: bytes}
+  - name: evolved-cloud
+    original_args: ['29', '4', '3']
+    candidate_args: ['29', '4', '3']
+    outputs:
+      - {original: phi.bin, candidate: phi.bin, comparison: bytes}

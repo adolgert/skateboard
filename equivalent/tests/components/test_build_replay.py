@@ -1,11 +1,13 @@
 import base64
+from dataclasses import replace
 from functools import partial
 
 import pytest
 
-from equivalent.components import build_replay
+from equivalent.components import building, build_replay
 from equivalent.components.errors import ComponentError
 from equivalent.manifest.schema import load_manifest
+from equivalent.strategy.schema import Language
 from equivalent.tests.components.conftest import PORT_STRATEGY, strategy as strategy_named
 from equivalent.tests.fakes import OUTSIDE_FILE, FakeBuilder, built, write_program
 
@@ -83,6 +85,68 @@ def test_the_build_recipe_comes_from_the_manifest_and_the_flags_from_the_strateg
     assert call["link_flags"] == list(strategy.link_flags)
     assert call["source_patterns"] == list(manifest.source.patterns)
     assert result.detail["flags"] == list(strategy.languages["fortran"].flags)
+
+
+def test_conditional_gpu_module_is_required_only_by_a_strategy_with_cuda():
+    cpu = strategy_named("cpu_reference")
+    mixed = replace(cpu, languages={
+        **cpu.languages, "cuda": Language("nvcc", ("-O3",)),
+    })
+    recipe = building.Recipe(
+        makefile="Makefile",
+        targets=({
+            "role": "replay", "target": "replay", "executable": "replay",
+            "runtime_artifacts": [{
+                "path": "modules/kernel.ptx", "kind": "gpu_module",
+                "when_language": "cuda",
+            }],
+        },),
+        source_patterns=("src/*.f90",),
+    )
+    builder = FakeBuilder()
+
+    building.build_tree(builder, "cpu", [], cpu, recipe)
+    building.build_tree(builder, "mixed", [], mixed, recipe)
+
+    assert "runtime_artifacts" not in builder.build_calls[0]["targets"][0]
+    assert builder.build_calls[1]["targets"][0]["runtime_artifacts"] == [
+        {"path": "modules/kernel.ptx", "kind": "gpu_module"},
+    ]
+    assert builder.build_calls[1]["compiler"] is None
+    assert builder.build_calls[1]["toolchains"] == {
+        "fortran": {
+            "compiler": cpu.languages["fortran"].compiler,
+            "flags": list(cpu.languages["fortran"].flags),
+        },
+        "cuda": {"compiler": "nvcc", "flags": ["-O3"]},
+    }
+
+
+@pytest.mark.parametrize("answer_kind", ["omitted", "changed_kind"])
+def test_a_successful_build_must_identify_each_requested_runtime_artifact(answer_kind):
+    strategy = strategy_named("cpu_reference")
+    recipe = building.Recipe(
+        makefile="Makefile",
+        targets=({
+            "role": "replay", "target": "replay", "executable": "replay",
+            "runtime_artifacts": [{"path": "lib/kernel.so", "kind": "shared_library"}],
+        },),
+        source_patterns=("src/*.f90",),
+    )
+
+    def incomplete(request):
+        answer = built(request)
+        target = dict(answer.targets["replay"])
+        if answer_kind == "omitted":
+            target.pop("runtime_artifacts")
+        else:
+            target["runtime_artifacts"] = [
+                {**target["runtime_artifacts"][0], "kind": "gpu_module"},
+            ]
+        return replace(answer, targets={"replay": target})
+
+    with pytest.raises(ComponentError, match="requested runtime artifacts"):
+        building.build_verdict(FakeBuilder(build=incomplete), "attempt", [], strategy, recipe)
 
 
 def test_a_pass_records_every_compile_the_builder_saw(harness):

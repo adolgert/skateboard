@@ -127,7 +127,7 @@ def requirement_status(
 
 def compute_status(
     store: LedgerStore, requirements, phase: str,
-    tree: Subject | None = None, frozen: Subject | None = None,
+    tree: Subject | None = None, frozen: Subject | None = None, baseline_tree: Subject | None = None,
     *, required_materials, required_materials_by_predicate=None,
     context_verified: bool,
 ) -> dict:
@@ -172,7 +172,7 @@ def compute_status(
 
     if required_materials_by_predicate is None:
         required_materials_by_predicate = materials_by_predicate(
-            store, requirements, phase, tree, required_materials,
+            store, requirements, phase, tree, required_materials, baseline_tree,
         ) if tree is not None else {}
 
     rows = []

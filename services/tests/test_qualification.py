@@ -129,6 +129,6 @@ def test_the_record_carries_what_the_install_guide_reads(record):
 def test_the_real_build_was_audited_by_the_root_owned_observer(record):
     build = record["evidence"]["build"]
     assert build["compiler_audit"]["protected"] is True
-    assert build["compiler_audit"]["collector"] == "strace/execve"
+    assert build["compiler_audit"]["collector"] == "strace/process+cwd"
     assert build["compiles"], "no compiler invocation was recorded"
     assert build["targets"]["replay"]["built"] is True

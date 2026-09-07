@@ -42,7 +42,8 @@ CALLS = {
         "nvfortran", ["-O2"], ["-lm"], ["**/*.f90"],
     ),
     "run": lambda c: c.run(
-        "attempt-1", "replay", {"case0000": {"field": ""}}, notify="acc", mandatory=True,
+        "attempt-1", "replay", {"case0000": {"field": ""}},
+        notify=None, mandatory=True, profile=True,
     ),
     "capture": lambda c: c.capture("attempt-1", "gen_reference", ["100", "5000"], "visible"),
     "sanitize": lambda c: c.sanitize(
@@ -113,6 +114,20 @@ def test_the_client_sends_no_key_the_builder_would_ignore(endpoint):
     _, body = _sent(CALLS[endpoint])
 
     assert set(body) <= set(request_model.model_fields)
+
+
+def test_build_client_preserves_runtime_artifact_declarations():
+    target = {
+        "role": "replay", "target": "replay", "executable": "replay",
+        "runtime_artifacts": [{"path": "modules/kernel.ptx", "kind": "gpu_module"}],
+    }
+
+    _, body = _sent(lambda client: client.build(
+        "attempt", [], "Makefile", [target], "nvfortran", [], [], ["src/*.f90"],
+    ))
+
+    assert body["targets"] == [target]
+    contract.BuildRequest.model_validate(body)
 
 
 @pytest.mark.parametrize("protocol,client", [

@@ -21,6 +21,7 @@ from equivalent.ledger.table import config_params, requires_for, rows_for
 from equivalent.region.current import resolve_allow_globs
 from equivalent.region.evidence import evidence_materials_for
 from equivalent.strategy.schema import load_strategy
+from equivalent.tree import Tree
 
 from .errors import GatewayError
 from .run import RunRequest, RunService, claim_response, current
@@ -150,6 +151,7 @@ def create_app(regions: dict, token: str, *, builder=None, oracle=None) -> FastA
             return compute_status(
                 ledger, requirements_for(cfg.phase, cfg.manifest), cfg.phase,
                 tree=tree_subject, frozen=Subject(kind="frozen", sha256=frozen_sha),
+                baseline_tree=Subject(kind="tree", sha256=Tree.baseline(cfg.repo_dir).sha),
                 required_materials=materials,
                 context_verified=bool(
                     (not provenance_for(cfg.phase).oracle_judges or oracle is not None)

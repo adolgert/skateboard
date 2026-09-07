@@ -143,7 +143,8 @@ def test_both_phases_run_the_replay_driver_through_the_one_shared_call(harness, 
                                                                       monkeypatch):
     asked = []
 
-    def record(builder, attempt_id, executable, cases, *, notify=None, mandatory=False):
+    def record(builder, attempt_id, executable, cases, *, notify=None, mandatory=False,
+               profile=None):
         asked.append(attempt_id)
         raise AssertionError("stop here: what is being asked is who called")
 

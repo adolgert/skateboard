@@ -64,6 +64,7 @@ def check_holdout(ctx: CheckContext, config: dict) -> CheckResult:
             attempt_id, replay.executable, holdout,
             notify=ctx.strategy.device_proof.notify,
             mandatory=ctx.strategy.device_proof.mandatory,
+            profile=True,
         )
     except Exception as exc:
         # Not backend.py's failure rule, deliberately: transport errors can

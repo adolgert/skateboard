@@ -92,6 +92,25 @@ def test_clean_region_passes_and_reports_file_list_and_allow_globs(harness):
     assert result.detail["allow_globs"] == sorted(["src/mod_kernel.f90", SPEC_PATH])
 
 
+def test_bootstrap_can_authorize_a_future_cuda_file_only_within_the_strategy(harness):
+    import yaml
+    from dataclasses import replace
+
+    spec = yaml.safe_load(_spec(
+        ['src/mod_kernel.f90', 'src/kernel.cu'], 'src/mod_kernel.f90', 5,
+    ))
+    spec['opaque_sources'] = ['src/kernel.cu']
+    _repo(harness, yaml.safe_dump(spec), {'src/mod_kernel.f90': CLEAN_SOURCE})
+    original = strategy_named(PORT_STRATEGY)
+    assert _check(harness, original).verdict == 'fail'
+
+    strategy = replace(original, allow_globs=(*original.allow_globs, 'src/*.cu'))
+    result = _check(harness, strategy)
+    assert result.verdict == 'pass'
+    assert 'src/kernel.cu' in result.detail['allow_globs']
+    assert result.detail['notes'][0]['present'] is False
+
+
 def test_a_region_spanning_two_files_unfreezes_both_of_them_and_the_spec(harness):
     files = ["src/mod_kernel.f90", "src/mod_diff.f90"]
     _repo(

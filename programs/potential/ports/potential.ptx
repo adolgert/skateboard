@@ -1,0 +1,68 @@
+// Handwritten implementation of the same softened charged-cloud equation.
+.version 8.0
+.target sm_89
+.address_size 64
+
+.visible .entry charged_cloud(
+    .param .u32 pn, .param .u64 px, .param .u64 py,
+    .param .u64 pz, .param .u64 pq, .param .u64 pout
+) {
+    .reg .pred done;
+    .reg .u32 n, i, j, block, width, lane;
+    .reg .u64 x, y, z, q, out, offset, address;
+    .reg .f32 xi, yi, zi, xj, yj, zj, charge;
+    .reg .f32 dx, dy, dz, sum, value, total;
+    ld.param.u32 n, [pn];
+    ld.param.u64 x, [px];
+    ld.param.u64 y, [py];
+    ld.param.u64 z, [pz];
+    ld.param.u64 q, [pq];
+    ld.param.u64 out, [pout];
+    mov.u32 block, %ctaid.x;
+    mov.u32 width, %ntid.x;
+    mov.u32 lane, %tid.x;
+    mad.lo.u32 i, block, width, lane;
+    setp.ge.u32 done, i, n;
+    @done bra EXIT;
+    mul.wide.u32 offset, i, 4;
+    add.u64 address, x, offset;
+    ld.global.f32 xi, [address];
+    add.u64 address, y, offset;
+    ld.global.f32 yi, [address];
+    add.u64 address, z, offset;
+    ld.global.f32 zi, [address];
+    mov.u32 j, 0;
+    mov.f32 total, 0f00000000;
+LOOP:
+    setp.ge.u32 done, j, n;
+    @done bra STORE;
+    mul.wide.u32 offset, j, 4;
+    add.u64 address, x, offset;
+    ld.global.f32 xj, [address];
+    add.u64 address, y, offset;
+    ld.global.f32 yj, [address];
+    add.u64 address, z, offset;
+    ld.global.f32 zj, [address];
+    add.u64 address, q, offset;
+    ld.global.f32 charge, [address];
+    sub.f32 dx, xi, xj;
+    sub.f32 dy, yi, yj;
+    sub.f32 dz, zi, zj;
+    mul.f32 sum, dx, dx;
+    mul.f32 value, dy, dy;
+    add.f32 sum, sum, value;
+    mul.f32 value, dz, dz;
+    add.f32 sum, sum, value;
+    add.f32 sum, sum, 0f3e000000;
+    sqrt.rn.f32 value, sum;
+    div.rn.f32 value, charge, value;
+    add.f32 total, total, value;
+    add.u32 j, j, 1;
+    bra LOOP;
+STORE:
+    mul.wide.u32 offset, i, 4;
+    add.u64 address, out, offset;
+    st.global.f32 [address], total;
+EXIT:
+    ret;
+}

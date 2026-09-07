@@ -1,0 +1,64 @@
+{
+  "tree": "d8a2aab1eaceff6928254de827e731b7cabfb5782f29a4775399844bd0b5d1e6",
+  "frozen": "4232706740af946037d263cf477e729b27db8a9ba4da989d0e93dd45d309d064",
+  "phase": "onboarding",
+  "rows": [
+    {
+      "predicateType": "manifest/valid",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0001"
+    },
+    {
+      "predicateType": "harness/builds",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0002"
+    },
+    {
+      "predicateType": "harness/captured",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0003"
+    },
+    {
+      "predicateType": "harness/replays",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0004"
+    },
+    {
+      "predicateType": "harness/deterministic",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0005"
+    },
+    {
+      "predicateType": "harness/times",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0006"
+    },
+    {
+      "predicateType": "harness/original",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0007"
+    },
+    {
+      "predicateType": "harness/self_check",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0008"
+    },
+    {
+      "predicateType": "harness/properties",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0009"
+    }
+  ],
+  "accepted": true,
+  "context_verified": true,
+  "finished_word": "ONBOARDED"
+}

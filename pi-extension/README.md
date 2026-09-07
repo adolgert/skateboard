@@ -9,7 +9,7 @@ row. A refusal from the gateway comes back as the tool's result text, so
 the model reads it as its next steps. The extension decides nothing; the
 gateway remains the reference monitor.
 
-The current porting table produces 13 tools: ten callable checks plus
+The current porting table produces 14 tools: eleven callable checks plus
 `submit`, `status`, and `claim`; its `accept` row is status only. The onboarding
 table produces 12: nine callable checks plus those same three tools; its
 `onboarded` row is status only.

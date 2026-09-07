@@ -14,13 +14,14 @@ from equivalent.ledger.acceptance import (
 from equivalent.ledger.evidence import BUILD_PREDICATE, FOUNDATION_PREDICATES
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject
+from equivalent.ledger.subjects import Subject, hash_bytes
 from equivalent.tests.fakes import build_claim_detail
 
 # The executable the build in these ledgers produced. A claim that rests
 # on a build only counts when it names that executable, so a ledger that
 # is supposed to read as finished has to say so.
 BINARY = {"kind": "binary", "sha256": "e" * 64}
+BASELINE_TREE = Subject(kind="tree", sha256="c" * 64)
 
 
 def _claim(claim_id, ts, subject_kind, sha256, predicate_type, verdict,
@@ -64,6 +65,36 @@ def _all_passing_claims(tree, frozen, phase=PORTING):
             ),
             materials=() if req.predicate_type in FOUNDATION_PREDICATES else (BINARY,),
         ))
+    # A performance verdict compares two observations, rather than merely
+    # two binaries.  Give the synthetic finished port its current baseline
+    # and port timing observations, then make the verdict name those exact
+    # claim identities just as the component does.
+    if phase == PORTING:
+        baseline_id = "baseline-time"
+        claims.append(_claim(
+            # A baseline claim is filed against a tree subject.  Keep its
+            # timestamp before the port's evidence so the status reader's
+            # fallback current-tree selection remains the port tree.
+            baseline_id, "2026-01-01T00:00:00Z", "tree", "c" * 64,
+            "timing/baseline", "pass",
+        ))
+        by_predicate = {claim["predicateType"]: claim for claim in claims}
+        performance = by_predicate["performance/speedup"]
+        port = by_predicate["timing/port"]
+        performance["materials"].extend([
+            {
+                "kind": "timing_claim",
+                "sha256": hash_bytes(
+                    f"equivalent:timing-claim:v1:timing/port:{port['id']}".encode()
+                ),
+            },
+            {
+                "kind": "timing_claim",
+                "sha256": hash_bytes(
+                    f"equivalent:timing-claim:v1:timing/baseline:{baseline_id}".encode()
+                ),
+            },
+        ])
     return claims
 
 
@@ -77,6 +108,7 @@ def test_status_reports_the_newer_tree(tmp_path):
 
     status = compute_status(
         store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
         required_materials=(), context_verified=True,
     )
     assert status["tree"] == tree_new
@@ -104,6 +136,7 @@ def test_status_is_accepted_when_every_requirement_passes_on_one_tree(tmp_path):
 
     status = compute_status(
         store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
         required_materials=(), context_verified=True,
     )
     assert status["accepted"] is True
@@ -122,6 +155,7 @@ def test_a_reader_that_cannot_vouch_for_the_executables_is_told_why_it_is_not_ac
 
     status = compute_status(
         store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
         required_materials=(), context_verified=False,
     )
 
@@ -139,6 +173,7 @@ def test_status_reports_a_removed_claim_as_missing_with_its_producing_action(tmp
 
     status = compute_status(
         store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
         required_materials=(), context_verified=True,
     )
     assert status["accepted"] is False
@@ -160,6 +195,7 @@ def test_a_failing_latest_claim_does_not_satisfy_a_requirement(tmp_path):
 
     status = compute_status(
         store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
         required_materials=(), context_verified=True,
     )
     assert status["accepted"] is False
@@ -174,11 +210,27 @@ def test_status_on_an_empty_ledger_has_no_tree_and_is_not_accepted(tmp_path):
     store = LedgerStore(tmp_path / "region")
     status = compute_status(
         store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
         required_materials=(), context_verified=True,
     )
     assert status["tree"] is None
     assert status["accepted"] is False
     assert all(row["status"] == "missing" for row in status["rows"])
+
+
+def test_status_does_not_guess_a_baseline_tree_from_ledger_history(tmp_path):
+    tree, frozen = "a" * 64, "b" * 64
+    store = LedgerStore(tmp_path / "region")
+    _write_claims(store, _all_passing_claims(tree, frozen))
+
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        required_materials=(), context_verified=True,
+    )
+
+    speedup = next(row for row in status["rows"] if row["predicateType"] == "performance/speedup")
+    assert status["accepted"] is False
+    assert speedup["status"] == "missing"
 
 
 def test_legacy_claim_is_reported_stale_and_cannot_satisfy_requirement(tmp_path):
@@ -266,6 +318,7 @@ def test_the_answer_carries_the_word_its_phase_finishes_with(tmp_path):
 
     porting = compute_status(
         store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
         required_materials=(), context_verified=True,
     )
     onboarding = compute_status(
@@ -292,6 +345,7 @@ def test_a_claim_that_does_not_name_the_current_build_does_not_meet_its_requirem
 
     status = compute_status(
         store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
         required_materials=(), context_verified=True,
     )
 

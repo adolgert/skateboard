@@ -1,4 +1,5 @@
 import base64
+from dataclasses import replace
 from functools import partial
 
 import numpy as np
@@ -46,6 +47,25 @@ def test_pass_with_kernels_launched(region):
     assert result.verdict == "pass"
     assert result.detail["kernels_launched"] == 4
     assert "case0000" in result.detail["outputs"]
+
+
+def test_port_replay_profiles_even_without_runtime_notification(region):
+    selected = strategy_named(PORT_STRATEGY)
+    selected = replace(
+        selected,
+        device_proof=replace(selected.device_proof, notify=None),
+    )
+    result = run_replay.check(
+        region.context(
+            region_id="ch04:step", phase="porting", strategy=selected,
+            manifest=region.manifest, visible_dataset=region.visible,
+        ),
+        {},
+    )
+
+    assert result.verdict == "pass"
+    assert region.builder.run_calls[0]["notify"] is None
+    assert region.builder.run_calls[0]["profile"] is True
 
 
 def test_fail_when_no_kernels_launched_even_though_the_run_succeeded(region):

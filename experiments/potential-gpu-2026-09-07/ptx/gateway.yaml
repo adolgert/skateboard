@@ -1,0 +1,21 @@
+codes:
+  potential:
+    manifest: potential/manifest.yaml
+paths:
+  ledger_root: /ledger
+  programs: /programs
+  repo: /repo
+  seed: /seed
+  strategies: /strategies
+  working_copy: /working
+regions:
+  potential:solve:
+    baseline_strategy: cpu_reference
+    code: potential
+    executor_identity: f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10
+    oracle_identity: 971c4d92e7e120e0de949f8af239645239cd34050c13cd1ea51edd3ca3494486
+    phase: porting
+    spec_path: notes/regions/potential.yaml
+    strategy: fortran_ptx
+    visible_dataset: visible
+version: 1

@@ -104,7 +104,8 @@ def records_still_held(builder, records, executor_identity: str | None) -> bool:
         if not report.ok or report.executor_identity != executor_identity:
             return False
         for target in record.targets:
-            still_there = report.executables.get(target.executable)
-            if still_there is None or not still_there.matches(target.as_detail()):
-                return False
+            for artifact in target.artifacts:
+                still_there = report.executables.get(artifact.path)
+                if still_there is None or not still_there.matches(artifact.as_detail()):
+                    return False
     return True

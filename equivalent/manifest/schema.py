@@ -25,11 +25,17 @@ directory can be moved or mounted anywhere without editing the file.
 Every other path -- the makefile, the tolerance policy, the properties
 module -- is relative to the source tree root, so the same text reads
 the same whether the manifest sits beside that tree or inside it.
+
+Complete manifests may set `timing.performance.min_median_speedup` for the
+accepted port's baseline-median / port-median floor.  It defaults to 1.10 so
+older complete manifests have an explicit, reviewable policy rather than
+silently accepting any speedup.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+import math
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -57,13 +63,19 @@ IN_TREE_SOURCE_ROOT = "."
 REQUIRED_SOURCE_FIELDS = ("root", "patterns")
 REQUIRED_BUILD_FIELDS = ("makefile", "targets")
 REQUIRED_TARGET_FIELDS = ("target", "executable")
+OPTIONAL_TARGET_FIELDS = ("runtime_artifacts",)
+REQUIRED_RUNTIME_ARTIFACT_FIELDS = ("path", "kind")
+OPTIONAL_RUNTIME_ARTIFACT_FIELDS = ("when_language",)
+RUNTIME_ARTIFACT_KINDS = ("shared_library", "gpu_module")
+RUNTIME_ARTIFACT_LANGUAGES = ("fortran", "c", "cxx", "cuda", "ptx")
 REQUIRED_INTERFACE_FIELDS = ("module", "entry", "files", "inputs", "outputs")
 REQUIRED_VARIABLE_FIELDS = ("name", "dtype", "rank")
 REQUIRED_DATASET_FIELDS = ("args",)
 REQUIRED_TIMING_FIELDS = ("args", "outputs", "budget_s")
 # The timing run may need a few environment variables set to be a fair
 # measurement. They are values, not code: strings in, strings out.
-OPTIONAL_TIMING_FIELDS = ("env",)
+OPTIONAL_TIMING_FIELDS = ("env", "performance")
+DEFAULT_MIN_MEDIAN_SPEEDUP = 1.10
 
 # The build target every code must offer: the replay driver is what every
 # regression check runs. `timing` and `capture` are named the same way but
@@ -81,9 +93,17 @@ class Source:
 
 
 @dataclass(frozen=True)
+class RuntimeArtifact:
+    path: str  # file the executable loads at runtime, relative to the tree
+    kind: str  # shared_library or gpu_module
+    when_language: str | None = None
+
+
+@dataclass(frozen=True)
 class BuildTarget:
     target: str  # what `make` is asked for
     executable: str  # what that target leaves in the tree
+    runtime_artifacts: tuple[RuntimeArtifact, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -115,6 +135,7 @@ class Timing:
     outputs: tuple  # files the timing run writes, compared per port
     budget_s: int
     env: dict  # {name: value} added to the timing run's environment
+    min_median_speedup: float  # baseline median / port median required for acceptance
 
 
 @dataclass(frozen=True)
@@ -165,6 +186,19 @@ def _resolve(directory: Path, value, where: str) -> Path:
     return directory / _name(value, where)
 
 
+def _relative_file(value, where: str) -> str:
+    """A normalized relative POSIX file path, with no route outside the tree."""
+    name = _name(value, where)
+    path = PurePosixPath(name)
+    if (
+        "\\" in name or path.is_absolute() or path == PurePosixPath(".")
+        or any(part in ("", ".", "..") for part in path.parts)
+        or path.as_posix() != name
+    ):
+        raise ValueError(f"{where} is {value!r}; it must be a normalized path inside the tree")
+    return name
+
+
 def _load_source(raw: dict, directory: Path, where: str) -> Source:
     check_keys(raw, REQUIRED_SOURCE_FIELDS, f"{where} source")
     root = _resolve(directory, raw["root"], f"{where} source root")
@@ -181,10 +215,46 @@ def _load_build(raw: dict, where: str) -> Build:
     targets = {}
     for role, spec in raw["targets"].items():
         target_where = f"{where} build target '{role}'"
-        check_keys(spec, REQUIRED_TARGET_FIELDS, target_where)
+        check_keys(spec, REQUIRED_TARGET_FIELDS, target_where, optional=OPTIONAL_TARGET_FIELDS)
+        raw_artifacts = spec.get("runtime_artifacts", [])
+        if not isinstance(raw_artifacts, list):
+            raise ValueError(f"{target_where} runtime_artifacts must be a list")
+        runtime_artifacts = []
+        for artifact in raw_artifacts:
+            artifact_where = f"{target_where} runtime artifact"
+            if not isinstance(artifact, dict):
+                raise ValueError(f"{artifact_where} must be an object")
+            check_keys(
+                artifact, REQUIRED_RUNTIME_ARTIFACT_FIELDS, artifact_where,
+                optional=OPTIONAL_RUNTIME_ARTIFACT_FIELDS,
+            )
+            kind = artifact["kind"]
+            if kind not in RUNTIME_ARTIFACT_KINDS:
+                raise ValueError(
+                    f"{artifact_where} kind is {kind!r}; it must be one of "
+                    f"{list(RUNTIME_ARTIFACT_KINDS)}"
+                )
+            when_language = artifact.get("when_language")
+            if when_language is not None and when_language not in RUNTIME_ARTIFACT_LANGUAGES:
+                raise ValueError(
+                    f"{artifact_where} when_language is {when_language!r}; it must be one of "
+                    f"{list(RUNTIME_ARTIFACT_LANGUAGES)}"
+                )
+            runtime_artifacts.append(RuntimeArtifact(
+                path=_relative_file(artifact["path"], f"{artifact_where} path"),
+                kind=kind,
+                when_language=when_language,
+            ))
+        artifact_paths = [artifact.path for artifact in runtime_artifacts]
+        if len(artifact_paths) != len(set(artifact_paths)):
+            raise ValueError(f"{target_where} names the same runtime artifact more than once")
+        executable = _relative_file(spec["executable"], f"{target_where} executable")
+        if executable in artifact_paths:
+            raise ValueError(f"{target_where} names its executable as a runtime artifact")
         targets[role] = BuildTarget(
             target=_name(spec["target"], f"{target_where} target"),
-            executable=_name(spec["executable"], f"{target_where} executable"),
+            executable=executable,
+            runtime_artifacts=tuple(runtime_artifacts),
         )
     if REQUIRED_BUILD_TARGET not in targets:
         raise ValueError(
@@ -259,7 +329,33 @@ def _load_timing(raw: dict, where: str) -> Timing:
         outputs=tuple(_name(o, f"{where} timing output") for o in raw["outputs"]),
         budget_s=budget,
         env=_load_timing_env(raw.get("env"), f"{where} timing env"),
+        min_median_speedup=_load_min_median_speedup(
+            raw.get("performance"), f"{where} timing performance",
+        ),
     )
+
+
+def _load_min_median_speedup(raw, where: str) -> float:
+    """The explicit acceptance floor, defaulted for pre-policy manifests."""
+    if raw is None:
+        return DEFAULT_MIN_MEDIAN_SPEEDUP
+    if not isinstance(raw, dict):
+        raise ValueError(f"{where} is not an object")
+    check_keys(raw, ("min_median_speedup",), where)
+    value = raw["min_median_speedup"]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"{where} min_median_speedup is {value!r}; it must be a finite number above 1"
+        )
+    try:
+        measured = float(value)
+    except OverflowError:
+        measured = float("inf")
+    if not math.isfinite(measured) or measured <= 1:
+        raise ValueError(
+            f"{where} min_median_speedup is {value!r}; it must be a finite number above 1"
+        )
+    return measured
 
 
 def _load_timing_env(raw, where: str) -> dict:

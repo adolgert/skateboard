@@ -8,6 +8,7 @@ answer to the whole shape of that type.
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from services.builder import contract, stages
 
@@ -111,3 +112,40 @@ def test_a_response_survives_the_round_trip_a_caller_reads_it_through():
     original = contract.RunResponse(ok=True, outputs={"case0000": {}}, kernels_launched=3)
 
     assert contract.RunResponse.from_dict(original.to_dict()) == original
+
+
+def test_build_request_accepts_mixed_toolchains_and_rejects_two_authorities():
+    common = {
+        "attempt_id": "attempt-1",
+        "tree": [],
+        "makefile": "Makefile",
+        "targets": [REPLAY_TARGET],
+        "link_flags": [],
+        "source_patterns": ["src/*"],
+    }
+    request = contract.BuildRequest(**common, toolchains={
+        "cxx": {"compiler": "g++", "flags": ["-O2"]},
+        "cuda": {"compiler": "nvcc", "flags": ["-arch=sm_89"]},
+    })
+    assert set(request.toolchains) == {"cxx", "cuda"}
+
+    with pytest.raises(ValidationError, match="cannot both"):
+        contract.BuildRequest(
+            **common,
+            compiler="nvfortran",
+            toolchains={"fortran": {"compiler": "nvfortran", "flags": []}},
+        )
+
+    with pytest.raises(ValidationError, match="unsupported"):
+        contract.BuildRequest(
+            **common, toolchains={"hip": {"compiler": "hipcc", "flags": []}},
+        )
+
+
+@pytest.mark.parametrize("path", ["../kernel.ptx", "/tmp/kernel.ptx", "a/../../kernel.ptx"])
+def test_build_request_rejects_runtime_artifacts_outside_the_tree(path):
+    with pytest.raises(ValidationError, match="runtime artifact path"):
+        contract.BuildTarget(
+            role="replay", target="replay", executable="replay",
+            runtime_artifacts=[{"path": path, "kind": "gpu_module"}],
+        )

@@ -335,7 +335,10 @@ RUN_SECONDS = (0.21, 0.20, 0.22)
 # The executable names the real builder reports on, and the modules it
 # reports beside them: a strategy asks for pytest as `python:pytest`, and
 # an executable and an importable module are looked for in different ways.
-TOOLS = ("nvfortran", "compute-sanitizer", "nsys", "make", "cmake", "fpm", "gfortran")
+TOOLS = (
+    "nvfortran", "nvc", "nvc++", "nvcc", "ptxas", "gcc", "g++", "gfortran",
+    "compute-sanitizer", "nsys", "make", "cmake", "fpm",
+)
 PYTHON_MODULES = ("pytest", "hypothesis", "numpy")
 
 
@@ -366,9 +369,13 @@ def built(request: dict, *, sha256: str = EXECUTABLE_IDENTITY["sha256"],
     without them, because that is what a component reads to name the
     offending compile.
     """
+    toolchains = request.get("toolchains") or {
+        "fortran": {"compiler": request.get("compiler"), "flags": list(request["flags"])}
+    }
     fields = {
         "ok": True, "flags_reached_every_compile": True, "compiled_only_tree_source": True,
         "flags": list(request["flags"]), "minfo_excerpt": "Generating Tesla code",
+        "toolchains": toolchains, "languages_compiled": sorted(toolchains),
         "executor_identity": EXECUTOR_IDENTITY, "image_id": IMAGE_ID,
         "log_tail": "" if over.get("ok", True) else "compile error",
         **over,
@@ -377,6 +384,14 @@ def built(request: dict, *, sha256: str = EXECUTABLE_IDENTITY["sha256"],
         t["role"]: {
             "executable": t["executable"], "built": fields["ok"],
             "sha256": sha256, "size": 12345,
+            **({"runtime_artifacts": [
+                {
+                    **artifact,
+                    "sha256": hashlib.sha256(artifact["path"].encode()).hexdigest(),
+                    "size": 23456,
+                }
+                for artifact in t.get("runtime_artifacts", [])
+            ]} if t.get("runtime_artifacts") else {}),
         }
         for t in request["targets"]
     })
@@ -602,26 +617,34 @@ class FakeBuilder:
         return self._answer("artifacts", {"attempt_id": attempt_id}, default)
 
     def build(self, attempt_id, tree, makefile, targets, compiler, flags, link_flags,
-              source_patterns):
+              source_patterns, *, toolchains=None):
         resp = self._answer("build", {
             "attempt_id": attempt_id, "tree": tree, "makefile": makefile,
             "targets": targets, "compiler": compiler, "flags": flags,
             "link_flags": link_flags, "source_patterns": source_patterns,
+            "toolchains": toolchains,
         }, built)
         if resp.ok:
-            self.artifact_records[attempt_id] = {
+            records = {
                 target["executable"]: {
                     "sha256": resp.targets[target["role"]]["sha256"], "size": 12345,
                     "role": target["role"],
                 }
                 for target in targets
             }
+            for target in targets:
+                for artifact in resp.targets[target["role"]].get("runtime_artifacts", []):
+                    records[artifact["path"]] = {
+                        "sha256": artifact["sha256"], "size": artifact["size"],
+                        "role": target["role"], "kind": artifact["kind"],
+                    }
+            self.artifact_records[attempt_id] = records
         return resp
 
-    def run(self, attempt_id, executable, cases, notify=None, mandatory=False):
+    def run(self, attempt_id, executable, cases, notify=None, mandatory=False, profile=None):
         return self._answer("run", {
             "attempt_id": attempt_id, "executable": executable, "cases": cases,
-            "notify": notify, "mandatory": mandatory,
+            "notify": notify, "mandatory": mandatory, "profile": profile,
         }, replayed)
 
     def capture(self, attempt_id, executable, args, run_name):

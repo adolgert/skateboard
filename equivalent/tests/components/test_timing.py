@@ -248,3 +248,76 @@ def test_a_code_that_declares_no_timing_outputs_stores_no_set_and_says_so(harnes
     assert result.detail["program_set"] is None
     assert "no timing outputs" in result.detail["program_set_absent"]
     assert not list(harness.store.capture_sets_dir.iterdir())
+
+
+def _performance_claims(harness, manifest, *, baseline_runs, port_runs,
+                        gpu_exclusive=True):
+    baseline = _baseline(
+        harness, manifest,
+        FakeBuilder(time=partial(
+            timed, runs_s=baseline_runs, gpu_exclusive=gpu_exclusive,
+        )),
+    )
+    assert baseline.verdict == "pass"
+    harness.claim("timing/baseline", baseline.detail)
+    _already_built(harness, manifest=manifest)
+    port = _port(
+        harness, manifest, FakeBuilder(time=partial(
+            timed, runs_s=port_runs, gpu_exclusive=gpu_exclusive,
+        )),
+    )
+    harness.claim("timing/port", port.detail)
+
+
+def test_performance_passes_only_when_the_recorded_median_beats_the_manifest_floor(harness):
+    manifest = _manifest(harness.tmp_path)
+    _performance_claims(
+        harness, manifest, baseline_runs=[0.30] * 5, port_runs=[0.20] * 5,
+        gpu_exclusive=False,
+    )
+
+    result = timing.check_performance(harness.porting(manifest=manifest), {})
+
+    assert result.verdict == "pass"
+    assert result.detail["median_speedup"] == pytest.approx(1.5)
+    assert result.detail["min_median_speedup"] == 1.10
+    assert result.detail["measurement_scope"] == timing.MEASUREMENT_SCOPE
+    assert result.detail["gpu_exclusivity_required"] is False
+    assert [material.kind for material in result.materials] == ["timing_claim", "timing_claim"]
+    assert result.detail["baseline_claim_id"] == harness.claims["timing/baseline"].id
+    assert result.detail["port_claim_id"] == harness.claims["timing/port"].id
+
+
+def test_performance_failure_keeps_the_observed_medians_for_review(harness):
+    manifest = _manifest(harness.tmp_path)
+    _performance_claims(
+        harness, manifest, baseline_runs=[0.20] * 5, port_runs=[0.20] * 5,
+    )
+
+    result = timing.check_performance(harness.porting(manifest=manifest), {})
+
+    assert result.verdict == "fail"
+    assert "median speedup" in result.reasons[0]
+
+
+def test_performance_refuses_an_overflowed_ratio_without_writing_non_json_numbers(harness):
+    manifest = _manifest(harness.tmp_path)
+    _performance_claims(
+        harness, manifest, baseline_runs=[1e308] * 5, port_runs=[1e-308] * 5,
+    )
+
+    result = timing.check_performance(harness.porting(manifest=manifest), {})
+
+    assert result.verdict == "fail"
+    assert result.detail["median_speedup"] is None
+    assert "finite speedup" in result.reasons[0]
+
+
+def test_performance_requires_five_samples_in_each_existing_timing_claim(harness):
+    manifest = _manifest(harness.tmp_path)
+    _performance_claims(
+        harness, manifest, baseline_runs=[0.30] * 5, port_runs=[0.20] * 4,
+    )
+
+    with pytest.raises(ComponentError, match="fewer than 5 samples"):
+        timing.check_performance(harness.porting(manifest=manifest), {})

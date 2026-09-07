@@ -35,7 +35,8 @@ describe("table", () => {
   it("generated tool descriptions for the real table match a golden file", () => {
     const rows = callableRows(loadFixtureTable());
     const rendered = rows.map((row) => `${row.name}: ${describeRow(row)}`).join("\n\n");
-    const golden = readFileSync(path.join(__dirname, "fixtures", "tool-descriptions.golden.txt"), "utf8");
+    const golden = readFileSync(path.join(__dirname, "fixtures", "tool-descriptions.golden.txt"), "utf8")
+      .replace(/\n$/, "");
     expect(rendered).toBe(golden);
   });
 

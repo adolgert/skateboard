@@ -197,6 +197,18 @@ def spec_problems(spec: dict) -> list[dict]:
     )):
         problems.append({"reason": "the spec's files: list contains a duplicate path"})
 
+    # Foreign implementations are admitted explicitly, never accidentally
+    # treated as Fortran procedures by the lexical scanner. The deployment's
+    # strategy must independently permit every such editable path.
+    opaque = spec.get("opaque_sources", [])
+    if not isinstance(opaque, list) or any(not _safe_relative_path(p) for p in opaque):
+        problems.append({"reason": "opaque_sources must be a list of canonical relative source paths"})
+        opaque = []
+    fortran_suffixes = {'.f90', '.f95', '.f08', '.f03', '.f', '.for', '.inc'}
+    foreign = {p for p in files if isinstance(p, str) and PurePosixPath(p).suffix.lower() not in fortran_suffixes}
+    if set(opaque) != foreign or len(opaque) != len(set(opaque)):
+        problems.append({"reason": "opaque_sources must name exactly the non-Fortran files; their control flow and effects require separate review"})
+
     anchor_value = spec.get("anchor")
     if not isinstance(anchor_value, dict):
         problems.append({"reason": "the spec's anchor is not a mapping"})
@@ -206,6 +218,8 @@ def spec_problems(spec: dict) -> list[dict]:
         problems.append({"reason": "the spec's anchor names no file"})
     elif anchor_file not in files:
         problems.append({"reason": f"the anchor's file {anchor_file} is not in the spec's files: list"})
+    if anchor_file in opaque:
+        problems.append({"reason": "the SESE anchor must be a Fortran procedure, not an opaque source"})
 
     closure = spec.get("closure") or {}
     if not isinstance(closure, dict):
@@ -220,6 +234,8 @@ def spec_problems(spec: dict) -> list[dict]:
             problems.append({"reason": "a closure callee is not a mapping with a name"})
             continue
         callee_file = callee.get("file", anchor_file)
+        if callee_file in opaque:
+            problems.append({"reason": f"opaque source {callee_file} cannot be claimed as a scanned Fortran callee"})
         if callee_file is not None and callee_file not in files:
             problems.append({
                 "reason": f"callee {callee['name']} is in {callee_file}, which is not in the spec's files: list",
@@ -290,6 +306,13 @@ def analyze(region_yaml: Path, repo_root: Path) -> dict:
         return _result(anchor_file, spec["files"], [], 0, [{"reason": str(exc)}], [])
     lines_by_file = {}
     missing = []
+    for file in spec.get("opaque_sources", []):
+        path = repo_root / file
+        # The bootstrap submission can introduce only the specification.
+        # Opaque paths may name files the port will introduce afterward;
+        # unlike scanned procedures, their existence is not a SESE assertion.
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            missing.append({"reason": f"opaque source {file} is not a regular file in the tree"})
     for file in sorted({item["file"] for item in declared_ranges}):
         path = repo_root / file
         if path.is_file():
@@ -349,7 +372,11 @@ def analyze(region_yaml: Path, repo_root: Path) -> dict:
             resolution_problems, [], resolved_ranges,
         )
 
-    all_violations, all_notes = [], []
+    all_violations = []
+    all_notes = [{"label": file, "line": 0, "text": "", "note":
+                  "opaque foreign source: control flow, call closure and effects were not analyzed",
+                  "present": (repo_root / file).is_file()}
+                 for file in spec.get("opaque_sources", [])]
     for file, lo, hi, label, procedure_end in ranges:
         v, n = scan(lines_by_file[file], lo, hi, label, file, procedure_end)
         all_violations += v

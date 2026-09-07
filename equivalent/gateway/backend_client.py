@@ -67,8 +67,9 @@ class BuilderClient:
         return self._get(f"/v1/artifacts/{attempt_id}", ArtifactsResponse)
 
     def build(self, attempt_id: str, tree: list[dict], makefile: str, targets: list[dict],
-              compiler: str, flags: list[str], link_flags: list[str],
-              source_patterns: list[str]) -> BuildResponse:
+              compiler: str | None, flags: list[str], link_flags: list[str],
+              source_patterns: list[str], *, toolchains: dict | None = None,
+              ) -> BuildResponse:
         """Build one tree with its own makefile.
 
         `tree` is the whole tracked tree as [{"path", "b64"}]; `targets`
@@ -77,14 +78,18 @@ class BuilderClient:
         `source_patterns` is what the code calls its own source, which is
         how the builder can say whether anything else was compiled.
         """
-        return self._post("/v1/build", {
+        body = {
             "attempt_id": attempt_id, "tree": tree, "makefile": makefile,
             "targets": targets, "compiler": compiler, "flags": flags,
             "link_flags": link_flags, "source_patterns": source_patterns,
-        }, BuildResponse)
+        }
+        if toolchains is not None:
+            body["toolchains"] = toolchains
+        return self._post("/v1/build", body, BuildResponse)
 
     def run(self, attempt_id: str, executable: str, cases: dict,
-            notify: str | None = None, mandatory: bool = False) -> RunResponse:
+            notify: str | None = None, mandatory: bool = False,
+            profile: bool | None = None) -> RunResponse:
         """Replay every case through the manifest's replay executable.
 
         `cases` is {name: {variable: base64 of its .npy file}}, and the
@@ -92,10 +97,13 @@ class BuilderClient:
         and shape each array is, so nothing on the wire repeats it.
         `notify` is the strategy's device proof.
         """
-        return self._post("/v1/run", {
+        body = {
             "attempt_id": attempt_id, "executable": executable, "cases": cases,
             "notify": notify, "mandatory": mandatory,
-        }, RunResponse)
+        }
+        if profile is not None:
+            body["profile"] = profile
+        return self._post("/v1/run", body, RunResponse)
 
     def capture(self, attempt_id: str, executable: str, args: list[str],
                 run_name: str) -> CaptureResponse:

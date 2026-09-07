@@ -61,8 +61,9 @@ ACTIONS = (
         component='analyzer:check_sese', tool='sese_check',
         predicates=(
             PredicateDefinition('sese/verified',
-                'Static analyzer confirms the region and its closure are single-entry/single-exit '
-                '(no goto, early return, entry, or stop), on the candidate set. Does not check that '
+                'Static analyzer checks the Fortran anchor and declared Fortran callees for '
+                'goto, early return, entry, and stop, on the candidate set. Explicitly declared '
+                'opaque foreign sources are not analyzed. Does not check that '
                 "the spec's declared footprint matches the code -- that needs real static-analysis "
                 "tooling this repository doesn't yet run generically; see "
                 'equivalent/components/sese_check.py.'
@@ -167,7 +168,8 @@ ACTIONS = (
         component='builder:/v1/time', tool='builder',
         predicates=(
             PredicateDefinition('timing/port',
-                "Wall-clock timing of the ported binary, on the tree. Every timed repetition's "
+                "End-to-end isolated-job wall-clock timing of the ported binary, on the tree "
+                "(including workspace and container setup and teardown). Every timed repetition's "
                 "program outputs are compared again with the baseline program's, under the code's "
                 'tolerance policy: program/regression compares one run, and this is the only check '
                 'that runs the program more than once, so a port whose answers drift between runs '
@@ -184,7 +186,8 @@ ACTIONS = (
         component='builder:/v1/time', tool='builder',
         predicates=(
             PredicateDefinition('timing/baseline',
-                'Wall-clock timing of the pristine baseline build, on the baseline tree; its '
+                'End-to-end isolated-job wall-clock timing of the pristine baseline build, on the '
+                'baseline tree (including workspace and container setup and teardown); its '
                 "program's own outputs are stored as the capture set a port's program run is "
                 'compared against.'
             ),
@@ -194,6 +197,19 @@ ACTIONS = (
         acceptance=AcceptanceRole.NONE,
         config_keys=('repeats',),
         needs=('builder',),
+    ),
+    ActionDefinition(
+        name='performance_check', phase=PORTING,
+        component='gateway:performance', tool='performance_check',
+        predicates=(
+            PredicateDefinition('performance/speedup',
+                "The port's median end-to-end isolated-job wall-clock time meets the manifest's required "
+                "speedup over the baseline, using at least five samples from each recorded timing "
+                "claim. This is a same-builder comparative threshold, not a statistical confidence "
+                'or cross-machine performance guarantee; GPU exclusivity is not asserted. On the tree.'
+            ),
+        ),
+        requires=('timing/port', 'timing/baseline'),
     ),
     ActionDefinition(
         name='manifest_check', phase=ONBOARDING,

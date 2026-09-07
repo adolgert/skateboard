@@ -23,7 +23,7 @@ def _notify_env(base, notify, mandatory):
     if mandatory:
         env["OMP_TARGET_OFFLOAD"] = "MANDATORY"  # host fallback becomes a runtime error
     return env
-def run(workspace, executable, cases, notify=None, mandatory=False,
+def run(workspace, executable, cases, notify=None, mandatory=False, profile=None,
         *, timeout=REPLAY_TIMEOUT_S) -> RunResponse:
     """Replay every case through the executable the code's manifest names.
 
@@ -41,7 +41,7 @@ def run(workspace, executable, cases, notify=None, mandatory=False,
         )
 
     env = _notify_env(os.environ, notify, mandatory)
-    profiled = notify in ("acc", "omp")
+    profiled = notify in ("acc", "omp") if profile is None else bool(profile)
     outputs = {}
     total_kernels = 0
     launched_at = set()

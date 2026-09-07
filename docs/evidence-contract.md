@@ -40,13 +40,21 @@ The ledger CLI without deployment configuration is advisory.
 | Check | Observation | What still needs review |
 | --- | --- | --- |
 | Original comparison | Preserved original and onboarded CPU program agree on declared runs and outputs; each repeats deterministically | Original provenance, adapters, runs and outputs |
-| Build | A protected observer saw compiler processes and arguments; executables have recorded digests | Build recipe, dependencies and final executable provenance |
+| Build | A protected observer saw each declared language's compiler processes, directories, source arguments and flags; executables and declared runtime companions have recorded digests | Build recipe, includes, dependencies and final executable/module provenance |
 | GPU execution | A protected Nsight report contains GPU kernel activity | Whether the intended scientific work was offloaded, kernel attribution and transfers |
 | Sanitizers | Required sanitizers succeeded on selected cases | Tool and case coverage; racecheck does not cover all possible device races |
 | Numerical regression | Arrays agree under reviewed bands, with shape/dtype checks and finite floating-point values | Scientific validity, calibration and representativeness |
 | Properties | The process completed successfully and a protected observer saw the bound replay execute | Assertions and submitted test counters; an example ceiling is not an observed example count |
 | Mutation self-check | The generated campaign was classified, a mutant was caught, and the tolerance-gap criterion passed | Survivors, operator coverage and suitability of the criterion |
 | Timing | `harness/times` checks repeatable outputs; `timing/baseline` records repeated durations and retains final outputs; `timing/port` compares every measured repetition to the baseline outputs | Baseline repeatability and validity, contention, workload and meaningful speedup |
+| Performance | `performance/speedup` requires median baseline time / median port time to meet the frozen manifest threshold (default 1.10), with at least five valid samples per binary | This host and workload only; noise, representativeness, and statistical significance |
+
+Performance is required for port acceptance. Its materials identify both exact
+timing claims; rerunning either timing action invalidates the old performance
+verdict. Durations currently cover the isolated job, including Docker setup
+and teardown, application startup, data transfers and output. This can obscure
+small kernel improvements. A compute-process listing does not establish GPU
+exclusivity, and the performance gate does not require an exclusive device.
 
 Build tracing proves that an allowed compiler ran with observed arguments.
 It does **not** prove that the final executable derives exclusively from those
@@ -58,6 +66,11 @@ The SESE scanner handles a conservative source subset. It does not derive a
 complete call graph, alias analysis or effect closure. Scientists must inventory
 hidden state and review the replay boundary. Pointers, module variables and
 device mappings require more than a list of array values.
+
+Mixed-language specifications must list foreign files in `opaque_sources`.
+The Fortran anchor is scanned; foreign control flow, calls and effects are
+explicitly reported as unanalysed. See [mixed-language builds](mixed-language.md)
+for the compiler and runtime-artifact contracts.
 
 ## Execution boundary
 

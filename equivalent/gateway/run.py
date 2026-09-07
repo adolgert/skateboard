@@ -12,7 +12,9 @@ from equivalent.components.result import CheckResult
 from equivalent.ledger.acceptance import requirements_for
 from equivalent.ledger.artifacts import build_binary_materials
 from equivalent.ledger.capture_sets import SetReader
-from equivalent.ledger.evidence import FOUNDATION_PREDICATES, current_build_claim, dependent_materials
+from equivalent.ledger.evidence import (
+    FOUNDATION_PREDICATES, current_build_claim, dependent_materials, performance_materials,
+)
 from equivalent.ledger.predicates import agent_receipt
 from equivalent.ledger.records import Predicate, RequestLogLine
 from equivalent.ledger.status import requirement_status
@@ -127,7 +129,13 @@ class RunContext:
     def materials_for(self, predicate_type: str) -> tuple:
         if predicate_type in FOUNDATION_PREDICATES:
             return self.evidence_materials
-        return dependent_materials(self.evidence_materials, self.build_materials)
+        materials = dependent_materials(self.evidence_materials, self.build_materials)
+        if predicate_type == "performance/speedup":
+            return (*materials, *performance_materials(
+                self.store, self.tree, self.subjects["baseline_tree"], self.evidence_materials,
+                port_materials=materials,
+            ))
+        return materials
 
     def artifacts_match(self, detail: dict) -> bool:
         return artifacts_still_held(

@@ -16,14 +16,32 @@ manifest and the hashed strategy file.
 """
 from __future__ import annotations
 
-from typing import ClassVar
+from pathlib import PurePosixPath
+from typing import ClassVar, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class TreeFile(BaseModel):
     path: str    # relative to the tree root, directories included
     b64: str     # the file's bytes; a tree holds namelists and data, not only text
+
+
+class RuntimeArtifact(BaseModel):
+    path: str
+    kind: Literal["shared_library", "gpu_module"]
+
+    @field_validator("path")
+    @classmethod
+    def path_inside_tree(cls, value: str) -> str:
+        path = PurePosixPath(value)
+        if (
+            not value or "\\" in value or path.is_absolute()
+            or path == PurePosixPath(".") or ".." in path.parts
+            or path.as_posix() != value
+        ):
+            raise ValueError("runtime artifact path must be normalized and relative to the tree")
+        return value
 
 
 class ReplayTarget(BaseModel):
@@ -33,6 +51,30 @@ class ReplayTarget(BaseModel):
 
 class BuildTarget(ReplayTarget):
     role: str        # what the manifest calls this target: replay, timing, capture
+    runtime_artifacts: list[RuntimeArtifact] = []
+
+    @model_validator(mode="after")
+    def distinct_artifact_paths(self):
+        paths = [artifact.path for artifact in self.runtime_artifacts]
+        if len(paths) != len(set(paths)):
+            raise ValueError("runtime artifact paths must be unique within a target")
+        if self.executable in paths:
+            raise ValueError("a target executable cannot also be a runtime artifact")
+        return self
+
+
+class Toolchain(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    compiler: str
+    flags: list[str] = []
+
+    @field_validator("compiler")
+    @classmethod
+    def compiler_is_named(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("toolchain compiler must be a non-empty string")
+        return value
 
 
 # One case's arrays as they travel: {variable: base64 of that variable's
@@ -60,12 +102,31 @@ class BuildRequest(BaseModel):
     tree: list[TreeFile]
     makefile: str
     targets: list[BuildTarget]
-    compiler: str
+    # compiler/flags is the original single-Fortran wire. Mixed builds use
+    # toolchains exclusively, leaving one authority for each language's flags.
+    compiler: str | None = None
     flags: list[str] = []
+    toolchains: dict[str, Toolchain] | None = None
     link_flags: list[str] = []
     # What the code calls its own source, used to say whether the build
     # compiled anything the manifest never described.
     source_patterns: list[str] = []
+
+    @model_validator(mode="after")
+    def one_toolchain_form(self):
+        supported = {"fortran", "c", "cxx", "cuda", "ptx"}
+        if self.toolchains is None:
+            if not self.compiler:
+                raise ValueError("a build must name compiler/flags or toolchains")
+            return self
+        if self.compiler is not None or self.flags:
+            raise ValueError("compiler/flags and toolchains cannot both describe one build")
+        if not self.toolchains:
+            raise ValueError("toolchains must name at least one language")
+        unknown = sorted(set(self.toolchains) - supported)
+        if unknown:
+            raise ValueError(f"unsupported build language(s): {', '.join(unknown)}")
+        return self
 
 
 class RunRequest(BaseModel):
@@ -77,6 +138,8 @@ class RunRequest(BaseModel):
     # to announce its kernel launches, or none at all.
     notify: str | None = None
     mandatory: bool = False
+    # None retains the legacy rule: acc/omp notification implies profiling.
+    profile: bool | None = None
 
 
 class CaptureRequest(BaseModel):
@@ -183,6 +246,8 @@ class BuildResponse(Response):
     compiler_audit: dict = {}        # who recorded those invocations, and how
     flags: list[str] = []
     link_flags: list[str] = []
+    toolchains: dict = {}
+    languages_compiled: list[str] = []
     # The two statements the compiler log exists to make.
     flags_reached_every_compile: bool = False
     compiled_only_tree_source: bool = False

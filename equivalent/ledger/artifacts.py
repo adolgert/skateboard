@@ -9,8 +9,23 @@ layouts their predicates are specified to write.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from equivalent.ledger.subjects import Subject, is_digest
+
+RUNTIME_ARTIFACT_KINDS = ("shared_library", "gpu_module")
+
+
+def _artifact_path(value, what: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{what} path must be a non-empty string")
+    path = PurePosixPath(value)
+    if (
+        "\\" in value or path.is_absolute() or path == PurePosixPath(".")
+        or ".." in path.parts or path.as_posix() != value
+    ):
+        raise ValueError(f"{what} path must be normalized and relative")
+    return value
 
 
 @dataclass(frozen=True)
@@ -37,6 +52,39 @@ class BinaryArtifact:
 
 
 @dataclass(frozen=True)
+class BuildArtifact:
+    """One declared file a built target needs at runtime.
+
+    Its digest binds the bytes to the build and later restore. The declaration
+    does not prove that the executable's linker or module loader used the file;
+    programs should resolve companions beside the frozen executable (for
+    example with ``$ORIGIN`` or ``/proc/self/exe``), where execution policy
+    protects the declared bytes.
+    """
+
+    path: str
+    kind: str
+    sha256: str
+    size: int | None = None
+
+    def __post_init__(self):
+        if self.kind not in ("executable", *RUNTIME_ARTIFACT_KINDS):
+            raise ValueError(f"unknown build artifact kind: {self.kind!r}")
+        _artifact_path(self.path, "build artifact")
+        BinaryArtifact(self.path, self.sha256, self.size)
+
+    @property
+    def binary_artifact(self) -> BinaryArtifact:
+        return BinaryArtifact(self.path, self.sha256, self.size)
+
+    def as_detail(self) -> dict:
+        detail = {"sha256": self.sha256}
+        if self.size is not None:
+            detail["size"] = self.size
+        return detail
+
+
+@dataclass(frozen=True)
 class BuildTarget:
     """One role and the executable bytes a successful build put behind it."""
 
@@ -44,15 +92,29 @@ class BuildTarget:
     executable: str
     sha256: str
     size: int | None = None
+    runtime_artifacts: tuple[BuildArtifact, ...] = ()
 
     def __post_init__(self):
         if not isinstance(self.role, str) or not self.role:
             raise ValueError("build target role must be a non-empty string")
+        _artifact_path(self.executable, "build target executable")
         BinaryArtifact(self.executable, self.sha256, self.size)
+        paths = [artifact.path for artifact in self.runtime_artifacts]
+        if len(paths) != len(set(paths)):
+            raise ValueError("build target runtime artifact paths must be unique")
+        if self.executable in paths:
+            raise ValueError("build target executable cannot also be a runtime artifact")
 
     @property
     def artifact(self) -> BinaryArtifact:
         return BinaryArtifact(self.executable, self.sha256, self.size)
+
+    @property
+    def artifacts(self) -> tuple[BuildArtifact, ...]:
+        return (
+            BuildArtifact(self.executable, "executable", self.sha256, self.size),
+            *self.runtime_artifacts,
+        )
 
     def as_detail(self) -> dict:
         """The identity fields used to compare with a builder artifacts reply."""
@@ -75,7 +137,10 @@ class BuildRecord:
 
     @property
     def binary_artifacts(self) -> tuple[BinaryArtifact, ...]:
-        return tuple(target.artifact for target in self.targets)
+        return tuple(
+            artifact.binary_artifact
+            for target in self.targets for artifact in target.artifacts
+        )
 
 
 def binary_artifact(identity, *, executable: str | None = None) -> BinaryArtifact | None:
@@ -117,11 +182,25 @@ def build_record(attempt_id, targets) -> BuildRecord:
     for role, target in sorted(targets.items()):
         if not isinstance(target, dict):
             raise ValueError(f"build target {role!r} must be an object")
+        runtime = target.get("runtime_artifacts", [])
+        if not isinstance(runtime, list):
+            raise ValueError(f"build target {role!r} runtime_artifacts must be a list")
+        runtime_artifacts = []
+        for artifact in runtime:
+            if not isinstance(artifact, dict):
+                raise ValueError(f"build target {role!r} runtime artifact must be an object")
+            runtime_artifacts.append(BuildArtifact(
+                path=artifact.get("path"),
+                kind=artifact.get("kind"),
+                sha256=artifact.get("sha256"),
+                size=artifact.get("size"),
+            ))
         decoded.append(BuildTarget(
             role=role,
             executable=target.get("executable"),
             sha256=target.get("sha256"),
             size=target.get("size"),
+            runtime_artifacts=tuple(runtime_artifacts),
         ))
     return BuildRecord(attempt_id=attempt_id, targets=tuple(decoded))
 

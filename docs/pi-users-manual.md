@@ -108,7 +108,7 @@ extension connects to the gateway, fetches the list of actions, and
 registers one tool for each, plus `submit`, `status`, and `claim`. One
 line confirms it:
 
-    equivalent: registered 13 tools for region ch04:step
+    equivalent: registered 14 tools for region ch04:step
 
 The count is the actions of that region's phase — ten for a region being
 ported, nine for a code being onboarded — plus `submit`, `status`, and
@@ -227,6 +227,7 @@ row's requirements in the tool's description.
 | `program_regression` | the whole program, run at the size the manifest declares, wrote what the baseline program wrote, file by file | `regression/holdout`, and a `timing/baseline` claim on the baseline tree |
 | `time_baseline` | how long the unmodified program takes under the region's baseline strategy, and stores that run's own outputs as the reference the row above compares against | nothing |
 | `time_port` | how long the ported program takes, at the same size and with the same arguments | `program/regression` |
+| `performance_check` | median baseline time / median port time meets the manifest threshold (default 1.10), with at least five samples each | `timing/port` and `timing/baseline` |
 | `accept` | nothing of its own: it is the name of the whole list, and there is no tool for it | every claim above except `timing/baseline`, and — for a code that declares no invariants — `regression/property` |
 
 `time_baseline` has no preconditions and is about the baseline tree
@@ -241,7 +242,7 @@ which programs those targets must leave behind all come from the code's
 manifest.
 
 The submitted `make` runs unprivileged while a protected, root-owned
-`strace/execve` observer records invocations of the configured compiler, so the
+`strace/process+cwd` observer records invocations of the configured compiler, so the
 claim can say more than "it compiled". Two checks come out of that record: the
 strategy's flags reached every compile, and every file compiled was the tree's
 own source. A build that succeeded
@@ -351,10 +352,16 @@ with the arguments and environment the manifest declares and a budget it
 declares too. Every repetition's declared outputs are compared with the
 baseline program outputs. It requires `program/regression`, so a program that
 computes the wrong thing at the timing size cannot be timed at all. This
-is the last requirement for acceptance. The claim records the flags, the
+is followed by `performance_check` for acceptance. The claim records the flags, the
 run times, what the program was given, which files it wrote and their
 digests, and whether the GPU was otherwise idle, which on a shared
 workstation it usually is not.
+
+**`performance_check`** — Requires the configured median speedup over the CPU
+baseline (default 1.10). The comparison is tied to the exact two timing claims;
+rerunning either timing action retires the previous performance verdict.
+Measurements include isolated-job overhead, and a pass is not a statistical
+confidence bound or proof of an exclusive GPU.
 
 A few rows accept settings, and the tools take them as optional
 arguments: `time_baseline` and `time_port` take `repeats`, an integer from 5
@@ -389,6 +396,7 @@ status is `ACCEPTED`. From a shell on the host:
       regression/holdout   pass   c-0008
       program/regression   pass   c-0009
       timing/port          pass   c-0010
+      performance/speedup  pass   c-0011
     ACCEPTED on aaaaaaaaaaaa
 
 `/status` inside the session prints the same rows in a narrower layout.

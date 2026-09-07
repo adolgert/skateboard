@@ -189,6 +189,122 @@ def test_a_target_that_leaves_no_executable_fails_naming_the_role(attempt):
     assert result.targets["replay"]["built"] is False
 
 
+@pytest.mark.skipif(
+    shutil.which("gcc") is None or shutil.which("g++") is None,
+    reason="mixed-language build needs C and C++ compilers",
+)
+def test_a_mixed_build_proves_each_languages_compiler_and_flags(attempt):
+    result = stages.build(
+        attempt,
+        tree_of({
+            "Makefile": (
+                "mixed: c.o main.o\n"
+                "\t$(CXX) c.o main.o -o mixed\n"
+                "c.o: src/value.c\n"
+                "\t$(CC) $(CFLAGS) -c src/value.c -o c.o\n"
+                "main.o: src/main.cpp\n"
+                "\t$(CXX) $(CXXFLAGS) -c src/main.cpp -o main.o\n"
+            ),
+            "src/value.c": "int answer(void) { return 42; }\n",
+            "src/main.cpp": (
+                'extern "C" int answer(void);\n'
+                "int main() { return answer() == 42 ? 0 : 1; }\n"
+            ),
+        }),
+        "Makefile",
+        [{"role": "replay", "target": "mixed", "executable": "mixed"}],
+        None,
+        [],
+        [],
+        ["src/*.c", "src/*.cpp", "Makefile"],
+        toolchains={
+            "c": {"compiler": "gcc", "flags": ["-O1", "-DC_BUILD"]},
+            "cxx": {"compiler": "g++", "flags": ["-O2", "-std=c++17"]},
+        },
+        harness_dir=HARNESS,
+    )
+
+    assert result.ok is True
+    assert result.languages_compiled == ["c", "cxx"]
+    assert result.flags_reached_every_compile is True
+    assert {record["language"] for record in result.compiles if record["inputs"]} == {
+        "c", "cxx",
+    }
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="build needs a C compiler")
+def test_a_declared_language_that_never_compiles_fails_closed(attempt):
+    result = stages.build(
+        attempt,
+        tree_of({
+            "Makefile": "mixed: src/main.c\n\t$(CC) $(CFLAGS) src/main.c -o mixed\n",
+            "src/main.c": "int main(void) { return 0; }\n",
+        }),
+        "Makefile",
+        [{"role": "replay", "target": "mixed", "executable": "mixed"}],
+        None,
+        [],
+        [],
+        ["src/*.c", "src/*.cpp", "Makefile"],
+        toolchains={
+            "c": {"compiler": "gcc", "flags": ["-O1"]},
+            "cxx": {"compiler": "g++", "flags": ["-O1"]},
+        },
+        harness_dir=HARNESS,
+    )
+
+    assert result.ok is False
+    assert "cxx" in result.log_tail
+
+
+def test_configured_compiler_descendants_are_not_counted_as_direct_build_entries(tmp_path):
+    compiler = shutil.which("python3")
+    source = tmp_path / "kernel.cu"
+    source.write_text("// source\n")
+    observed, audit, problem = stage_build._observed_compiler_log(
+        {
+            "ok": True,
+            "initial_cwd": str(tmp_path),
+            "executions": [
+                {"path": "/usr/bin/make", "argv": ["make"], "pid": 1, "ppid": None},
+                {"path": compiler, "argv": ["nvcc", "kernel.cu"], "cwd": str(tmp_path), "pid": 2, "ppid": 1},
+                {"path": compiler, "argv": ["ptxas", "generated.ptx"], "cwd": str(tmp_path), "pid": 3, "ppid": 2},
+            ],
+        },
+        None,
+        str(tmp_path),
+        toolchains={
+            "cuda": {"compiler": compiler, "flags": []},
+            "ptx": {"compiler": compiler, "flags": []},
+        },
+    )
+
+    assert problem is None
+    assert len(observed.splitlines()) == 1
+    assert audit["compiler_invocations"] == 1
+
+
+def test_an_unparseable_configured_compiler_execution_fails_closed(tmp_path):
+    compiler = shutil.which("python3")
+    observed, audit, problem = stage_build._observed_compiler_log(
+        {
+            "ok": True,
+            "initial_cwd": str(tmp_path),
+            "executions": [{
+                "path": compiler, "argv": None, "pid": 2, "ppid": 1,
+                "audit_error": "execve arguments could not be audited",
+            }],
+        },
+        None,
+        str(tmp_path),
+        toolchains={"c": {"compiler": compiler, "flags": []}},
+    )
+
+    assert observed == ""
+    assert audit == {}
+    assert "could not be audited" in problem
+
+
 @needs_gfortran
 def test_a_compile_error_is_a_failed_build_carrying_the_compiler_log(attempt):
     result = build(attempt, {
@@ -318,6 +434,31 @@ def test_run_reports_the_executable_the_manifest_named_when_it_is_missing(attemp
 
     assert result.ok is False
     assert "some_other_binary" in result.log_tail
+
+
+def test_explicit_profile_collects_kernels_when_notification_is_absent(attempt, monkeypatch):
+    tree = Path(attempt.tree_dir)
+    tree.mkdir(parents=True)
+    replay = tree / "replay"
+    replay.write_text("#!/bin/sh\nexit 0\n")
+    replay.chmod(0o755)
+    observed = {}
+
+    def execute(cmd, **options):
+        observed.update(options)
+        return executor.JobResult(0, "", "", {
+            "ok": True, "kernels_launched": 2, "kernel_names": ["mixed_kernel"],
+        })
+
+    monkeypatch.setattr(attempt, "execute", execute)
+    result = stages.run(
+        attempt, "replay", {"case0000": {}}, notify=None, profile=True,
+    )
+
+    assert observed["mode"] == "profiled"
+    assert result.ok is True
+    assert result.kernels_launched == 2
+    assert result.profiler == "nsys/CUPTI_ACTIVITY_KIND_KERNEL"
 
 
 TIMER = """program timer

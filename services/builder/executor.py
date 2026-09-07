@@ -17,6 +17,10 @@ import uuid
 from dataclasses import dataclass
 
 
+DISPOSABLE_LABEL = "skateboard.disposable-job"
+WORK_VOLUME_LABEL = "skateboard.work-volume"
+
+
 class IsolationUnavailable(RuntimeError):
     """The configured hard isolation boundary cannot be established."""
 
@@ -198,7 +202,8 @@ class DockerJobExecutor:
             "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=1g,mode=1777",
             "--mount", f"type=volume,src={self.volume},dst=/run/evidence,volume-subpath=.evidence/{evidence_name}",
             "--workdir", job_cwd,
-            "--label", "skateboard.disposable-job=true",
+            "--label", f"{DISPOSABLE_LABEL}=true",
+            "--label", f"{WORK_VOLUME_LABEL}={self.volume}",
         ]
         for relative in mounts:
             option = (

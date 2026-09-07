@@ -24,7 +24,10 @@ TOKEN = os.environ.get("SKATEBOARD_TOKEN", "")
 # present or absent, never installed on demand: the image is what it is,
 # and the gateway refuses to start against a builder that is missing
 # something a strategy needs.
-TOOLS = ("nvfortran", "compute-sanitizer", "nsys", "make", "cmake", "fpm", "gfortran")
+TOOLS = (
+    "nvfortran", "nvc", "nvc++", "nvcc", "ptxas", "gcc", "g++", "gfortran",
+    "compute-sanitizer", "nsys", "make", "cmake", "fpm",
+)
 
 # The importable modules a strategy may ask for, spelled `python:<module>`
 # in its `required_tools`. They are reported separately from TOOLS because
@@ -48,21 +51,32 @@ def _workspace(attempt_id: str):
 @app.post("/v1/build", response_model=contract.BuildResponse)
 def build(req: contract.BuildRequest, authorization: str | None = Header(default=None)):
     _auth(authorization)
-    return stages.build(
-        _workspace(req.attempt_id), tree=[f.model_dump() for f in req.tree],
-        makefile=req.makefile, targets=[t.model_dump() for t in req.targets],
-        compiler=req.compiler, flags=req.flags, link_flags=req.link_flags,
-        source_patterns=req.source_patterns,
-    )
+    fields = {
+        "tree": [f.model_dump() for f in req.tree],
+        "makefile": req.makefile,
+        "targets": [t.model_dump(exclude_defaults=True) for t in req.targets],
+        "compiler": req.compiler,
+        "flags": req.flags,
+        "link_flags": req.link_flags,
+        "source_patterns": req.source_patterns,
+    }
+    if req.toolchains is not None:
+        fields["toolchains"] = {
+            name: spec.model_dump() for name, spec in req.toolchains.items()
+        }
+    return stages.build(_workspace(req.attempt_id), **fields)
 
 
 @app.post("/v1/run", response_model=contract.RunResponse)
 def run(req: contract.RunRequest, authorization: str | None = Header(default=None)):
     _auth(authorization)
-    return stages.run(
-        _workspace(req.attempt_id), executable=req.executable, cases=req.cases,
-        notify=req.notify, mandatory=req.mandatory,
-    )
+    fields = {
+        "executable": req.executable, "cases": req.cases,
+        "notify": req.notify, "mandatory": req.mandatory,
+    }
+    if req.profile is not None:
+        fields["profile"] = req.profile
+    return stages.run(_workspace(req.attempt_id), **fields)
 
 
 @app.post("/v1/capture", response_model=contract.CaptureResponse)

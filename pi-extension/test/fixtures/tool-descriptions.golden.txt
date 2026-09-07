@@ -17,3 +17,5 @@ program_regression: Runs 'program_regression' via builder:/v1/time. Records: pro
 time_port: Runs 'time_port' via builder:/v1/time. Records: timing/port. Requires: program/regression = pass for the submitted tree. Optional settings: repeats (integer) -- How many timed runs to make. Five when left out.
 
 time_baseline: Runs 'time_baseline' via builder:/v1/time. Records: timing/baseline. Optional settings: repeats (integer) -- How many timed runs to make. Five when left out.
+
+performance_check: Runs 'performance_check' via gateway:performance. Records: performance/speedup. Requires: timing/port = pass for the submitted tree; timing/baseline = pass for the pristine baseline.

@@ -91,7 +91,7 @@ def _run(client, cfg, action):
 GATES = (
     "sese_check", "build_replay", "run_replay", "sanitize",
     "regression_visible", "property_check", "regression_holdout", "time_baseline",
-    "program_regression", "time_port",
+    "program_regression", "time_port", "performance_check",
 )
 
 
@@ -119,6 +119,15 @@ def test_a_check_is_never_reached_without_the_claims_its_row_requires(tmp_path):
 
 def test_full_pipeline_reaches_acceptance(tmp_path):
     client, cfg, store, builder, oracle = _client(tmp_path)
+
+    def measured_speedup(request):
+        # The performance gate compares the baseline build with the port;
+        # every other timing check remains on the port's faster samples.
+        runs = [0.30] * request["repeats"] if "baseline" in request["attempt_id"] \
+            else [0.20] * request["repeats"]
+        return timed(request, runs_s=runs)
+
+    builder.answers["time"] = measured_speedup
 
     working = cfg.working_copy_dir
     (working / "notes" / "regions").mkdir(parents=True)
@@ -183,6 +192,27 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
     port_claim = next(c for c in store.all_claims() if c.predicateType == "timing/port")
     assert build_claim.predicate.detail["flags"] == expected_flags
     assert port_claim.predicate.detail["flags"] == expected_flags
+    performance_claim = next(c for c in store.all_claims() if c.predicateType == "performance/speedup")
+    assert performance_claim.predicate.verdict == "pass"
+    assert {material.kind for material in performance_claim.materials} >= {"timing_claim"}
+
+    # Timing observations are inputs to a speedup verdict, not merely
+    # preconditions. Re-measuring either side retires the old comparison
+    # until the performance action compares the new pair.
+    _run(client, cfg, "time_baseline")
+    stale = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+    speedup = next(row for row in stale["rows"] if row["predicateType"] == "performance/speedup")
+    assert stale["accepted"] is False
+    assert speedup["status"] == "missing"
+    assert speedup["evidence_status"] == "stale"
+
+    assert _run(client, cfg, "performance_check")["verdict"] == "pass"
+    _run(client, cfg, "time_port")
+    stale = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+    assert stale["accepted"] is False
+    assert next(row for row in stale["rows"] if row["predicateType"] == "performance/speedup")[
+        "evidence_status"
+    ] == "stale"
 
 
 def test_sanitize_dispatch_writes_three_claims_and_is_a_duplicate_on_repeat(tmp_path):

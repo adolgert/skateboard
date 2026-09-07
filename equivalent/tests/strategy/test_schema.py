@@ -53,6 +53,42 @@ def test_every_strategy_requires_its_own_compiler(name):
     assert strategy.languages["fortran"].compiler in strategy.required_tools
 
 
+def test_all_supported_build_languages_load_with_independent_flags(tmp_path):
+    d = _base_dict()
+    d["languages"] = {
+        "fortran": {"compiler": "nvfortran", "flags": ["-O2"]},
+        "c": {"compiler": "gcc", "flags": ["-O1"]},
+        "cxx": {"compiler": "g++", "flags": ["-O3"]},
+        "cuda": {"compiler": "nvcc", "flags": ["-arch=sm_89"]},
+        "ptx": {"compiler": "ptxas", "flags": ["-arch=sm_89"]},
+    }
+    d["required_tools"] = ["nvfortran", "gcc", "g++", "nvcc", "ptxas"]
+    path = tmp_path / "mixed.yaml"
+    path.write_text(yaml.safe_dump(d))
+
+    strategy = load_strategy(path)
+
+    assert set(strategy.languages) == {"fortran", "c", "cxx", "cuda", "ptx"}
+    assert strategy.languages["cuda"].flags == ("-arch=sm_89",)
+
+
+def test_unknown_language_and_missing_language_compiler_are_refused(tmp_path):
+    unknown = _base_dict()
+    unknown["languages"] = {"hip": {"compiler": "hipcc", "flags": []}}
+    unknown["required_tools"] = ["hipcc"]
+    unknown_path = tmp_path / "unknown.yaml"
+    unknown_path.write_text(yaml.safe_dump(unknown))
+    with pytest.raises(ValueError, match="unsupported language"):
+        load_strategy(unknown_path)
+
+    missing = _base_dict()
+    missing["languages"]["c"] = {"compiler": "gcc", "flags": []}
+    missing_path = tmp_path / "missing.yaml"
+    missing_path.write_text(yaml.safe_dump(missing))
+    with pytest.raises(ValueError, match="gcc"):
+        load_strategy(missing_path)
+
+
 @pytest.mark.parametrize("name", sorted(STRATEGY_FILES))
 def test_a_strategy_that_runs_sanitizers_requires_the_sanitizer(name):
     strategy = load_strategy(STRATEGY_FILES[name])

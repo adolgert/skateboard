@@ -200,7 +200,7 @@ def write_tree(tree_dir, tree) -> str:
     return tree_dir
 
 
-def build_env(compiler, flags, link_flags, log_path, harness_dir) -> dict:
+def build_env(compiler, flags, link_flags, log_path, harness_dir, *, toolchains=None) -> dict:
     """The environment a submitted makefile is run in, wherever it is run.
 
     The compiler it is handed is the logging shim, not the strategy's
@@ -210,18 +210,27 @@ def build_env(compiler, flags, link_flags, log_path, harness_dir) -> dict:
     stage builds its mutants with this same environment, because a mutant
     built some other way would say nothing about the build a port faces.
     """
+    configured = compile_log.normalize_toolchains(
+        toolchains, compiler=compiler, flags=flags,
+    )
     env = {
         **os.environ,
-        "FC": os.path.join(harness_dir, "fc-shim"),
-        "FC_REAL": compiler,
         "FC_LOG": log_path,
-        "FFLAGS": " ".join(flags),
         "LDFLAGS": " ".join(link_flags),
         "HARNESS": harness_dir,
     }
-    module_flag = compile_log.module_flag(compiler)
-    if module_flag is not None:
-        env["MODFLAG"] = module_flag
+    shim = os.path.join(harness_dir, "fc-shim")
+    for language, specification in configured.items():
+        compiler_var, flags_var = compile_log.compiler_environment(language)
+        env[compiler_var] = f"{shim} --skateboard-language={language}"
+        env[flags_var] = " ".join(specification["flags"])
+        env[f"SKATEBOARD_{language.upper()}_COMPILER"] = specification["compiler"]
+        if language == "fortran":
+            # The unmarked variables keep old direct fc-shim callers working.
+            env["FC_REAL"] = specification["compiler"]
+            module_flag = compile_log.module_flag(specification["compiler"])
+            if module_flag is not None:
+                env["MODFLAG"] = module_flag
     return env
 
 
@@ -286,14 +295,25 @@ class Workspace:
         A measured run is given a copy rather than the tree itself, so
         ordinary relative input, config and scratch files work and
         nothing the run writes can reach the binary being measured or
-        the next repetition. Every policy copies; what a deployment adds
-        is that the tree it copies from is frozen and root-owned.
+        the next repetition. Declared runtime companions are removed from
+        the writable copy: programs load them relative to the frozen measured
+        executable, so there is no second mutable copy to load by accident.
+        Every policy copies; what a deployment adds is that the tree it copies
+        from is frozen and root-owned.
         """
         run_dir = self.path("timing", str(label))
         shutil.rmtree(run_dir, ignore_errors=True)
         shutil.copytree(self.tree_dir, run_dir, symlinks=True)
         self.prepare_job_files()
         self.writable_copy(run_dir)
+        if self.policy.records_artifacts:
+            record = self.artifact_identities()
+            for relative, identity in record.executables.items():
+                if identity.get("kind") == "executable":
+                    continue
+                copied = path_inside(run_dir, relative)
+                if copied is not None and os.path.isfile(copied):
+                    os.unlink(copied)
         return run_dir
 
     @property
@@ -306,7 +326,9 @@ class Workspace:
         """
         return self.policy.audited
 
-    def build_env(self, compiler, flags, link_flags, log_path, harness_dir) -> dict:
+    def build_env(
+        self, compiler, flags, link_flags, log_path, harness_dir, *, toolchains=None,
+    ) -> dict:
         """The environment a submitted makefile is built in under this policy.
 
         Where the protected observer records the compiler itself, make is
@@ -314,9 +336,17 @@ class Workspace:
         the kernel saw, and the agent-writable shim log is no longer a
         trust root. Where there is no observer, the shim is the witness.
         """
-        env = build_env(compiler, flags, link_flags, log_path, harness_dir)
+        configured = compile_log.normalize_toolchains(
+            toolchains, compiler=compiler, flags=flags,
+        )
+        env = build_env(
+            compiler, flags, link_flags, log_path, harness_dir,
+            toolchains=toolchains,
+        )
         if self.policy.audited:
-            env["FC"] = compiler
+            for language, specification in configured.items():
+                compiler_var, _ = compile_log.compiler_environment(language)
+                env[compiler_var] = specification["compiler"]
         return env
 
     # ------------------------------------------------------------ identity
@@ -333,15 +363,40 @@ class Workspace:
         )
 
     def write_artifacts(self, targets) -> dict:
-        """Record what the build produced, where only the supervisor can write it."""
+        """Record every target artifact, where only the supervisor can write it.
+
+        The historical sidecar calls its table ``executables``. Keep that
+        spelling on disk and over HTTP, while allowing it to hold the shared
+        libraries and GPU modules an executable requires at runtime.
+        """
         records = {}
         for target in targets:
-            path = self.in_tree(target["executable"])
-            if path is None or not os.path.isfile(path) or os.path.islink(path):
-                continue
-            records[target["executable"]] = {
-                **self.identity_of(path), "role": target["role"],
-            }
+            declared = [
+                {"path": target["executable"], "kind": "executable"},
+                *target.get("runtime_artifacts", []),
+            ]
+            for artifact in declared:
+                relative = artifact.get("path")
+                path = self.in_tree(relative)
+                if path is None or not os.path.isfile(path) or os.path.islink(path):
+                    continue
+                identity = {
+                    **self.identity_of(path), "role": target["role"],
+                    "kind": artifact.get("kind"),
+                }
+                previous = records.get(relative)
+                if previous is not None and (
+                    previous.get("sha256") != identity["sha256"]
+                    or previous.get("size") != identity["size"]
+                    or previous.get("kind") != identity["kind"]
+                ):
+                    raise ValueError(f"conflicting artifact declaration for {relative!r}")
+                roles = set((previous or {}).get("roles", ()))
+                roles.add(target["role"])
+                identity["roles"] = sorted(roles)
+                if previous is not None:
+                    identity["role"] = previous.get("role", identity["role"])
+                records[relative] = identity
         destination = self.artifact_file
         os.makedirs(os.path.dirname(destination), mode=0o700, exist_ok=True)
         execution = self.policy.identity()
@@ -393,6 +448,18 @@ class Workspace:
         identity = record.executables.get(relative)
         if not identity or not identity.get("verified"):
             return None, None
+        # Old sidecars predate artifact kinds and contain executables only.
+        # A current sidecar must never let a companion path be selected as
+        # the program an execution stage launches.
+        if identity.get("kind", "executable") != "executable":
+            return None, None
+        role = identity.get("role")
+        if role is not None and any(
+            not artifact.get("verified")
+            for artifact in record.executables.values()
+            if role in artifact.get("roles", (artifact.get("role"),))
+        ):
+            return None, None
         answer = {k: identity[k] for k in ("sha256", "size", "role") if k in identity}
         answer["executor_identity"] = record.executor_identity
         return path, answer
@@ -421,11 +488,50 @@ class Workspace:
             for name in files:
                 os.chown(os.path.join(root, name), JOB_UID, JOB_UID, follow_symlinks=False)
 
+    def prepare_writable_job_subtree(self, path) -> None:
+        """Give one disposable worker's private subtree to the job uid.
+
+        Mutation workers run concurrently below ``mutants/``.  Preparing the
+        whole attempt from one worker would race with sibling creation and
+        cleanup, and would expose those siblings through a shared mount.  This
+        operation accepts only one existing, non-symlink directory outside the
+        frozen source tree and never walks above or beside it.
+        """
+        if not self.policy.owns_files:
+            return
+        subtree = os.path.abspath(str(path))
+        root = os.path.abspath(self.root)
+        tree = os.path.abspath(self.tree_dir)
+        if (
+            subtree == root or not subtree.startswith(root + os.sep)
+            or subtree == tree or subtree.startswith(tree + os.sep)
+            or os.path.islink(subtree) or not os.path.isdir(subtree)
+        ):
+            raise ValueError("writable job subtree must be an existing private attempt directory")
+        for current, directories, files in os.walk(subtree):
+            os.chown(current, JOB_UID, JOB_UID, follow_symlinks=False)
+            os.chmod(current, 0o755)
+            for name in directories:
+                child = os.path.join(current, name)
+                os.chown(child, JOB_UID, JOB_UID, follow_symlinks=False)
+                if not os.path.islink(child):
+                    os.chmod(child, 0o755)
+            for name in files:
+                child = os.path.join(current, name)
+                os.chown(child, JOB_UID, JOB_UID, follow_symlinks=False)
+                if not os.path.islink(child):
+                    mode = os.stat(child).st_mode
+                    os.chmod(child, 0o755 if mode & 0o111 else 0o644)
+
     def freeze_tree(self, identities) -> None:
         """After build, submitted jobs can read code and execute bound binaries only."""
         if not self.policy.owns_files:
             return
-        executables = {os.path.normpath(name) for name in identities}
+        executables = {
+            os.path.normpath(name)
+            for name, identity in identities.items()
+            if identity.get("kind", "executable") == "executable"
+        }
         for root, directories, files in os.walk(self.tree_dir):
             os.chown(root, 0, 0, follow_symlinks=False)
             os.chmod(root, 0o555)

@@ -1,0 +1,9 @@
+region: potential:solve
+files: [src/potential.f90]
+anchor:
+  file: src/potential.f90
+  pst_node: potential@5-12
+  entry_symbol: potential
+closure:
+  callees:
+    - {name: point_potential, file: src/potential.f90, lines: '13-25'}

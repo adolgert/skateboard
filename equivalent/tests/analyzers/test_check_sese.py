@@ -13,6 +13,44 @@ import pytest
 
 MODULE = "equivalent.analyzers.check_sese"
 
+
+def test_foreign_source_requires_explicit_opaque_declaration(tmp_path):
+    import yaml
+    from equivalent.analyzers.check_sese import analyze
+    _write_source(tmp_path, 'src/mod_kernel.f90', CLEAN_SOURCE)
+    _write_source(tmp_path, 'src/kernel.cu', 'extern "C" void kernel() {}\n')
+    spec = yaml.safe_load(ONE_FILE_SPEC.format(hi=6))
+    spec['files'].append('src/kernel.cu')
+    path = _write_spec(tmp_path, yaml.safe_dump(spec))
+    assert analyze(path, tmp_path)['verdict'] == 'fail'
+    spec['opaque_sources'] = ['src/kernel.cu']
+    path.write_text(yaml.safe_dump(spec))
+    result = analyze(path, tmp_path)
+    assert result['verdict'] == 'pass'
+    assert any('were not analyzed' in n['note'] for n in result['notes'])
+    (tmp_path / 'src/kernel.cu').unlink()
+    # Bootstrap submits only the spec: it must admit a declared future path
+    # without asserting that foreign code has already been scanned or built.
+    result = analyze(path, tmp_path)
+    assert result['verdict'] == 'pass'
+    assert result['notes'][0]['present'] is False
+    (tmp_path / 'src/kernel.cu').symlink_to('mod_kernel.f90')
+    assert analyze(path, tmp_path)['verdict'] == 'fail'
+
+
+def test_foreign_source_cannot_pose_as_scanned_callee(tmp_path):
+    import yaml
+    from equivalent.analyzers.check_sese import analyze
+    _write_source(tmp_path, 'src/mod_kernel.f90', CLEAN_SOURCE)
+    _write_source(tmp_path, 'src/kernel.cpp', CLEAN_SOURCE)
+    spec = yaml.safe_load(ONE_FILE_SPEC.format(hi=6))
+    spec.update(files=['src/mod_kernel.f90', 'src/kernel.cpp'],
+                opaque_sources=['src/kernel.cpp'],
+                closure={'callees': [{'name': 'step', 'file': 'src/kernel.cpp', 'lines': '3-6'}]})
+    result = analyze(_write_spec(tmp_path, yaml.safe_dump(spec)), tmp_path)
+    assert result['verdict'] == 'fail'
+    assert any('cannot be claimed' in v['reason'] for v in result['violations'])
+
 CLEAN_SOURCE = """\
 module mod_kernel
 contains

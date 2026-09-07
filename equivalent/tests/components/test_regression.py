@@ -49,6 +49,7 @@ def test_holdout_fetches_inputs_from_the_oracle_and_runs_them_through_the_builde
     regression.check_holdout(_porting(harness), {})
 
     assert list(harness.builder.run_calls[0]["cases"]) == ["hcase0"]
+    assert harness.builder.run_calls[0]["profile"] is True
     assert harness.oracle.compare_calls[0]["dataset"] == "holdout"
 
 

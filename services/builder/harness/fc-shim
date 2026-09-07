@@ -13,9 +13,16 @@
 # It logs and then hands over: nothing here alters the arguments, so what
 # the log records is exactly what the compiler received.
 #
-#   FC_REAL  the compiler the strategy names (required)
+#   FC_REAL  legacy Fortran compiler name
+#   SKATEBOARD_<LANGUAGE>_COMPILER  compiler named by a mixed toolchain
 #   FC_LOG   the file to append one JSON line per invocation to
 set -euo pipefail
+
+language=fortran
+if [[ "${1:-}" == --skateboard-language=* ]]; then
+  language="${1#--skateboard-language=}"
+  shift
+fi
 
 if [ -n "${FC_LOG:-}" ]; then
   # python3 rather than printf: the arguments hold commas, equals signs,
@@ -23,8 +30,19 @@ if [ -n "${FC_LOG:-}" ]; then
   FC_SHIM_LOG="$FC_LOG" python3 -c '
 import json, os, sys
 with open(os.environ["FC_SHIM_LOG"], "a") as log:
-    log.write(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd()}) + "\n")
-' "$@"
+    log.write(json.dumps({
+        "argv": sys.argv[2:], "cwd": os.getcwd(), "language": sys.argv[1],
+    }) + "\n")
+' "$language" "$@"
 fi
 
-exec "${FC_REAL:?FC_REAL is not set; the builder must name the compiler to run}" "$@"
+compiler_var="SKATEBOARD_${language^^}_COMPILER"
+compiler="${!compiler_var:-}"
+if [ -z "$compiler" ] && [ "$language" = fortran ]; then
+  compiler="${FC_REAL:-}"
+fi
+if [ -z "$compiler" ]; then
+  echo "fc-shim: no compiler configured for language '$language'" >&2
+  exit 64
+fi
+exec "$compiler" "$@"

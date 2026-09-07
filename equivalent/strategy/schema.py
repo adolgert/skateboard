@@ -25,6 +25,7 @@ REQUIRED_DEVICE_PROOF_FIELDS = ("notify", "mandatory")
 # There is no third choice: a value outside this pair would leave the
 # component guessing what was meant.
 SANITIZE_CASE_CHOICES = ("first", "all")
+SUPPORTED_LANGUAGES = ("fortran", "c", "cxx", "cuda", "ptx")
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,12 @@ def load_strategy(path) -> Strategy:
         raise ValueError(
             f"{where} languages is {languages_raw!r}; it must name at least one language"
         )
+    unknown_languages = sorted(set(languages_raw) - set(SUPPORTED_LANGUAGES))
+    if unknown_languages:
+        raise ValueError(
+            f"{where} names unsupported language(s) {unknown_languages}; "
+            f"supported languages are {list(SUPPORTED_LANGUAGES)}"
+        )
     languages = {
         lang: Language.from_dict(spec, f"{where} language '{lang}'")
         for lang, spec in languages_raw.items()
@@ -142,13 +149,24 @@ def load_strategy(path) -> Strategy:
             f"it must be one of {list(SANITIZE_CASE_CHOICES)}"
         )
 
+    required_tools = _string_list(d["required_tools"], f"{where} required_tools")
+    missing_compilers = sorted({
+        language.compiler for language in languages.values()
+        if language.compiler not in required_tools
+    })
+    if missing_compilers:
+        raise ValueError(
+            f"{where} required_tools does not include language compiler(s) "
+            f"{missing_compilers}"
+        )
+
     return Strategy(
         name=_text(d["name"], f"{where} name"),
         version=d["version"],
         allow_globs=_string_list(d["allow_globs"], f"{where} allow_globs"),
         languages=languages,
         link_flags=_string_list(d["link_flags"], f"{where} link_flags"),
-        required_tools=_string_list(d["required_tools"], f"{where} required_tools"),
+        required_tools=required_tools,
         device_proof=DeviceProof.from_dict(d["device_proof"], f"{where} device_proof"),
         sanitizers=_string_list(d["sanitizers"], f"{where} sanitizers"),
         sanitize_cases=d["sanitize_cases"],

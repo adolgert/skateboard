@@ -31,6 +31,9 @@ FOUNDATION_PREDICATES = {
 NO_CURRENT_BUILD = Subject(
     kind="binary", sha256=hash_bytes(b"equivalent:no-current-build:v1"),
 )
+NO_CURRENT_TIMING_CLAIMS = Subject(
+    kind="timing_claim", sha256=hash_bytes(b"equivalent:no-current-timing-claims:v1"),
+)
 
 
 def claim_matches_context(claim, required_materials=()) -> bool:
@@ -73,8 +76,61 @@ def dependent_materials(core_materials=(), cohort=()) -> tuple[Subject, ...]:
     return (*core_materials, *(cohort or (NO_CURRENT_BUILD,)))
 
 
+def timing_claim_material(claim) -> Subject:
+    """A formal reference to the exact timing observation a verdict compares.
+
+    Timing is an observation rather than a stable build property.  A later
+    baseline or port measurement must therefore retire a speedup verdict made
+    against the earlier observation, even when both claims are on unchanged
+    trees and use the same binaries.
+    """
+    return Subject(
+        kind="timing_claim",
+        sha256=hash_bytes(
+            f"equivalent:timing-claim:v1:{claim.predicateType}:{claim.id}".encode("utf-8")
+        ),
+    )
+
+
+def current_timing_claim(store, predicate_type: str, subject: Subject | None, core_materials=()):
+    """The latest current passing timing claim on its known tree, if any.
+
+    A timing/baseline claim is about the pristine baseline tree, not merely
+    any baseline observation in a region ledger.  Callers that cannot name
+    that tree have insufficient source context to select a comparison and
+    must leave performance acceptance unmet.
+    """
+    if subject is None:
+        return None
+    claim = store.latest(predicate_type, subject, required_materials=core_materials)
+    return claim if claim is not None and claim.predicate.verdict == "pass" else None
+
+
+def performance_materials(
+    store, tree: Subject, baseline_tree: Subject | None, core_materials=(),
+    *, port_materials=None,
+):
+    """The current port and baseline observations a speedup verdict rests on.
+
+    Port timing rests on its current build cohort; baseline timing predates
+    that build and rests only on the core deployment context.  Selecting the
+    port claim under the wrong context can make a newer timing observation
+    from a superseded binary permanently prevent a performance verdict.
+    """
+    port = current_timing_claim(
+        store, "timing/port", tree,
+        core_materials if port_materials is None else port_materials,
+    )
+    baseline = current_timing_claim(
+        store, "timing/baseline", baseline_tree, core_materials,
+    )
+    if port is None or baseline is None:
+        return (NO_CURRENT_TIMING_CLAIMS,)
+    return (timing_claim_material(port), timing_claim_material(baseline))
+
+
 def required_materials_by_predicate(
-    store, requirements, phase: str, tree: Subject, core_materials=(),
+    store, requirements, phase: str, tree: Subject, core_materials=(), baseline_tree=None,
 ) -> dict[str, tuple[Subject, ...]]:
     """Material context for each dependent predicate in status/promotion.
 
@@ -87,8 +143,17 @@ def required_materials_by_predicate(
         if build_claim else ()
     )
     dependent = dependent_materials(core_materials, cohort)
-    return {
+    required = {
         requirement.predicate_type: dependent
         for requirement in requirements
         if requirement.predicate_type not in FOUNDATION_PREDICATES
     }
+    if "performance/speedup" in required:
+        required["performance/speedup"] = (
+            *dependent,
+            *performance_materials(
+                store, tree, baseline_tree, core_materials,
+                port_materials=dependent,
+            ),
+        )
+    return required

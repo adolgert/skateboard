@@ -1,0 +1,82 @@
+{
+  "tree": "773d646d4b721e4a1b57e43413d85ed952e2c9bff99e35c45f87aeadecb0a368",
+  "frozen": "e0d4f0c66fc141acbb5f49e54e3ef6401b593d1ec7560c76834912803b9b504a",
+  "phase": "porting",
+  "rows": [
+    {
+      "predicateType": "sese/verified",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0002"
+    },
+    {
+      "predicateType": "build/replay",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0003"
+    },
+    {
+      "predicateType": "gpu/executed",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0004"
+    },
+    {
+      "predicateType": "sanitize/memcheck",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0005"
+    },
+    {
+      "predicateType": "sanitize/racecheck",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0006"
+    },
+    {
+      "predicateType": "sanitize/initcheck",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0007"
+    },
+    {
+      "predicateType": "regression/visible",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0008"
+    },
+    {
+      "predicateType": "regression/holdout",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0010"
+    },
+    {
+      "predicateType": "program/regression",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0012"
+    },
+    {
+      "predicateType": "timing/port",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0013"
+    },
+    {
+      "predicateType": "performance/speedup",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0014"
+    },
+    {
+      "predicateType": "regression/property",
+      "status": "present",
+      "verdict": "pass",
+      "claim_id": "c-0009"
+    }
+  ],
+  "accepted": true,
+  "context_verified": true,
+  "finished_word": "ACCEPTED"
+}

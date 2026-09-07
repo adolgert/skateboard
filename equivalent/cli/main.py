@@ -15,7 +15,10 @@ than in the ledger; without it, `status` reports the tree of the last
 claim that was filed. Passing `--config` (the gateway's own
 configuration file) and `--region-id` instead reads the repository too,
 and then the tree shown here is the same one the gateway's status
-endpoint reports.
+endpoint reports. A configured porting read also identifies the pristine
+baseline tree required to judge a performance verdict. A bare ledger has no
+such source and leaves that verdict unmet rather than choosing a historical
+baseline claim by timestamp.
 
 `session` needs the configuration file for a second reason: the agent's
 own transcripts are written somewhere the ledger directory does not
@@ -41,7 +44,7 @@ from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject, evidence_policy_subject
 from equivalent.promote import PromoteRefused, promote
-from equivalent.region.current import current_tree_and_frozen
+from equivalent.region.current import baseline_tree_subject, current_tree_and_frozen
 from equivalent.region.deployment import load_gateway_config
 from equivalent.region.evidence import evidence_materials_for
 from equivalent.strategy.schema import load_strategy
@@ -126,6 +129,10 @@ class OpenRegion:
     store: LedgerStore
     tree: Subject | None
     frozen: Subject | None
+    # Only a config-backed reader has the repository needed to identify the
+    # pristine baseline that a speedup verdict compares against. A bare
+    # ledger must not guess from unrelated historical baseline claims.
+    baseline_tree: Subject | None
     phase: str
     name: str
     manifest: object | None
@@ -174,7 +181,7 @@ def _open_region(parser: argparse.ArgumentParser, args) -> OpenRegion:
         return OpenRegion(
             store=LedgerStore(args.region_dir), tree=None, frozen=None, phase=PORTING,
             name=Path(args.region_dir).name, manifest=None,
-            materials=(evidence_policy_subject(),),
+            materials=(evidence_policy_subject(),), baseline_tree=None,
         )
 
     _, cfg = _named_region(parser, args.config, args.region_id)
@@ -189,6 +196,7 @@ def _open_region(parser: argparse.ArgumentParser, args) -> OpenRegion:
         store=store,
         tree=Subject(kind="tree", sha256=tree_sha),
         frozen=Subject(kind="frozen", sha256=frozen_sha),
+        baseline_tree=baseline_tree_subject(cfg.repo_dir),
         phase=cfg.phase,
         name=cfg.region_id,
         manifest=cfg.manifest,
@@ -278,6 +286,7 @@ def main(argv=None) -> int:
         status = compute_status(
             region.store, requirements, region.phase,
             tree=region.tree, frozen=region.frozen,
+            baseline_tree=region.baseline_tree,
             required_materials=region.materials,
             # There is no builder here to ask whether the executables the
             # claims name are still in place; the gateway's own status

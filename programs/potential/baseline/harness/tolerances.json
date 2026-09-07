@@ -1,0 +1,9 @@
+{
+  "policy_version": "potential-f32-v1",
+  "calibration": {
+    "note": "Engineering demonstration: fixed before gateway acceptance. Preliminary nvfortran CPU/GPU runs of 32768 points and 30 solves differed by at most 1.08e-4; handwritten PTX differed from CPU by 9.11e-5. The whole-program absolute floor provides margin for accumulated single-precision rounding. These observations are not scientific validation.",
+    "whole_program_observed_abs": 0.000108
+  },
+  "variables": {"phi": {"abs": 1e-4, "rel": 1e-4, "ulp": 16}},
+  "files": {"phi.npy": {"abs": 5e-4, "rel": 1e-4, "ulp": 16}}
+}

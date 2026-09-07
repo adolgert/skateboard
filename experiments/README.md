@@ -1,6 +1,13 @@
 # Experiments
 
-Results from running the skateboard harness across configurations. Each CSV is a
+The [7 September 2026 GPU demonstration](potential-gpu-2026-09-07/README.md)
+contains current-policy gateway ledgers for fresh-application onboarding and
+accepted NVIDIA Fortran, CUDA C++, and PTX ports, with an explicit speedup gate
+and an external-module tampering check.
+
+## Historical CSV campaigns
+
+Results below come from earlier harness configurations. Each CSV is a
 copy of the ledger for one campaign, written by the first demonstration harness
 -- the batch orchestrator the gateway path has since replaced. The rungs, gates
 and speedups below are that harness's; the gate names and the ledger's shape

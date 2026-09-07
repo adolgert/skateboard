@@ -5,6 +5,10 @@ checks, a protected comparison oracle, and an append-only evidence ledger.
 It is ready for a supervised pilot after qualifying the target deployment;
 passing its gates does not establish scientific validity or test completeness.
 
+The [complete GPU demonstration](experiments/potential-gpu-2026-09-07/README.md)
+onboards a fresh application and accepts NVIDIA Fortran, CUDA C++, and PTX
+implementations on an RTX 4000 Ada, with measured speedups and retained evidence.
+
 The agent works in a container with the compilers and the GPU, and nothing it
 does there is evidence. To make progress it submits its edit to the **gateway**,
 the one service it can reach. The gateway holds its own copy of the code, runs
@@ -26,6 +30,9 @@ each of those has a check that says whether it is right.
   current instructions from historical experiments and research plans.
 - **[`docs/code-map.md`](docs/code-map.md)** — where to change workflow policy,
   checks, gateway orchestration, and builder execution.
+- **[`programs/potential/README.md`](programs/potential/README.md)** — a fresh
+  application and reproducible GPU workflow with Fortran, CUDA C++, and PTX
+  implementations, including a required measured speedup.
 - **[`docs/pi-install.md`](docs/pi-install.md)** — from a fresh checkout to a
   running stack and a session.
 - **[`docs/pi-users-manual.md`](docs/pi-users-manual.md)** — what a porting

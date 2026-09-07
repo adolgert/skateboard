@@ -73,6 +73,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         ctx.builder, ctx.provenance.attempt_id(), replay.executable, visible_cases,
         notify=ctx.strategy.device_proof.notify,
         mandatory=ctx.strategy.device_proof.mandatory,
+        profile=True,
     )
 
     measured = {EXECUTABLE_IDENTITY_KEY: resp.executable_identity}
@@ -95,8 +96,8 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
 
     kernels = resp.kernels_launched
     if kernels <= 0:
-        hint = ("code compiled but no GPU kernel launched; loops must be do concurrent / "
-                "omp target for nvfortran to offload them")
+        hint = ("code compiled but no GPU kernel launched; the selected GPU toolchain "
+                "must execute device work during replay")
         return failed(
             {**measured, "kernels_launched": 0, "hint": hint}, [hint],
             binary_artifacts=artifacts,

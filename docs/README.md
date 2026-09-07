@@ -1,6 +1,6 @@
 # Documentation guide
 
-Documentation reviewed against the implementation on 2026-09-06.
+Documentation updated for the GPU workflow and mixed-language evidence on 2026-09-07.
 
 ## Current guidance
 
@@ -14,11 +14,17 @@ Documentation reviewed against the implementation on 2026-09-06.
 | [Deployment README](../deploy/README.md) | Containers, scripts, isolation, and machine qualification |
 | [Architecture](architecture.pdf) ([source](architecture.tex)) | Current service and evidence architecture, with proposed extensions distinguished |
 | [Code map](code-map.md) | Implementation owners, shared workflow definitions, and how to add a check |
+| [Mixed-language builds](mixed-language.md) | Compiler evidence, foreign source review and runtime module identity |
+| [Charged-cloud GPU demonstration](../programs/potential/README.md) | Reproduce onboarding and GPU acceptance with Fortran, CUDA C++ and PTX |
+| [Recorded GPU results](../experiments/potential-gpu-2026-09-07/README.md) | Actual hardware qualification, accepted ports, timings, rejected attempts, and runtime-module fault injection |
 | [Original-reference example](examples/original-reference.yaml) | A reviewed contract for comparing an onboarded program with its preserved original |
 
 The [2026-09-06 qualification record](builder-qualification-2026-09-06.md)
 identifies a tested CPU deployment image. It reports GPU qualification as
 unavailable; it does not qualify another machine or another image.
+The [2026-09-07 GPU record](../experiments/potential-gpu-2026-09-07/README.md)
+qualifies its recorded images on an RTX 4000 Ada and completes all three porting
+variants. Its claims remain specific to those inputs and deployment identities.
 
 ## Historical records and research
 

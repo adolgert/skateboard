@@ -157,6 +157,13 @@ and use it as final confirmation. Repeated pass/fail queries still permit
 adaptive learning; this implementation does not enforce a statistical holdout
 query budget.
 
+Choose `timing.performance.min_median_speedup` during onboarding (default 1.10)
+and review the fixed workload and CPU thread count. Acceptance now requires
+that speedup over at least five baseline and five port samples. The timer
+includes Docker job overhead; see the [evidence contract](evidence-contract.md).
+For foreign implementations, review the [mixed-language contract](mixed-language.md),
+including explicit opaque-source paths and runtime-artifact declarations.
+
 ## 5. Record what the pilot established
 
 Keep a short qualification record with the code revision, reviewer, compiler
@@ -181,3 +188,9 @@ The repository's CPU integration fixture exercises two odd rectangular grids
 of a third Fortran code and catches a deliberately wrong grid spacing. That
 is a regression experiment for the onboarding contract, not evidence that an
 unseen application or a target GPU deployment has been qualified.
+
+The [recorded GPU pilot](../experiments/potential-gpu-2026-09-07/README.md)
+demonstrates the complete gateway workflow on a fresh charged-cloud application
+with Fortran, CUDA C++, and PTX implementations. It retains its measurements,
+source snapshots, qualification, rejected attempts, and unresolved mutation
+survivors for review.

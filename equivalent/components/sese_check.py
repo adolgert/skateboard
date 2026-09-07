@@ -96,5 +96,6 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
             "resolved_ranges": analysis.get("resolved_ranges", []),
             "range_count": analysis.get("range_count", 0),
             "total_lines": analysis.get("total_lines", 0),
+            "notes": analysis.get("notes", []),
         },
     )
