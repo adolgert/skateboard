@@ -41,9 +41,9 @@ def test_two_runs_that_agree_pass_and_store_what_the_program_wrote(harness):
     assert result.detail["gpu_exclusive"] is True
     assert result.detail["outputs"] == DECLARED_OUTPUTS
     # The program's own outputs are a capture set of one case, whose
-    # variables are the files the program wrote.
-    program = result.detail["datasets"]["program"]
-    stored = capture_sets.load_capture_set(harness.store, program["capture_set"])
+    # variables are the files the program wrote, named the way a baseline
+    # timing claim names its own.
+    stored = capture_sets.load_capture_set(harness.store, result.detail["program_set"])
     assert sorted(stored) == ["program"]
     assert sorted(stored["program"]["outputs"]) == ["field", "results/flux"]
     assert np.array_equal(stored["program"]["outputs"]["field"], timing_array("field.npy"))

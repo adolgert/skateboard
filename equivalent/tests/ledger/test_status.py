@@ -47,7 +47,7 @@ def test_status_reports_the_newer_tree(tmp_path):
         _claim("c-0002", "2026-01-02T00:00:00Z", "tree", tree_new, "build/replay", "pass"),
     ])
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING, context_verified=True)
     assert status["tree"] == tree_new
 
 
@@ -71,9 +71,27 @@ def test_status_is_accepted_when_every_requirement_passes_on_one_tree(tmp_path):
     store = LedgerStore(tmp_path / "region")
     _write_claims(store, _all_passing_claims(tree, frozen))
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING, context_verified=True)
     assert status["accepted"] is True
+    assert status["context_verified"] is True
+    assert "note" not in status
     assert all(row["status"] == "present" and row["verdict"] == "pass" for row in status["rows"])
+
+
+def test_a_reader_that_cannot_vouch_for_the_executables_is_told_why_it_is_not_accepted(tmp_path):
+    # Every requirement passed, and the reading is still withheld: what
+    # is missing is anyone able to say the executables these claims were
+    # reached against are the ones in place now.
+    tree, frozen = "a" * 64, "b" * 64
+    store = LedgerStore(tmp_path / "region")
+    _write_claims(store, _all_passing_claims(tree, frozen))
+
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING, context_verified=False)
+
+    assert status["accepted"] is False
+    assert status["context_verified"] is False
+    assert "executables" in status["note"]
+    assert all(row["status"] == "present" for row in status["rows"])
 
 
 def test_status_reports_a_removed_claim_as_missing_with_its_producing_action(tmp_path):
@@ -82,7 +100,7 @@ def test_status_reports_a_removed_claim_as_missing_with_its_producing_action(tmp
     claims = [c for c in _all_passing_claims(tree, frozen) if c["predicateType"] != "regression/holdout"]
     _write_claims(store, claims)
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING, context_verified=True)
     assert status["accepted"] is False
     missing = [row for row in status["rows"] if row["status"] == "missing"]
     assert len(missing) == 1
@@ -100,7 +118,7 @@ def test_a_failing_latest_claim_does_not_satisfy_a_requirement(tmp_path):
     claims.append(_claim("c-0099", "2026-01-02T00:00:00Z", "tree", tree, "build/replay", "fail"))
     _write_claims(store, claims)
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING, context_verified=True)
     assert status["accepted"] is False
     row = next(r for r in status["rows"] if r["predicateType"] == "build/replay")
     assert row["status"] == "missing"
@@ -111,7 +129,7 @@ def test_a_failing_latest_claim_does_not_satisfy_a_requirement(tmp_path):
 
 def test_status_on_an_empty_ledger_has_no_tree_and_is_not_accepted(tmp_path):
     store = LedgerStore(tmp_path / "region")
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING, context_verified=True)
     assert status["tree"] is None
     assert status["accepted"] is False
     assert all(row["status"] == "missing" for row in status["rows"])
@@ -128,6 +146,7 @@ def test_legacy_claim_is_reported_stale_and_cannot_satisfy_requirement(tmp_path)
         store,
         [next(r for r in ACCEPTANCE_REQUIREMENTS if r.predicate_type == "build/replay")],
         PORTING,
+        context_verified=True,
     )
 
     assert status["accepted"] is False
@@ -151,6 +170,7 @@ def test_changed_strategy_material_invalidates_an_otherwise_passing_claim(tmp_pa
         PORTING,
         tree=Subject(kind="tree", sha256=tree),
         required_materials=[new_strategy],
+        context_verified=True,
     )
 
     assert status["accepted"] is False
@@ -165,7 +185,7 @@ def test_an_onboarding_region_is_judged_by_the_onboarding_list(tmp_path):
         for i, req in enumerate(ONBOARDING_REQUIREMENTS, start=1)
     ])
 
-    status = compute_status(store, requirements_for(ONBOARDING), ONBOARDING)
+    status = compute_status(store, requirements_for(ONBOARDING), ONBOARDING, context_verified=True)
 
     assert status["phase"] == ONBOARDING
     assert [row["predicateType"] for row in status["rows"]] == [
@@ -185,7 +205,7 @@ def test_the_same_ledger_read_as_a_port_is_missing_everything(tmp_path):
         for i, req in enumerate(ONBOARDING_REQUIREMENTS, start=1)
     ])
 
-    status = compute_status(store, requirements_for(PORTING), PORTING)
+    status = compute_status(store, requirements_for(PORTING), PORTING, context_verified=True)
 
     assert status["phase"] == PORTING
     assert all(row["status"] == "missing" for row in status["rows"])

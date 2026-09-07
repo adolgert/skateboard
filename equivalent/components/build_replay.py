@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from equivalent.manifest.schema import Manifest, source_files
 from equivalent.strategy.schema import Strategy
-from equivalent.tree import attempt_id_for
 
 from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError
@@ -139,16 +138,21 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     builder echoes back every compiler command line it saw, and that is
     what goes into the claim's detail.
 
+    A port is built one way, so the provenance answers with one strategy
+    and the claim's detail is that build's, flat. What each build means is
+    build_verdict's, which the onboarding build asks the same question of.
+
     Raises ComponentError if the builder call itself couldn't be completed
     (not a verdict about the code).
     """
-    if not source_files(ctx.manifest, sorted(ctx.tree.files)):
+    manifest = ctx.provenance.manifest()
+    if not source_files(manifest, sorted(ctx.tree.files)):
         raise ComponentError(
             f"no file in tree {ctx.tree.sha} at ref {ctx.tree.ref} matches the source "
-            f"patterns of code '{ctx.manifest.name}'"
+            f"patterns of code '{manifest.name}'"
         )
-
+    strategy, = ctx.provenance.strategies()
     return build_verdict(
-        ctx.builder, attempt_id_for(ctx.region_id, ctx.tree.sha), ctx.tree.payload(),
-        ctx.strategy, ctx.manifest,
+        ctx.builder, ctx.provenance.attempt_id(strategy), ctx.tree.payload(),
+        strategy, manifest,
     )

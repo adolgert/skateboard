@@ -24,10 +24,11 @@ import base64
 
 from equivalent.capture import npy
 from equivalent.manifest.schema import Manifest
-from equivalent.tree import attempt_id_for
 
+from . import backend
 from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError
+from .names import REPLAY_ROLE
 
 
 def _output_problems(manifest: Manifest, outputs: dict) -> list:
@@ -55,21 +56,17 @@ def _output_problems(manifest: Manifest, outputs: dict) -> list:
 
 
 def check(ctx: CheckContext, config: dict) -> CheckResult:
-    manifest = ctx.manifest
+    manifest = ctx.provenance.manifest()
     visible_cases = ctx.visible_cases
     if not visible_cases:
         raise ComponentError("no visible dataset configured for this region")
 
-    replay = manifest.build.targets["replay"]
-    attempt_id = attempt_id_for(ctx.region_id, ctx.tree.sha)
-    try:
-        resp = ctx.builder.run(
-            attempt_id, replay.executable, visible_cases,
-            notify=ctx.strategy.device_proof.notify,
-            mandatory=ctx.strategy.device_proof.mandatory,
-        )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/run call failed: {exc}") from exc
+    replay = manifest.build.targets[REPLAY_ROLE]
+    resp = backend.replay(
+        ctx, ctx.provenance.attempt_id(), replay.executable, visible_cases,
+        notify=ctx.strategy.device_proof.notify,
+        mandatory=ctx.strategy.device_proof.mandatory,
+    )
 
     measured = {"executable_identity": resp.get("executable_identity")}
 

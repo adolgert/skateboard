@@ -191,9 +191,9 @@ def test_a_check_that_reads_a_capture_set_names_it_in_the_claims_materials(tmp_p
     }
     assert visible["capture_set"] in named
     # The timing claim rests on the one set it wrote, the program's own.
-    program = by_predicate["harness/times"].predicate.detail["datasets"]["program"]
+    program_set = by_predicate["harness/times"].predicate.detail["program_set"]
     assert [subject.sha256 for subject in by_predicate["harness/times"].materials
-            if subject.kind == "capture_set"] == [program["capture_set"]]
+            if subject.kind == "capture_set"] == [program_set]
 
 
 def test_the_self_check_claim_rests_on_the_captures_and_the_bands_it_used(tmp_path):
@@ -249,3 +249,20 @@ def test_a_check_that_would_run_before_its_evidence_exists_is_refused(tmp_path):
     assert [claim.predicateType for claim in store.all_claims()] == [
         "manifest/valid", "harness/builds",
     ]
+
+
+def test_a_workspace_lost_to_a_restart_is_rebuilt_by_the_phases_own_build(tmp_path):
+    # The builder keeps one workspace per build and can lose it to a
+    # restart. What rebuilds it is whichever action files this phase's
+    # build claim, so an onboarding region rebuilds under both strategies
+    # rather than under the one a port would use.
+    client, _, _, builder = _client(tmp_path)
+    _run(client, "manifest_check")
+    _run(client, "harness_build")
+    builds_before = len(builder.build_calls)
+    builder.artifact_records.clear()
+
+    body = _run(client, "harness_capture")
+
+    assert "error" not in body
+    assert len(builder.build_calls) == builds_before + 2

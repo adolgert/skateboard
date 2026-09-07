@@ -16,7 +16,6 @@ every one of them.
 from __future__ import annotations
 
 from equivalent.strategy.schema import Strategy
-from equivalent.tree import attempt_id_for
 
 from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError
@@ -44,7 +43,7 @@ def check(ctx: CheckContext, config: dict) -> dict:
     if not visible_cases:
         raise ComponentError("no visible dataset configured for this region")
 
-    attempt_id = attempt_id_for(ctx.region_id, ctx.tree.sha)
+    attempt_id = ctx.provenance.attempt_id()
     cases = _chosen_cases(ctx.strategy, visible_cases)
     tools = list(ctx.strategy.sanitizers)
     try:

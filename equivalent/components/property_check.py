@@ -27,7 +27,6 @@ from __future__ import annotations
 import random
 
 from equivalent.manifest.schema import Manifest
-from equivalent.tree import attempt_id_for
 
 from .context import CheckContext, CheckResult
 from .errors import ComponentError
@@ -187,7 +186,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     draw a corpus from -- because neither is a statement about whether
     this port is correct.
     """
-    manifest = ctx.manifest
+    manifest = ctx.provenance.manifest()
     if manifest.properties is None:
         raise ComponentError(
             f"code '{manifest.name}' declares no properties module, so there are no "
@@ -198,7 +197,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         raise ComponentError("no visible dataset configured for this region")
 
     return run_module(
-        ctx.builder, attempt_id_for(ctx.region_id, ctx.tree.sha), manifest, visible_cases,
+        ctx.builder, ctx.provenance.attempt_id(), manifest, visible_cases,
         seed=config.get("seed"),
         max_examples=config.get("max_examples", DEFAULT_MAX_EXAMPLES),
     )

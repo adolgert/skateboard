@@ -165,13 +165,17 @@ def test_get_status_reports_the_real_current_tree_before_any_check_has_run(tmp_p
         cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase,
         load_strategy(cfg.strategy_path),
     )
+    # No builder is configured here, so nothing can confirm the
+    # executables the claims name are still in place, and the gateway
+    # says so rather than deciding acceptance a second way of its own.
     expected = compute_status(
         store, requirements_for(cfg.phase, cfg.manifest), cfg.phase,
         tree=Subject(kind="tree", sha256=tree_sha), frozen=Subject(kind="frozen", sha256=frozen_sha),
+        context_verified=False,
     )
-    assert body.pop("context_verified") is False
-    assert body.pop("note")
     assert body == expected
+    assert body["context_verified"] is False
+    assert body["note"]
 
 
 def test_post_submit_reads_the_region_own_working_copy_and_returns_its_receipt(tmp_path):
@@ -220,7 +224,7 @@ def test_compute_status_and_history_without_repo_info_are_unchanged(tmp_path):
     # The CLI's own behaviour and golden file must keep working: no tree
     # or frozen argument means fall back to the claims-based guess.
     store = LedgerStore(tmp_path / "region")
-    status = compute_status(store, requirements_for(PORTING), PORTING)
+    status = compute_status(store, requirements_for(PORTING), PORTING, context_verified=True)
     history = compute_history(store)
     assert status["tree"] is None
     assert status["accepted"] is False

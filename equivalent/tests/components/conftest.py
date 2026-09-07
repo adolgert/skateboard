@@ -127,6 +127,18 @@ class Harness:
         for packed in result.stores:
             self.store.keep(packed)
 
+    def porting(self, **overrides) -> CheckContext:
+        """The same region as a port of a code already brought in.
+
+        A check is handed the phase it is judged under, and the phase says
+        where its manifest and its builder workspace come from -- so a test
+        of a porting check asks for one here rather than assembling a
+        context whose phase and manifest disagree.
+        """
+        return self.context(
+            phase="porting", strategy=strategy(PORT_STRATEGY), **overrides,
+        )
+
     def context(self, **overrides) -> CheckContext:
         fields = {
             "region_id": "tsunami:onboarding",

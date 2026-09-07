@@ -192,3 +192,53 @@ def test_session_command_runs_end_to_end(tmp_path, capsys):
     assert [row["who"] for row in parsed["timeline"]] == ["sese_check"]
     assert parsed["unmatched_requests"][0]["tool_call_id"] == "tool:1:aaa"
     assert parsed["summary"]["time_to_acceptance"] == "not accepted"
+
+
+def test_status_from_a_configuration_with_reviewed_pins_vouches_for_the_context(tmp_path, capsys):
+    # The CLI has no builder to ask, but a deployment that pins the
+    # executor and oracle identities has already said which executables
+    # a claim must have been reached under, and every claim it reads was
+    # filed under those pins. That is the same ground promotion stands
+    # on, so the two agree: such a reading is not merely advisory.
+    import yaml
+
+    from equivalent.region.deployment import load_gateway_config
+
+    strategies = Path(__file__).resolve().parents[2] / "strategy" / "files"
+    spec_path = "notes/regions/ch04-step.sese.yaml"
+    seed = tmp_path / "seed"
+    (seed / "src").mkdir(parents=True)
+    (seed / "src" / "mod_kernel.f90").write_text("subroutine step\nend subroutine\n")
+    (tmp_path / "working" / "notes" / "regions").mkdir(parents=True)
+    (tmp_path / "working" / spec_path).write_text("region: ch04:step\n")
+
+    programs = write_program(tmp_path).parent
+    config_path = tmp_path / "gateway.yaml"
+    config_path.write_text(yaml.safe_dump({
+        "version": 1,
+        "paths": {
+            "repo": str(tmp_path / "repo"),
+            "ledger_root": str(tmp_path / "ledger"),
+            "working_copy": str(tmp_path / "working"),
+            "programs": str(programs),
+            "strategies": str(strategies),
+            "seed": str(seed),
+        },
+        "codes": {"tsunami": {"manifest": "tsunami/manifest.yaml"}},
+        "regions": {"ch04:step": {
+            "code": "tsunami", "phase": "porting", "spec_path": spec_path,
+            "strategy": "stdpar_managed",
+            "baseline_strategy": "cpu_reference",
+            "executor_identity": "a" * 64,
+            "oracle_identity": "b" * 64,
+        }},
+    }))
+
+    load_gateway_config(config_path, seed_if_empty=True)
+
+    rc = main(["status", "--config", str(config_path), "--region-id", "ch04:step", "--json"])
+    status = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert status["context_verified"] is True
+    assert "note" not in status

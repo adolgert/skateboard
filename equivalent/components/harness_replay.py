@@ -27,11 +27,9 @@ import base64
 import numpy as np
 
 from equivalent.capture import npy
-from equivalent.tree import attempt_id_for_strategy
 
-from . import harness_capture
+from . import backend, harness_capture
 from .context import CheckContext, CheckResult, capture_set_materials
-from .errors import ComponentError, after_the_manifest_check_passed
 from .names import REPLAY_ROLE
 
 
@@ -90,13 +88,10 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     case and variable that did, with how far apart they were. Raises
     ComponentError if the builder could not be reached.
     """
-    with after_the_manifest_check_passed():
-        manifest = ctx.tree.manifest()
+    manifest = ctx.provenance.manifest()
     sets = harness_capture.captured_sets(ctx)
     replay = manifest.build.targets[REPLAY_ROLE]
-    attempt_id = attempt_id_for_strategy(
-        ctx.region_id, ctx.tree.sha, ctx.baseline_strategy.name,
-    )
+    attempt_id = ctx.provenance.attempt_id()
 
     per_dataset = {}
     disagreed = []
@@ -104,13 +99,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     executable_identity = None
     for name in sorted(sets):
         cases = ctx.sets.load(sets[name])
-        try:
-            resp = ctx.builder.run(
-                attempt_id, replay.executable, wire_inputs(cases),
-                notify=None, mandatory=False,
-            )
-        except Exception as exc:
-            raise ComponentError(f"builder /v1/run call failed: {exc}") from exc
+        resp = backend.replay(ctx, attempt_id, replay.executable, wire_inputs(cases))
 
         entry = {"cases": len(cases), "capture_set": sets[name]}
         executable_identity = executable_identity or resp.get("executable_identity")

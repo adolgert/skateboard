@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 
 from equivalent.ledger.acceptance import ONBOARDING
+from equivalent.ledger.evidence import claim_matches_context
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import frozen_subject
 from equivalent.region.config import region_branch
@@ -79,7 +80,7 @@ def resolve_allow_globs(
     passing = [
         c for c in store.all_claims()
         if c.predicateType == "sese/verified" and c.predicate.verdict == "pass"
-        and store.claim_matches_context(c, required_materials)
+        and claim_matches_context(c, required_materials)
         and isinstance(c.predicate.detail.get("allow_globs"), list)
         and spec_path in c.predicate.detail["allow_globs"]
         and all(

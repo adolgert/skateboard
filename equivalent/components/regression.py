@@ -16,7 +16,6 @@ not the only thing enforcing it.
 from __future__ import annotations
 
 from equivalent.ledger.subjects import Subject
-from equivalent.tree import attempt_id_for
 
 from .context import CheckContext, CheckResult
 from .errors import ComponentError
@@ -56,7 +55,7 @@ def check_visible(ctx: CheckContext, config: dict) -> CheckResult:
 
 
 def check_holdout(ctx: CheckContext, config: dict) -> CheckResult:
-    attempt_id = attempt_id_for(ctx.region_id, ctx.tree.sha)
+    attempt_id = ctx.provenance.attempt_id()
     replay = ctx.manifest.build.targets["replay"]
     try:
         holdout = ctx.oracle.holdout_inputs()["cases"]

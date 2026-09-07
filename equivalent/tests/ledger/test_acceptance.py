@@ -96,11 +96,11 @@ def test_status_shows_the_property_requirement_only_for_a_code_that_has_one(tmp_
 
     with_properties = compute_status(
         store, requirements_for(PORTING, _manifest(tmp_path / "with", properties=True)),
-        PORTING, tree=tree,
+        PORTING, tree=tree, context_verified=True,
     )
     without = compute_status(
         store, requirements_for(PORTING, _manifest(tmp_path / "without", properties=False)),
-        PORTING, tree=tree,
+        PORTING, tree=tree, context_verified=True,
     )
 
     rows = [row["predicateType"] for row in with_properties["rows"]]

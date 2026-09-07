@@ -16,11 +16,8 @@ copy of the same reasoning here.
 """
 from __future__ import annotations
 
-from equivalent.tree import attempt_id_for_strategy
-
 from . import build_replay
 from .context import CheckContext, CheckResult, failed
-from .errors import after_the_manifest_check_passed
 
 
 def check(ctx: CheckContext, config: dict) -> CheckResult:
@@ -34,16 +31,15 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     compiler command lines it ran, and, on a failure, which of the three
     statements did not hold.
     """
-    with after_the_manifest_check_passed():
-        manifest = ctx.tree.manifest()
+    manifest = ctx.provenance.manifest()
     tree = ctx.tree.payload()
 
-    per_strategy = {}
-    for one in (ctx.baseline_strategy, ctx.strategy):
-        attempt_id = attempt_id_for_strategy(ctx.region_id, ctx.tree.sha, one.name)
-        per_strategy[one.name] = build_replay.build_verdict(
-            ctx.builder, attempt_id, tree, one, manifest,
+    per_strategy = {
+        one.name: build_replay.build_verdict(
+            ctx.builder, ctx.provenance.attempt_id(one), tree, one, manifest,
         )
+        for one in ctx.provenance.strategies()
+    }
 
     did_not_build = [name for name, result in per_strategy.items() if result.verdict != "pass"]
     detail = {

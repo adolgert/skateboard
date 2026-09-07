@@ -466,3 +466,23 @@ def test_a_builder_that_cannot_be_asked_about_its_artifacts_is_not_a_lost_build(
     assert response.status_code == 503
     assert len(builder.build_calls) == 1  # no rebuild
     assert len(builder.run_calls) == 0
+
+
+def test_a_workspace_lost_to_a_restart_is_rebuilt_by_the_phases_own_build(tmp_path):
+    # The builder keeps one workspace per build and can lose it to a
+    # restart. What rebuilds it is whichever action files this phase's
+    # build claim -- for a port, the one build under the port's strategy.
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    _run(client, cfg, "sese_check")
+    _run(client, cfg, "build_replay")
+    builder.artifact_records.clear()
+
+    body = _run(client, cfg, "run_replay")
+
+    assert "error" not in body
+    assert len(builder.build_calls) == 2
+    assert len(builder.run_calls) == 1

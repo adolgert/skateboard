@@ -20,11 +20,9 @@ claim.
 """
 from __future__ import annotations
 
-from equivalent.tree import attempt_id_for_strategy
-
 from . import harness_capture, harness_replay, property_check
 from .context import CheckContext, CheckResult
-from .errors import ComponentError, after_the_manifest_check_passed
+from .errors import ComponentError
 # The properties draw their corpus from the dataset the agent can see.
 # Held-out inputs are for judging a port, not for a search the agent is
 # running.
@@ -53,8 +51,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     the minimized failing example is. Raises ComponentError if the builder
     could not be reached.
     """
-    with after_the_manifest_check_passed():
-        manifest = ctx.tree.manifest()
+    manifest = ctx.provenance.manifest()
     if manifest.properties is None:
         return CheckResult(verdict="pass", detail={"module": None, "note": NO_PROPERTIES})
 
@@ -68,7 +65,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
 
     return property_check.run_module(
         ctx.builder,
-        attempt_id_for_strategy(ctx.region_id, ctx.tree.sha, ctx.baseline_strategy.name),
+        ctx.provenance.attempt_id(),
         manifest,
         harness_replay.wire_inputs(cases),
         seed=config.get("seed"),

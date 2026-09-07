@@ -28,15 +28,18 @@ import hashlib
 
 from equivalent.capture import npy
 from equivalent.ledger.capture_sets import pack_capture_set
-from equivalent.tree import attempt_id_for_strategy
 
+from . import backend
 from .context import CheckContext, CheckResult, capture_set_materials, failed
-from .errors import ComponentError, after_the_manifest_check_passed
+from .errors import ComponentError
 from .names import CAPTURE_ROLE, HOLDOUT, VISIBLE
 
 # The claim that says which capture set each declared dataset was stored
 # under. Spelled here because this is where it is written and read.
 CAPTURED_PREDICATE = "harness/captured"
+# What a manifest with no capture target leaves the harness without, in
+# the words the message about it uses.
+NO_PROGRAM_TO_CAPTURE = "no program to write the datasets it declares"
 # What a case's two halves are called on the wire and in the manifest's
 # interface, in the words a message about one should use.
 SECTIONS = (("inputs", "input"), ("outputs", "output"))
@@ -143,35 +146,27 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     back for the gateway to keep, so a failing capture leaves nothing
     behind. Raises ComponentError if the builder could not be reached.
     """
-    with after_the_manifest_check_passed():
-        manifest = ctx.tree.manifest()
-    attempt_id = attempt_id_for_strategy(
-        ctx.region_id, ctx.tree.sha, ctx.baseline_strategy.name,
-    )
+    manifest = ctx.provenance.manifest()
+    attempt_id = ctx.provenance.attempt_id()
     described = {"manifest_sha256": manifest.sha256}
 
-    capture = manifest.build.targets.get(CAPTURE_ROLE)
-    if capture is None:
-        # The manifest loader does not insist on a capture target, because
-        # a promoted code is never captured again -- so a code being
-        # brought in learns it here.
-        problems = [
-            f"code '{manifest.name}' declares no '{CAPTURE_ROLE}' build target, so "
-            f"there is no program to write the datasets it declares"
-        ]
-        return failed({**described, "problems": problems}, problems)
+    # The manifest loader does not insist on a capture target, because a
+    # promoted code is never captured again -- so a code being brought in
+    # learns it here, as a verdict about the manifest it wrote.
+    capture, refusal = ctx.provenance.build_target(
+        manifest, CAPTURE_ROLE, NO_PROGRAM_TO_CAPTURE, described,
+    )
+    if refusal is not None:
+        return refusal
 
     per_dataset = {}
     captured = {}
     executable_identity = None
     problems = []
     for name in sorted(manifest.datasets):
-        try:
-            resp = ctx.builder.capture(
-                attempt_id, capture.executable, list(manifest.datasets[name].args), name,
-            )
-        except Exception as exc:
-            raise ComponentError(f"builder /v1/capture call failed: {exc}") from exc
+        resp = backend.capture(
+            ctx, attempt_id, capture.executable, manifest.datasets[name].args, name,
+        )
 
         cases = resp.get("cases", {}) if resp.get("ok") else {}
         executable_identity = executable_identity or resp.get("executable_identity")

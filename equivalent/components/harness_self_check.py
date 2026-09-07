@@ -36,7 +36,6 @@ import json
 
 from equivalent.capture import npy
 from equivalent.ledger.subjects import Subject
-from equivalent.tree import attempt_id_for_strategy
 
 from . import build_replay, harness_capture
 from .context import CheckContext, CheckResult, capture_set_materials
@@ -167,7 +166,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
 
     try:
         resp = ctx.builder.mutate(
-            attempt_id_for_strategy(ctx.region_id, ctx.tree.sha, ctx.baseline_strategy.name),
+            ctx.provenance.attempt_id(),
             manifest.build.makefile,
             {"target": replay.target, "executable": replay.executable},
             list(manifest.interface.files),

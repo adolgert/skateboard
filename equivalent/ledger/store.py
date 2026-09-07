@@ -16,8 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import predicates
+from .evidence import claim_matches_context
 from .packed import PackedArtifact, PackedSet
-from .records import SCHEMA_VERSION, Claim, RequestLogLine
+from .records import Claim, RequestLogLine
 from .subjects import Subject
 
 # Where capture sets live inside a region's artifacts directory. One
@@ -190,19 +191,6 @@ class LedgerStore:
     def claims_for(self, subject: Subject) -> list[Claim]:
         return [c for c in self._read_claims() if subject in c.subject]
 
-    @staticmethod
-    def claim_matches_context(claim: Claim, required_materials=()) -> bool:
-        """Whether a claim was issued under the current evidence contract.
-
-        Materials are an unordered dependency set.  Extra materials describe
-        predicate-specific inputs (for example a tolerance policy) and do not
-        prevent a match; every caller-supplied current material must be present.
-        """
-        return (
-            claim.version == SCHEMA_VERSION
-            and all(material in claim.materials for material in required_materials)
-        )
-
     def latest(
         self, predicate_type: str, subject: Subject, config_hash: str | None = None,
         *, required_materials,
@@ -219,7 +207,7 @@ class LedgerStore:
             if c.predicateType == predicate_type
             and subject in c.subject
             and (config_hash is None or c.predicate.configHash == config_hash)
-            and self.claim_matches_context(c, required_materials)
+            and claim_matches_context(c, required_materials)
         ]
         # Timestamps have one-second resolution, so ties happen; sorted()
         # is stable, so [-1] is the last-appended claim among the newest,
@@ -242,7 +230,7 @@ class LedgerStore:
         return any(
             c.predicateType == predicate_type and subject in c.subject
             and c.predicate.verdict == "pass"
-            and self.claim_matches_context(c, required_materials)
+            and claim_matches_context(c, required_materials)
             for c in self._read_claims()
         )
 
@@ -260,7 +248,7 @@ class LedgerStore:
             if c.predicateType == predicate_type
             and tree in c.subject
             and c.predicate.configHash == config_hash
-            and self.claim_matches_context(c, required_materials)
+            and claim_matches_context(c, required_materials)
         ]
         return matches[-1] if matches else None
 

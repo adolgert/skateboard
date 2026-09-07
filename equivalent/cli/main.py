@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from equivalent.ledger.acceptance import PORTING, requirements_for
@@ -115,19 +116,31 @@ def _named_region(parser: argparse.ArgumentParser, config_path, region_id):
     return config, cfg
 
 
-def _open_region(parser: argparse.ArgumentParser, args):
-    """The store, the current tree and frozen subjects if knowable, the phase, a display name, and the code.
+@dataclass(frozen=True)
+class OpenRegion:
+    """Everything a status reading needs about one region, gathered once.
 
-    The tree and frozen subjects come back as None when only a directory
-    was named: the ledger alone cannot say what the region's current tree
-    is, and guessing is the status computation's own documented fallback.
-    A directory named on its own says nothing about the phase either, and
-    a ledger directory holding a port's claims is by far the common case,
-    so that reading is what a bare directory gets. It says nothing about
-    the code either, so there is no manifest to read the property
-    requirement out of, and the fixed acceptance list is what it is judged
-    by.
+    The tree and frozen subjects are None when only a directory was
+    named: the ledger alone cannot say what the region's current tree is,
+    and guessing is the status computation's own documented fallback.
     """
+    store: LedgerStore
+    tree: Subject | None
+    frozen: Subject | None
+    phase: str
+    name: str
+    manifest: object | None
+    materials: tuple
+    # Whether the deployment pins the executor (and, when porting, the
+    # oracle) a claim must have been reached under. Those pins are among
+    # the materials every claim carries, so a ledger read under them
+    # names executables a person signed off on. A bare directory pins
+    # nothing, and a reading from it can only be advisory.
+    pinned: bool = False
+
+
+def _check_region_arguments(parser: argparse.ArgumentParser, args) -> None:
+    """A region is named one way or the other, never both and never neither."""
     named_config = args.config is not None or args.region_id is not None
     if named_config and (args.config is None or args.region_id is None):
         parser.error("--config and --region-id go together; give both or neither")
@@ -136,9 +149,34 @@ def _open_region(parser: argparse.ArgumentParser, args):
     if not named_config and args.region_dir is None:
         parser.error("name a region directory, or --config with --region-id")
 
+
+def _open_store(parser: argparse.ArgumentParser, args) -> LedgerStore:
+    """The ledger alone, for a reader that asks only what was recorded."""
+    _check_region_arguments(parser, args)
     if args.region_dir is not None:
-        return (LedgerStore(args.region_dir), None, None, PORTING,
-                Path(args.region_dir).name, None, (evidence_policy_subject(),), False)
+        return LedgerStore(args.region_dir)
+    _, cfg = _named_region(parser, args.config, args.region_id)
+    return LedgerStore(cfg.ledger_dir)
+
+
+def _open_region(parser: argparse.ArgumentParser, args) -> OpenRegion:
+    """The region a status reading is about, however it was named.
+
+    A directory named on its own says nothing about the phase, and a
+    ledger directory holding a port's claims is by far the common case,
+    so that reading is what a bare directory gets. It says nothing about
+    the code either, so there is no manifest to read the property
+    requirement out of, and the fixed acceptance list is what it is judged
+    by.
+    """
+    _check_region_arguments(parser, args)
+
+    if args.region_dir is not None:
+        return OpenRegion(
+            store=LedgerStore(args.region_dir), tree=None, frozen=None, phase=PORTING,
+            name=Path(args.region_dir).name, manifest=None,
+            materials=(evidence_policy_subject(),),
+        )
 
     _, cfg = _named_region(parser, args.config, args.region_id)
     store = LedgerStore(cfg.ledger_dir)
@@ -148,15 +186,15 @@ def _open_region(parser: argparse.ArgumentParser, args):
         load_strategy(cfg.strategy_path),
         required_materials=materials,
     )
-    return (
-        store,
-        Subject(kind="tree", sha256=tree_sha),
-        Subject(kind="frozen", sha256=frozen_sha),
-        cfg.phase,
-        cfg.region_id,
-        cfg.manifest,
-        materials,
-        bool(cfg.executor_identity and (cfg.phase != PORTING or cfg.oracle_identity)),
+    return OpenRegion(
+        store=store,
+        tree=Subject(kind="tree", sha256=tree_sha),
+        frozen=Subject(kind="frozen", sha256=frozen_sha),
+        phase=cfg.phase,
+        name=cfg.region_id,
+        manifest=cfg.manifest,
+        materials=materials,
+        pinned=bool(cfg.executor_identity and (cfg.phase != PORTING or cfg.oracle_identity)),
     )
 
 
@@ -188,7 +226,10 @@ def _run_session(parser: argparse.ArgumentParser, args) -> int:
         _, _, events = session.read_session(path)
 
     joined = session.join(events, requests, session.claim_verdicts(store))
-    summary = session.summarize(store, args.session_id, requests, events, joined, cfg.phase)
+    summary = session.summarize(
+        store, args.session_id, requests, events, joined, cfg.phase,
+        required_materials=evidence_materials_for(cfg),
+    )
 
     if args.json:
         print(json.dumps({
@@ -233,31 +274,32 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "status":
-        store, tree, frozen, phase, name, manifest, materials, verified = _open_region(parser, args)
-        requirements = requirements_for(phase, manifest)
+        region = _open_region(parser, args)
+        requirements = requirements_for(region.phase, region.manifest)
         status = compute_status(
-            store, requirements, phase, tree=tree, frozen=frozen,
-            required_materials=materials,
+            region.store, requirements, region.phase,
+            tree=region.tree, frozen=region.frozen,
+            required_materials=region.materials,
             required_materials_by_predicate=(required_materials_by_predicate(
-                store, requirements, phase, tree, materials,
-            ) if tree is not None else {}),
+                region.store, requirements, region.phase, region.tree, region.materials,
+            ) if region.tree is not None else {}),
+            # There is no builder here to ask whether the executables the
+            # claims name are still in place; the gateway's own status
+            # endpoint answers that. What this command can vouch for is
+            # the same thing promotion relies on: the deployment's
+            # reviewed pins, which every claim read here was filed under.
+            context_verified=region.pinned,
         )
-        status["context_verified"] = verified
-        if not verified:
-            status["accepted"] = False
-            status["note"] = ("Advisory view only; current acceptance requires --config, --region-id "
-                              "and reviewed executor_identity (also oracle_identity when porting).")
         if args.json:
             print(json.dumps(status, indent=2, sort_keys=True))
         else:
-            if not verified:
+            if status.get("note"):
                 print(status["note"])
-            print(render.render_status(status, args.region or name), end="")
+            print(render.render_status(status, args.region or region.name), end="")
         return 0
 
     if args.command == "history":
-        store, _, _, _, _, _, _, _ = _open_region(parser, args)
-        history = compute_history(store)
+        history = compute_history(_open_store(parser, args))
         if args.json:
             print(json.dumps(history, indent=2, sort_keys=True))
         else:
@@ -280,11 +322,9 @@ def main(argv=None) -> int:
         print(render.render_claim(claim), end="")
         return 0
 
-    if args.command == "requests":
-        print(render.render_requests(store.all_requests()), end="")
-        return 0
-
-    return 1
+    # The parser accepts no other command, so this is the requests one.
+    print(render.render_requests(store.all_requests()), end="")
+    return 0
 
 
 if __name__ == "__main__":

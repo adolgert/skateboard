@@ -13,6 +13,7 @@ are judged on the caller's own context.
 """
 from __future__ import annotations
 
+from equivalent.ledger.records import SCHEMA_VERSION
 from equivalent.ledger.subjects import Subject, hash_bytes
 
 
@@ -24,6 +25,25 @@ FOUNDATION_PREDICATES = {
 NO_CURRENT_BUILD = Subject(
     kind="binary", sha256=hash_bytes(b"equivalent:no-current-build:v1"),
 )
+
+
+def claim_matches_context(claim, required_materials=()) -> bool:
+    """Whether a claim was issued under the current evidence contract.
+
+    This is the rule that separates a claim that is evidence about the
+    code as it stands from one that only records something that was once
+    true. It lives here, beside the cohort the materials come from, and
+    the store, status, and the region's allow-list all ask it rather than
+    each keeping a copy that could drift.
+
+    Materials are an unordered dependency set. Extra materials describe
+    predicate-specific inputs (for example a tolerance policy) and do not
+    prevent a match; every caller-supplied current material must be present.
+    """
+    return (
+        claim.version == SCHEMA_VERSION
+        and all(material in claim.materials for material in required_materials)
+    )
 
 
 def binary_materials(detail: dict) -> tuple[Subject, ...]:

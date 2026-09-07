@@ -160,6 +160,11 @@ def _onboarded_tree(cfg: RegionConfig, store: LedgerStore) -> tuple[str, Subject
         tree=tree, frozen=Subject(kind="frozen", sha256=frozen_sha),
         required_materials=materials,
         required_materials_by_predicate=contexts,
+        # `promote` has already refused a region with no reviewed
+        # executor pin, and that pin is one of the materials above, so
+        # every claim read here named the executables a person signed off
+        # on. There is no builder on the host to ask anything further.
+        context_verified=True,
     )
     if not status["accepted"]:
         raise PromoteRefused(

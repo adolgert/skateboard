@@ -1,11 +1,11 @@
 """Wraps the builder's /v1/time as two gateway components.
 
-time_port times the region's own current tree. It relies on build_replay
+check_port times the region's own current tree. It relies on build_replay
 having already built the timing binary in the same builder workspace --
 build_replay sends the whole tree and asks make for every target the
 manifest declares, so the program the timing run needs is already there.
 
-time_baseline measures the pristine baseline instead, which the region's
+check_baseline measures the pristine baseline instead, which the region's
 own build_replay call never touches -- so this component does its own
 build first, with the region's `baseline_strategy`: the comparison floor,
 a strategy file like any other rather than a name inside the builder.
@@ -15,9 +15,11 @@ happens to be current for the region.
 What is timed is the code's own program, at the size its manifest
 declares: the executable, its arguments, its environment, and the files
 it must write are all manifest fields, so changing the problem size is an
-edit to data and not to a source file the agent can reach.
+edit to data and not to a source file the agent can reach. Running it and
+reading the builder's answer is program_outputs' job, which is also the
+onboarding timing's, so the two cannot judge a measurement differently.
 
-time_baseline also keeps what the baseline program wrote, as a capture
+check_baseline also keeps what the baseline program wrote, as a capture
 set of one case whose variables are the files themselves. That set is the
 reference a port's own program run is later compared against, and it is a
 run of this deployment's baseline rather than anything checked in: a
@@ -25,9 +27,6 @@ program at a real timing size writes megabytes every run.
 """
 from __future__ import annotations
 
-import base64
-import hashlib
-import math
 from dataclasses import replace
 
 from equivalent.ledger.capture_sets import pack_program_set, program_arrays
@@ -35,15 +34,15 @@ from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import Manifest
 from equivalent.tree import attempt_id_for
 
+from . import program_outputs
 from .build_replay import build_verdict
 from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError
 from .names import PROGRAM_SET_KEY, TIMING_ROLE
 
-# The claims a port's timing rests on: what the binary was built with, and
-# the program comparison that says the port is still the same code at this
-# size.
-BUILD_PREDICATE = "build/replay"
+# The other claim a port's timing rests on: the program comparison that
+# says the port is still the same code at this size. Which claim carries
+# the build it was compiled by is the provenance's to name.
 PROGRAM_PREDICATE = "program/regression"
 # Which of the request's subjects a baseline timing is filed against.
 BASELINE_SUBJECT = "baseline_tree"
@@ -54,81 +53,26 @@ DEFAULT_REPEATS = 5
 PROGRAM_SET_ABSENT = "program_set_absent"
 
 
-def timing_target(manifest: Manifest):
-    target = manifest.build.targets.get(TIMING_ROLE)
-    if target is None:
-        raise ComponentError(
-            f"code '{manifest.name}' declares no '{TIMING_ROLE}' build target, so there "
-            f"is no program to time"
-        )
-    return target
+def _measured(resp: dict, manifest: Manifest, extra: dict) -> dict:
+    """The part of a timing claim's detail both of these record.
 
-
-def _collected(runs: list) -> dict:
-    """What the last run wrote, named and hashed rather than carried.
-
-    The builder collects the declared files once per run; a timing claim
-    describes the binary that finished, so it is the last run's files
-    that are recorded. Whether every run wrote the same thing is an
-    onboarding question, asked where the two are compared.
-
-    The files themselves can be large and are the program's output, not
-    evidence about it; their names and digests are what a reader needs to
-    see that two runs produced the same thing.
+    The timing target is read straight from the manifest: a measurement
+    only comes back at all once the run this describes has happened, and
+    that run is of the program named here.
     """
-    last = runs[-1] if runs else {}
-    return {
-        name: hashlib.sha256(base64.b64decode(encoded)).hexdigest()
-        for name, encoded in sorted(last.items())
-    }
-
-
-def _time(builder, attempt_id: str, manifest: Manifest, repeats: int,
-          extra_detail: dict | None = None) -> tuple[CheckResult, dict]:
-    """The result to file, and the builder's own answer it was made from.
-
-    The answer is handed back too because the baseline does one more thing
-    with it than the claim's detail records: it keeps the files the last
-    run wrote.
-    """
-    target = timing_target(manifest)
     timing = manifest.timing
-    if type(repeats) is not int or not 1 <= repeats <= 100:
-        raise ComponentError("timing repeats must be an integer between 1 and 100")
-    try:
-        resp = builder.time(
-            attempt_id, target.executable, list(timing.args), dict(timing.env),
-            list(timing.outputs), repeats, timing.budget_s,
-        )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/time call failed: {exc}") from exc
-    if not resp.get("ok"):
-        return failed(
-            {"log_tail": resp.get("log_tail", "")},
-            ["the timed program did not finish inside its budget, or did not write every "
-             "file the manifest declares"],
-        ), resp
-    durations = resp.get("runs_s", [])
-    runs = resp.get("outputs", [])
-    if (not isinstance(durations, list) or len(durations) != repeats
-            or any(type(t) not in (int, float) or not math.isfinite(t) or t <= 0 for t in durations)
-            or not isinstance(runs, list) or len(runs) != repeats
-            or any(not isinstance(run, dict) or set(timing.outputs) - run.keys() for run in runs)):
-        problems = ["timing requires every requested repetition, positive finite durations, and every declared output"]
-        return failed({"problems": problems}, problems), resp
-    detail = {
+    return {
         "runs_s": resp["runs_s"],
         "gpu_exclusive": resp.get("gpu_exclusive"),
         # What was run, so a later reader can tell two timing claims apart
         # without going back to the manifest of the day.
-        "executable": target.executable,
+        "executable": manifest.build.targets[TIMING_ROLE].executable,
         "args": list(timing.args),
         "env": dict(timing.env),
-        "outputs": _collected(resp.get("outputs", [])),
+        "outputs": program_outputs.collected(resp.get("outputs", [])),
         "executable_identity": resp.get("executable_identity"),
+        **extra,
     }
-    detail.update(extra_detail or {})
-    return CheckResult(verdict="pass", detail=detail), resp
 
 
 def check_port(ctx: CheckContext, config: dict) -> CheckResult:
@@ -138,34 +82,41 @@ def check_port(ctx: CheckContext, config: dict) -> CheckResult:
     of what it passed to the compiler -- not recomputed from the strategy,
     so the timing claim describes the binary that really exists. Same
     read-back pattern as regression_visible using gpu/executed's outputs.
-    """
-    from . import program_regression
 
-    flags = ctx.claims[BUILD_PREDICATE].predicate.detail.get("flags")
+    Every repetition's files are compared with the baseline program's, not
+    only the one program_regression already compared: a port whose answers
+    drift between runs at timing size is a port whose measured time is of
+    something other than the code, and this is the only check that runs the
+    program more than once.
+    """
+    manifest = ctx.provenance.manifest()
+    flags = ctx.claims[ctx.provenance.build_predicate].predicate.detail.get("flags")
     program_claim = ctx.claims[PROGRAM_PREDICATE]
     program_set = program_claim.predicate.detail.get(PROGRAM_SET_KEY)
     if not program_set:
         raise ComponentError(
             f"the passing {PROGRAM_PREDICATE} claim names no baseline output reference"
         )
-    result, response = _time(
-        ctx.builder, attempt_id_for(ctx.region_id, ctx.tree.sha), ctx.manifest,
-        int(config.get("repeats", DEFAULT_REPEATS)), extra_detail={"flags": flags},
+    response, refusal = program_outputs.time_program(
+        ctx, ctx.provenance.attempt_id(), manifest,
+        int(config.get("repeats", DEFAULT_REPEATS)),
     )
-    if result.verdict != "pass":
-        return result
+    if refusal is not None:
+        return refusal
 
-    bands, policy_sha = program_regression.tolerance_policy(ctx.manifest)
+    bands, policy_sha = program_outputs.tolerance_policy(manifest)
     comparisons = [
-        program_regression.compare_outputs(ctx.sets, program_set, ctx.manifest, run, bands)
+        program_outputs.compare_outputs(ctx.sets, program_set, manifest, run, bands)
         for run in response["outputs"]
     ]
     detail = {
-        **result.detail, PROGRAM_SET_KEY: program_set, "policy_sha256": policy_sha,
+        **_measured(response, manifest, {"flags": flags}),
+        PROGRAM_SET_KEY: program_set, "policy_sha256": policy_sha,
         "compared_repetitions": len(comparisons), "per_run": comparisons,
     }
     reasons = [
-        reason for per_var in comparisons for reason in program_regression.comparison_reasons(per_var)
+        reason for per_var in comparisons
+        for reason in program_outputs.comparison_reasons(per_var)
     ]
     if all(per_var and all(v["pass"] for v in per_var.values()) for per_var in comparisons):
         return CheckResult(verdict="pass", detail=detail)
@@ -189,10 +140,13 @@ def check_baseline(ctx: CheckContext, config: dict) -> CheckResult:
     The claim is filed against the baseline tree, not whatever tree
     happens to be current for the region.
     """
+    manifest = ctx.provenance.manifest()
     baseline_strategy = ctx.baseline_strategy
+    # Not the provenance's workspace: what is built and timed here is the
+    # pristine baseline, which the region's own build never touches.
     attempt_id = attempt_id_for(f"{ctx.region_id}-baseline", ctx.baseline.sha)
     build_result = build_verdict(
-        ctx.builder, attempt_id, ctx.baseline.payload(), baseline_strategy, ctx.manifest,
+        ctx.builder, attempt_id, ctx.baseline.payload(), baseline_strategy, manifest,
     )
     if build_result.verdict != "pass":
         return CheckResult(
@@ -204,16 +158,20 @@ def check_baseline(ctx: CheckContext, config: dict) -> CheckResult:
             reasons=build_result.reasons,
             subject_kind=BASELINE_SUBJECT,
         )
-    result, resp = _time(
-        ctx.builder, attempt_id, ctx.manifest, int(config.get("repeats", DEFAULT_REPEATS)),
-        extra_detail={"strategy": baseline_strategy.name,
-                      "flags": build_result.detail.get("flags"),
-                      "build": build_result.detail},
+    resp, refusal = program_outputs.time_program(
+        ctx, attempt_id, manifest, int(config.get("repeats", DEFAULT_REPEATS)),
     )
-    if result.verdict != "pass":
-        return replace(result, subject_kind=BASELINE_SUBJECT)
-    stored, packed, problems = _packed_program(ctx.manifest, resp)
-    detail = {**result.detail, **stored}
+    if refusal is not None:
+        return replace(refusal, subject_kind=BASELINE_SUBJECT)
+    stored, packed, problems = _packed_program(manifest, resp)
+    detail = {
+        **_measured(resp, manifest, {
+            "strategy": baseline_strategy.name,
+            "flags": build_result.detail.get("flags"),
+            "build": build_result.detail,
+        }),
+        **stored,
+    }
     # The program set this run stores is what a port's own program run is
     # compared against, so it is a formal material rather than a note in
     # the detail.

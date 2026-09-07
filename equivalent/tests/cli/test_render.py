@@ -29,7 +29,7 @@ def test_status_text_matches_golden_file(tmp_path):
     store = LedgerStore(tmp_path / "region")
     _all_passing_claims(store, tree, frozen)
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING, context_verified=True)
     text = render.render_status(status, "ch04:step")
 
     golden = (GOLDEN_DIR / "status_accepted.txt").read_text()
@@ -47,7 +47,7 @@ def test_a_finished_onboarding_reads_as_onboarded_rather_than_accepted(tmp_path)
             [Subject(kind=req.subject_kind, sha256=tree)], req.predicate_type, predicate, [], "sess-1",
         )
 
-    status = compute_status(store, ONBOARDING_REQUIREMENTS, ONBOARDING)
+    status = compute_status(store, ONBOARDING_REQUIREMENTS, ONBOARDING, context_verified=True)
     text = render.render_status(status, "tsunami:onboarding")
 
     assert text.splitlines()[-1] == f"ONBOARDED on {tree[:12]}"
@@ -108,7 +108,7 @@ def test_a_requirement_whose_check_failed_reads_as_a_fail_with_its_claim_id(tmp_
         [], "sess-1",
     )
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING, context_verified=True)
     lines = render.render_status(status, "ch04:step").splitlines()
     row = next(line for line in lines if "gpu/executed" in line)
 
@@ -120,7 +120,7 @@ def test_a_requirement_whose_check_failed_reads_as_a_fail_with_its_claim_id(tmp_
 def test_a_requirement_no_check_has_run_for_still_reads_as_missing(tmp_path):
     store = LedgerStore(tmp_path / "region")
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING, context_verified=True)
     row = next(
         line for line in render.render_status(status, "ch04:step").splitlines()
         if "gpu/executed" in line

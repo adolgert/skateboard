@@ -32,18 +32,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from equivalent.components import build_replay, harness_build
-from equivalent.components.context import CheckContext, CheckResult
+from equivalent.components.context import CheckContext, CheckResult, provenance_for
 from equivalent.components.errors import ComponentError
 from equivalent.ledger.acceptance import (
     ACCEPTANCE_REQUIREMENTS,
     CONDITIONAL_REQUIREMENTS,
     ONBOARDING_REQUIREMENTS,
-    PORTING,
     requirements_for,
 )
 from equivalent.ledger.evidence import (
-    BUILD_PREDICATE,
     FOUNDATION_PREDICATES,
     binary_materials,
     current_build_claim,
@@ -112,17 +109,6 @@ def _claim_response(claim) -> dict:
     The full detail stays in claims.jsonl for the CLI.
     """
     return {"claim_id": claim.id, **agent_receipt(claim.predicateType, claim.predicate)}
-
-
-def _build_entries(phase: str, detail: dict) -> list[tuple[str, dict]]:
-    """The builder workspace and targets asserted by one build claim/result."""
-    if phase == PORTING:
-        return [(detail.get("attempt_id"), detail.get("targets", {}))]
-    return [
-        (one.get("attempt_id"), one.get("targets", {}))
-        for _, one in sorted(detail.get("strategies", {}).items())
-        if isinstance(one, dict)
-    ]
 
 
 def _claim_read_response(claim) -> dict:
@@ -248,7 +234,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 detail="region has a reviewed executor_identity but no builder is configured",
             )
         if (
-            cfg.phase == "porting"
+            provenance_for(cfg.phase).oracle_judges
             and oracle is None
             and getattr(cfg, "oracle_identity", None) is not None
         ):
@@ -281,7 +267,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                     status_code=503,
                     detail="builder executor_identity does not match the reviewed region pin",
                 )
-        if oracle is not None and cfg.phase == "porting":
+        if oracle is not None and provenance_for(cfg.phase).oracle_judges:
             try:
                 oracle_identity = oracle.policy().get("oracle_identity")
             except Exception as exc:
@@ -333,7 +319,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         """
         if builder is None:
             return False
-        entries = _build_entries(cfg.phase, detail)
+        entries = provenance_for(cfg.phase).build_entries(detail)
         if not entries:
             return False
         for attempt_id, targets in entries:
@@ -365,8 +351,8 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
 
     def _restore_build(cfg, ctx, expected_detail, executor_identity) -> tuple[Subject, ...]:
         """Rebuild a lost workspace, accepting it only when bytes reproduce."""
-        rebuild = build_replay.check if cfg.phase == PORTING else harness_build.check
-        rebuilt = rebuild(ctx, {})
+        build_action = PRODUCERS[ctx.provenance.build_predicate]
+        rebuilt = HANDLERS[build_action].check(ctx, {})
         if rebuilt.verdict != "pass":
             raise ComponentError("the cached build was lost and rebuilding it did not pass")
         expected = binary_materials(expected_detail)
@@ -449,7 +435,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 cfg, build_claim.predicate.detail, executor_identity,
             )
         )
-        status = compute_status(
+        return compute_status(
             store, requirements_for(cfg.phase, cfg.manifest), cfg.phase,
             tree=tree_subject,
             frozen=Subject(kind="frozen", sha256=frozen_sha),
@@ -458,18 +444,16 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 store, requirements_for(cfg.phase, cfg.manifest), cfg.phase,
                 tree_subject, materials,
             ),
+            # The gateway can answer the question the ledger cannot: it
+            # has just asked the builder whether it still holds the
+            # executables the current build claim named, and the live
+            # executor and oracle identities are the reviewed pins.
+            context_verified=bool(
+                builder is not None
+                and (not provenance_for(cfg.phase).oracle_judges or oracle is not None)
+                and build_context_ok
+            ),
         )
-        status["context_verified"] = bool(
-            builder is not None and (cfg.phase != "porting" or oracle is not None)
-            and build_context_ok
-        )
-        if not status["context_verified"]:
-            status["accepted"] = False
-            status["note"] = (
-                "live executor/oracle identity or the current build artifacts are unavailable; "
-                "status is advisory"
-            )
-        return status
 
     @app.get("/claims/{claim_id}")
     def get_claim(
@@ -645,7 +629,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         dependent_action = any(
             predicate_type not in FOUNDATION_PREDICATES for predicate_type in row.emits
         )
-        build_predicate = BUILD_PREDICATE[cfg.phase]
+        build_predicate = provenance_for(cfg.phase).build_predicate
         build_claim = _build_claim(
             cfg, store, subjects_by_kind["tree"], evidence_materials,
         )

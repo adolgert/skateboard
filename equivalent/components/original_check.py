@@ -72,9 +72,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     reference_attempt = attempt_id_for_strategy(
         ctx.region_id + "-original", original.sha256, baseline_strategy.name,
     )
-    candidate_attempt = attempt_id_for_strategy(
-        ctx.region_id, ctx.tree.sha, baseline_strategy.name,
-    )
+    candidate_attempt = ctx.provenance.attempt_id()
     payload = [{"path": f["path"], "b64": base64.b64encode(f["content"]).decode("ascii")}
                for f in original.files]
     try:

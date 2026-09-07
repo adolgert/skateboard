@@ -87,7 +87,11 @@ _register(
 )
 _register(
     "timing/port", False, DetailLevel.FULL,
-    "Wall-clock timing of the ported binary, on the tree.",
+    "Wall-clock timing of the ported binary, on the tree. Every timed repetition's "
+    "program outputs are compared again with the baseline program's, under the code's "
+    "tolerance policy: program/regression compares one run, and this is the only check "
+    "that runs the program more than once, so a port whose answers drift between runs "
+    "at timing size is caught here.",
 )
 _register(
     "timing/baseline", False, DetailLevel.FULL,

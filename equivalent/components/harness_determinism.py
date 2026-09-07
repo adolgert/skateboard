@@ -26,33 +26,15 @@ import base64
 
 from equivalent.capture import npy
 from equivalent.ledger.capture_sets import pack_capture_set
-from equivalent.tree import attempt_id_for_strategy
 
-from . import harness_capture, harness_replay
+from . import backend, harness_capture, harness_replay
 from .context import CheckContext, CheckResult, capture_set_materials
-from .errors import ComponentError, after_the_manifest_check_passed
+from .errors import ComponentError
 
 # What the second run of a dataset's capture is called, so it writes into
 # a directory of its own: a program that appends to what is already there
 # would otherwise look deterministic.
 AGAIN = "-again"
-
-
-def _recapture(builder, attempt_id: str, executable: str, dataset, name: str) -> dict:
-    try:
-        return builder.capture(attempt_id, executable, list(dataset.args), f"{name}{AGAIN}")
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/capture call failed: {exc}") from exc
-
-
-def _replay(builder, attempt_id: str, executable: str, cases: dict) -> dict:
-    try:
-        return builder.run(
-            attempt_id, executable, harness_replay.wire_inputs(cases),
-            notify=None, mandatory=False,
-        )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/run call failed: {exc}") from exc
 
 
 def _repeat_difference(first: dict, second: dict) -> dict | None:
@@ -87,18 +69,15 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     words whichever of the repeats disagreed. Raises ComponentError if
     the builder could not be reached.
     """
-    with after_the_manifest_check_passed():
-        manifest = ctx.tree.manifest()
+    manifest = ctx.provenance.manifest()
     sets = harness_capture.captured_sets(ctx)
-    capture = manifest.build.targets.get(harness_capture.CAPTURE_ROLE)
-    if capture is None:
-        raise ComponentError(
-            f"code '{manifest.name}' declares no '{harness_capture.CAPTURE_ROLE}' build "
-            f"target, although a passing capture claim for this tree says it did"
-        )
-    attempt_id = attempt_id_for_strategy(
-        ctx.region_id, ctx.tree.sha, ctx.baseline_strategy.name,
+    capture, refusal = ctx.provenance.build_target(
+        manifest, harness_capture.CAPTURE_ROLE, harness_capture.NO_PROGRAM_TO_CAPTURE,
+        {"manifest_sha256": manifest.sha256},
     )
+    if refusal is not None:
+        return refusal
+    attempt_id = ctx.provenance.attempt_id()
 
     differed = []
     per_dataset = {}
@@ -112,7 +91,9 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
                 f"the tree's manifest no longer declares dataset '{name}', which the "
                 f"capture claim for this tree was filed about"
             )
-        resp = _recapture(ctx.builder, attempt_id, capture.executable, dataset, name)
+        resp = backend.capture(
+            ctx, attempt_id, capture.executable, dataset.args, f"{name}{AGAIN}",
+        )
         cases = resp.get("cases", {}) if resp.get("ok") else {}
         if not cases:
             entry["same"] = False
@@ -139,9 +120,10 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     visible = ctx.sets.load(sets[harness_capture.VISIBLE])
     replay = manifest.build.targets[harness_replay.REPLAY_ROLE]
     replay_detail = {"dataset": harness_capture.VISIBLE, "cases": len(visible)}
+    cases = harness_replay.wire_inputs(visible)
     runs = [
-        _replay(ctx.builder, attempt_id, replay.executable, visible),
-        _replay(ctx.builder, attempt_id, replay.executable, visible),
+        backend.replay(ctx, attempt_id, replay.executable, cases),
+        backend.replay(ctx, attempt_id, replay.executable, cases),
     ]
     replay_detail["executable_identity"] = next(
         (run.get("executable_identity") for run in runs if run.get("executable_identity")), None,

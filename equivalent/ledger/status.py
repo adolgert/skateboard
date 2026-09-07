@@ -7,8 +7,17 @@ function, not two copies of it, or they will drift apart.
 """
 from __future__ import annotations
 
+from .evidence import claim_matches_context
 from .store import LedgerStore
 from .subjects import Subject
+
+# What a reader is told when nobody could confirm the executable context.
+# Acceptance is withheld in that case, so the note says why rather than
+# leaving a reader to wonder which of the rows below is the problem.
+ADVISORY_NOTE = (
+    "Advisory only: nothing here confirmed that the executables these claims were "
+    "reached against are the ones in place now, so acceptance is withheld."
+)
 
 
 def _current_subject(store: LedgerStore, kind: str):
@@ -89,8 +98,13 @@ def compute_status(
     store: LedgerStore, requirements, phase: str,
     tree: Subject | None = None, frozen: Subject | None = None,
     *, required_materials=(), required_materials_by_predicate=None,
+    context_verified: bool,
 ) -> dict:
     """Status for the region's current tree, against one phase's requirements.
+
+    Whether the region is accepted is decided here and nowhere else. A
+    caller renders this answer; it does not recompute it, or two readers
+    of one ledger would disagree about whether a port is done.
 
     `requirements` is the list the region's phase is judged by
     (`equivalent.ledger.acceptance.requirements_for`), and `phase` is that
@@ -100,6 +114,14 @@ def compute_status(
     `tree` and `frozen` are the caller's answer to "what is current right
     now"; pass them when you have a better source than the ledger itself
     (see `_current_subject`). Leave them out to fall back to the guess.
+
+    `context_verified` is the one thing the caller knows that the ledger
+    cannot: whether the executables these claims were reached against
+    have been confirmed to be the ones in place now. The ledger holds
+    only the identities a claim named; nothing in it can say those
+    identities still exist. It is a required argument because a caller
+    that never thought about the question has no business being read as
+    having answered it, and acceptance needs a yes.
     """
     if tree is None:
         tree = _current_subject(store, "tree")
@@ -117,16 +139,53 @@ def compute_status(
             ),
         ))
 
-    accepted = tree is not None and all(
-        row["status"] == "present" and row["verdict"] == "pass" for row in rows
-    )
-    return {
+    status = {
         "tree": tree.sha256 if tree else None,
         "frozen": frozen.sha256 if frozen else None,
         "phase": phase,
         "rows": rows,
-        "accepted": accepted,
+        "accepted": context_verified and tree is not None and all(
+            row["status"] == "present" and row["verdict"] == "pass" for row in rows
+        ),
+        "context_verified": context_verified,
     }
+    if not context_verified:
+        status["note"] = ADVISORY_NOTE
+    return status
+
+
+def accepted_by(claims, requirements, *, required_materials=()) -> bool:
+    """Would these claims, and no others, finish some tree?
+
+    This is the same acceptance rule `compute_status` applies, asked of a
+    hand-held list of claims rather than of everything a ledger holds: the
+    session summary replays one session's claims to say when in the run
+    acceptance was reached. A claim reached outside the current evidence
+    contract does not count here either, so the summary and the status
+    table cannot tell a reader two different stories about one ledger.
+
+    Every requirement is read from the phase's own list rather than named
+    here, so a requirement added there counts here without an edit. A
+    requirement on the frozen files is met by any frozen value that
+    passes, because a session's claims cannot say which frozen value was
+    current at the time.
+    """
+    latest = {}
+    for claim in claims:
+        if not claim_matches_context(claim, required_materials):
+            continue
+        for subject in claim.subject:
+            latest[(claim.predicateType, subject)] = claim.predicate.verdict
+    trees = {subject for (_, subject) in latest if subject.kind == "tree"}
+    frozen = {subject for (_, subject) in latest if subject.kind == "frozen"}
+    for tree in trees:
+        subjects_of = {"tree": [tree], "frozen": sorted(frozen, key=lambda s: s.sha256)}
+        if all(
+            any(latest.get((req.predicate_type, s)) == "pass" for s in subjects_of[req.subject_kind])
+            for req in requirements
+        ):
+            return True
+    return False
 
 
 def compute_history(store: LedgerStore) -> list[dict]:
