@@ -23,12 +23,17 @@ from __future__ import annotations
 import base64
 
 from equivalent.capture import npy
+from equivalent.ledger.vocabulary import EXECUTABLE_IDENTITY_KEY, PASS
 from equivalent.manifest.schema import Manifest
 
 from . import backend
 from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError
 from .names import REPLAY_ROLE
+
+# What this check's verdict is filed as. Spelled here because this is
+# where it is written; the visible regression reads the same claim.
+RUN_PREDICATE = "gpu/executed"
 
 
 def _output_problems(manifest: Manifest, outputs: dict) -> list:
@@ -63,12 +68,12 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
 
     replay = manifest.build.targets[REPLAY_ROLE]
     resp = backend.replay(
-        ctx, ctx.provenance.attempt_id(), replay.executable, visible_cases,
+        ctx.builder, ctx.provenance.attempt_id(), replay.executable, visible_cases,
         notify=ctx.strategy.device_proof.notify,
         mandatory=ctx.strategy.device_proof.mandatory,
     )
 
-    measured = {"executable_identity": resp.executable_identity}
+    measured = {EXECUTABLE_IDENTITY_KEY: resp.executable_identity}
 
     if not resp.ok:
         return failed(
@@ -91,7 +96,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
                 "omp target for nvfortran to offload them")
         return failed({**measured, "kernels_launched": 0, "hint": hint}, [hint])
     return CheckResult(
-        verdict="pass",
+        verdict=PASS,
         detail={
             **measured, "kernels_launched": kernels,
             # Where the builder's runtime said the launches came from --

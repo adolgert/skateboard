@@ -17,6 +17,7 @@ from equivalent.ledger.acceptance import (
     ONBOARDING_REQUIREMENTS,
     PORTING,
 )
+from equivalent.ledger.evidence import FOUNDATION_PREDICATES
 from equivalent.ledger.records import Claim, Predicate, RequestLogLine
 from equivalent.ledger.status import compute_status
 from equivalent.ledger.store import LedgerStore
@@ -53,16 +54,30 @@ def _sample_requests():
     ]
 
 
-def _claim(claim_id, ts, predicate_type, subject_kind, sha256, verdict, session_id, materials=()):
+# The executable a build in these ledgers produced. A claim that rests on
+# a build only counts as current evidence when it names that executable.
+BINARY = Subject(kind="binary", sha256="e" * 64)
+BUILT = {"targets": {"replay": {"sha256": BINARY.sha256}}}
+
+
+def _claim(claim_id, ts, predicate_type, subject_kind, sha256, verdict, session_id,
+           materials=(), detail=None):
     return Claim(
         id=claim_id,
         ts=ts,
         subject=(Subject(kind=subject_kind, sha256=sha256),),
         predicateType=predicate_type,
-        predicate=Predicate(tool="t", version="0.1", configHash="cfg", verdict=verdict, detail={}),
+        predicate=Predicate(
+            tool="t", version="0.1", configHash="cfg", verdict=verdict, detail=detail or {},
+        ),
         materials=tuple(materials),
         session=session_id,
     )
+
+
+def _rests_on_the_build(predicate_type: str) -> bool:
+    """Whether a claim of this type has to name the build's executables."""
+    return predicate_type not in FOUNDATION_PREDICATES
 
 
 def _write_session(path, entries):
@@ -338,10 +353,12 @@ def test_a_claim_reached_under_a_strategy_nobody_uses_finishes_nothing(tmp_path)
     )]
     for i, req in enumerate(ACCEPTANCE_REQUIREMENTS, start=1):
         sha = frozen if req.subject_kind == "frozen" else tree
+        materials = superseded if req.predicate_type == "timing/port" else current
         store.append_claim(_claim(
             f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", req.predicate_type, req.subject_kind,
             sha, "pass", "sess-1",
-            materials=superseded if req.predicate_type == "timing/port" else current,
+            materials=(*materials, *((BINARY,) if _rests_on_the_build(req.predicate_type) else ())),
+            detail=BUILT if req.predicate_type == "build/replay" else None,
         ))
 
     status = compute_status(
@@ -373,7 +390,9 @@ def test_the_summary_and_the_status_table_agree_that_one_ledger_is_finished(tmp_
         sha = frozen if req.subject_kind == "frozen" else tree
         store.append_claim(_claim(
             f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", req.predicate_type, req.subject_kind,
-            sha, "pass", "sess-1", materials=current,
+            sha, "pass", "sess-1",
+            materials=(*current, *((BINARY,) if _rests_on_the_build(req.predicate_type) else ())),
+            detail=BUILT if req.predicate_type == "build/replay" else None,
         ))
 
     status = compute_status(

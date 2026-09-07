@@ -12,7 +12,7 @@ from __future__ import annotations
 from functools import partial
 
 from equivalent.components import harness_property
-from equivalent.tree import attempt_id_for_strategy
+from equivalent.components.workspaces import attempt_id_for_strategy
 from equivalent.tests.fakes import FakeBuilder, property_run, write_tree
 
 REGION = "tsunami:onboarding"

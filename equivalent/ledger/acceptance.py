@@ -35,6 +35,11 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Requirement:
     predicate_type: str
+    # Which subject the claim that meets this has to be about: the tree
+    # that was submitted, or the baseline files the allow-list holds
+    # still around it. The precondition table beside this uses a wider
+    # vocabulary -- one of its rows rests on a claim about the pristine
+    # baseline tree -- but a requirement is only ever about these two.
     subject_kind: str  # "tree" or "frozen"
     producing_action: str
 

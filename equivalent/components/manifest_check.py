@@ -17,17 +17,17 @@ a JSON load are the whole of the work.
 """
 from __future__ import annotations
 
-import json
 import math
 from numbers import Integral, Real
 from pathlib import Path
 
 import yaml
 
+from equivalent.ledger.vocabulary import PASS
 from equivalent.manifest.schema import IN_TREE_MANIFEST, load_tree_manifest
 
 from .context import CheckContext, CheckResult, failed
-from .names import FILE_BANDS, VARIABLE_BANDS
+from .names import bands
 
 # The declared types whose comparison consults a tolerance band, and what
 # a band has to say. This is the same rule the oracle applies to its own
@@ -57,10 +57,6 @@ def _in_tree_words(message: str, scratch) -> str:
     return message.replace(f"{scratch}/", "").replace(str(scratch), "the tree")
 
 
-def _fail(reason: str, detail=None) -> CheckResult:
-    return failed({**(detail or {}), "reason": reason}, [reason])
-
-
 def _policy(manifest) -> tuple:
     """The policy's band per variable and per file, or why there are none to read.
 
@@ -70,21 +66,15 @@ def _policy(manifest) -> tuple:
     they band two different measurements: one call of the region, and a
     whole run of the program, which accumulates whatever two compilations
     disagree about over every step it takes.
+
+    The file is read here the way every later check reads it, so a policy
+    this check passed is one they can all read. Failing to read it is a
+    verdict about the code, because the file is the agent's own.
     """
     try:
-        policy = json.loads(Path(manifest.tolerances).read_text())
+        return (*bands(Path(manifest.tolerances).read_bytes()), [])
     except (OSError, ValueError) as exc:
-        return {}, {}, [f"the tolerance file does not read as JSON: {exc}"]
-    if not isinstance(policy, dict):
-        return {}, {}, ["the tolerance file is not a policy"]
-    problems = [
-        f"the tolerance file has no '{section}' map naming a band per {what}"
-        for section, what in ((VARIABLE_BANDS, "output variable"), (FILE_BANDS, "timing output"))
-        if not isinstance(policy.get(section), dict)
-    ]
-    if problems:
-        return {}, {}, problems
-    return policy[VARIABLE_BANDS], policy[FILE_BANDS], []
+        return {}, {}, [str(exc)]
 
 
 def _band_problems(bands: dict, name: str, because: str) -> list:
@@ -173,26 +163,31 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     it declares -- so a person reviewing the ledger reads the description
     that every later claim about this tree was filed under.
     """
-    with ctx.tree.materialized() as scratch:
-        try:
-            manifest = load_tree_manifest(scratch)
-        except FileNotFoundError:
-            return _fail(f"the tree holds no manifest at {IN_TREE_MANIFEST}")
-        except (OSError, ValueError, yaml.YAMLError) as exc:
-            return _fail(_in_tree_words(str(exc), scratch))
+    scratch = ctx.tree.directory
+    try:
+        manifest = load_tree_manifest(scratch)
+    except FileNotFoundError:
+        reason = f"the tree holds no manifest at {IN_TREE_MANIFEST}"
+        return failed({"reason": reason}, [reason])
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        reason = _in_tree_words(str(exc), scratch)
+        return failed({"reason": reason}, [reason])
 
-        if not manifest.complete:
-            return _fail(
-                f"the manifest at {IN_TREE_MANIFEST} still lacks {manifest.missing_parts()}; "
-                f"a code is checked against a manifest that says all of it",
-                {"manifest_sha256": manifest.sha256, "name": manifest.name},
-            )
+    if not manifest.complete:
+        reason = (f"the manifest at {IN_TREE_MANIFEST} still lacks "
+                  f"{manifest.missing_parts()}; a code is checked against a manifest "
+                  f"that says all of it")
+        return failed(
+            {"manifest_sha256": manifest.sha256, "name": manifest.name,
+             "reason": reason},
+            [reason],
+        )
 
-        variables, files, problems = _policy(manifest)
-        if not problems:
-            problems = _tolerance_problems(manifest, variables) + _timing_problems(manifest, files)
-        described = _described(manifest)
+    variables, files, problems = _policy(manifest)
+    if not problems:
+        problems = _tolerance_problems(manifest, variables) + _timing_problems(manifest, files)
+    described = _described(manifest)
 
     if problems:
         return failed({**described, "problems": problems}, problems)
-    return CheckResult(verdict="pass", detail=described)
+    return CheckResult(verdict=PASS, detail=described)

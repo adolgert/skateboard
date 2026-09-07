@@ -28,7 +28,7 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import contract, executor
+from . import compile_log, contract, executor
 
 # One workspace per attempt, rebuilt from scratch by each build.
 WORK_ROOT = "/work"
@@ -67,6 +67,7 @@ class DisposableJobs:
 
     owns_files = True
     audited = True
+    records_artifacts = True
 
     def __init__(self, work_root=WORK_ROOT):
         self.work_root = os.path.abspath(str(work_root))
@@ -123,7 +124,12 @@ class InProcessJobs:
     """
 
     owns_files = False
-    audited = False
+    # Whether a command run here is watched, and whether the supervisor
+    # holds a record of what was built, are fields rather than facts: a
+    # test that is about one of those two halves asks for it and leaves
+    # the rest of the boundary off.
+    audited: bool = False
+    records_artifacts: bool = False
     runner: Callable = field(default=executor.local_run)
 
     def run(self, cmd, *, cwd, env, timeout, mode="plain", gpu=False):
@@ -194,6 +200,31 @@ def write_tree(tree_dir, tree) -> str:
     return tree_dir
 
 
+def build_env(compiler, flags, link_flags, log_path, harness_dir) -> dict:
+    """The environment a submitted makefile is run in, wherever it is run.
+
+    The compiler it is handed is the logging shim, not the strategy's
+    compiler directly, so every invocation is recorded; the flags are in
+    the environment rather than on make's command line, so a makefile
+    that ignores them wins and is then visible in the log. The mutation
+    stage builds its mutants with this same environment, because a mutant
+    built some other way would say nothing about the build a port faces.
+    """
+    env = {
+        **os.environ,
+        "FC": os.path.join(harness_dir, "fc-shim"),
+        "FC_REAL": compiler,
+        "FC_LOG": log_path,
+        "FFLAGS": " ".join(flags),
+        "LDFLAGS": " ".join(link_flags),
+        "HARNESS": harness_dir,
+    }
+    module_flag = compile_log.module_flag(compiler)
+    if module_flag is not None:
+        env["MODFLAG"] = module_flag
+    return env
+
+
 def sha256_file(path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as source:
@@ -233,11 +264,60 @@ class Workspace:
         )
 
     def reset(self) -> None:
-        """Start the attempt from nothing, so nothing an earlier one left is read."""
+        """Start the attempt from nothing, so nothing an earlier one left is read.
+
+        The record of what was built is kept outside the attempt's own
+        directory, where a submitted job cannot reach it, so it has to be
+        removed by name: one left behind would identify a binary this
+        attempt never built.
+        """
         shutil.rmtree(self.root, ignore_errors=True)
+        try:
+            os.unlink(self.artifact_file)
+        except FileNotFoundError:
+            pass
 
     def write_tree(self, tree) -> str:
         return write_tree(self.tree_dir, tree)
+
+    def run_directory(self, label) -> str:
+        """A fresh writable copy of the built tree for one run to work in.
+
+        A measured run is given a copy rather than the tree itself, so
+        ordinary relative input, config and scratch files work and
+        nothing the run writes can reach the binary being measured or
+        the next repetition. Every policy copies; what a deployment adds
+        is that the tree it copies from is frozen and root-owned.
+        """
+        run_dir = self.path("timing", str(label))
+        shutil.rmtree(run_dir, ignore_errors=True)
+        shutil.copytree(self.tree_dir, run_dir, symlinks=True)
+        self.prepare_job_files()
+        self.writable_copy(run_dir)
+        return run_dir
+
+    @property
+    def records_executions(self) -> bool:
+        """Does a command run here leave a protected account of what it executed.
+
+        A stage asks this to know what its own evidence is worth, never
+        to decide how to run something: how much a run is watched is this
+        workspace's business, and is chosen by the mode a stage asks for.
+        """
+        return self.policy.audited
+
+    def build_env(self, compiler, flags, link_flags, log_path, harness_dir) -> dict:
+        """The environment a submitted makefile is built in under this policy.
+
+        Where the protected observer records the compiler itself, make is
+        handed the real compiler: the account of the build is then what
+        the kernel saw, and the agent-writable shim log is no longer a
+        trust root. Where there is no observer, the shim is the witness.
+        """
+        env = build_env(compiler, flags, link_flags, log_path, harness_dir)
+        if self.policy.audited:
+            env["FC"] = compiler
+        return env
 
     # ------------------------------------------------------------ identity
 
@@ -305,7 +385,7 @@ class Workspace:
         path = self.in_tree(relative)
         if path is None or not os.path.isfile(path) or os.path.islink(path):
             return None, None
-        if not self.policy.audited:
+        if not self.policy.records_artifacts:
             # A test builds tiny fixture trees without going through build(),
             # so there is no supervisor record to check them against.
             return path, self.identity_of(path)
@@ -379,20 +459,34 @@ class Workspace:
 
     # ----------------------------------------------------------- execution
 
+    def _watching(self, mode: str) -> str:
+        """How closely this policy watches the kind of command a stage named.
+
+        A build is watched wherever the observer exists, because what a
+        build claims is what the compiler was asked to do. A property run
+        is watched only where the observer is the protected one, since
+        counting replay invocations is worth nothing without it.
+        """
+        if mode == "build":
+            return "audited"
+        if mode == "properties":
+            return "audited" if self.policy.audited else "plain"
+        return mode
+
     def execute(self, cmd, *, cwd=None, env=None, timeout=300, mode="plain",
                 gpu=False, what="the command") -> executor.JobResult:
         """Run one submitted command under this workspace's execution policy.
 
-        `mode` is how much the run is watched: plain, `audited` for the
-        protected account of what executed, `profiled` for the
-        profiler's account of what the GPU ran. A command that never
-        reaches an exit status raises ExecutionFailed, so a stage
-        reports one sentence rather than catching whichever exception
-        the executor happened to raise.
+        `mode` says what is being run -- `build`, `properties`,
+        `profiled` for a run whose kernels are counted, or plain -- and
+        this workspace turns that into how closely the policy watches it.
+        A command that never reaches an exit status raises
+        ExecutionFailed, so a stage reports one sentence rather than
+        catching whichever exception the executor happened to raise.
         """
         try:
             return self.policy.run(
-                cmd, cwd=cwd, env=env, timeout=timeout, mode=mode, gpu=gpu,
+                cmd, cwd=cwd, env=env, timeout=timeout, mode=self._watching(mode), gpu=gpu,
             )
         except subprocess.TimeoutExpired:
             raise ExecutionFailed(

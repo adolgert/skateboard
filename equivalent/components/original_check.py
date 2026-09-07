@@ -13,25 +13,41 @@ from equivalent.capture import npy
 from equivalent.capture.compare import compare_variable
 from equivalent.ledger.packed import PackedArtifact
 from equivalent.ledger.subjects import Subject, hash_bytes
+from equivalent.ledger.vocabulary import (
+    EXECUTABLE_IDENTITY_KEY,
+    FAIL,
+    PASS,
+    REFERENCE_KEY,
+)
 from equivalent.reference.schema import load_reference
-from equivalent.tree import attempt_id_for_strategy
 
-from .build_replay import fortran_of
+from . import backend
+from .build_replay import Recipe, build_verdict
 from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError, after_the_manifest_check_passed
+from .names import TIMING_ROLE
+from .workspaces import attempt_id_for_tree
+
+# How many times each program is run. Two: one to compare with the other
+# program, and a second to say the first was not a coincidence.
+TIMED_RUNS = 2
+# What the two workspaces are for, in the names the builder holds them
+# under: the reviewed original is built in one of its own, never in the
+# workspace the submitted tree is built in.
+ORIGINAL = "original"
 
 
 def _comparison(expected: bytes, actual: bytes, spec: dict) -> dict:
     if spec["comparison"] == "bytes":
-        return {"pass": expected == actual}
+        return {PASS: expected == actual}
     try:
         ref, got = npy.decode(expected), npy.decode(actual)
         if ref.dtype.kind not in "fibu" or got.dtype.kind not in "fibu":
-            return {"pass": False, "error": "reference arrays must have numeric or logical dtype"}
+            return {PASS: False, "error": "reference arrays must have numeric or logical dtype"}
         tolerance = spec.get("tolerance", {"abs": 0, "rel": 0, "ulp": 0})
         return compare_variable(ref, got, tolerance)
     except Exception as exc:
-        return {"pass": False, "error": f"cannot compare reference arrays: {exc}"}
+        return {PASS: False, "error": f"cannot compare reference arrays: {exc}"}
 
 
 def _artifact(kept: list, encoded) -> tuple:
@@ -49,7 +65,72 @@ def _artifact(kept: list, encoded) -> tuple:
     return data, sha
 
 
+def _one_run(builder, run: dict, original, candidate_executable: str,
+             reference_attempt: str, candidate_attempt: str, kept: list) -> tuple:
+    """One named run of both programs, compared output by output.
+
+    Answers `(report, problem)`. The problem is not about one output but
+    about the run: two programs that did not both finish twice have not
+    been compared at all, and the outputs of such a run say nothing.
+    """
+    original_outputs = sorted({o["original"] for o in run["outputs"]})
+    candidate_outputs = sorted({o["candidate"] for o in run["outputs"]})
+    try:
+        expected = backend.time(builder, reference_attempt, original.executable,
+                                run["original_args"], run["env"], original_outputs,
+                                TIMED_RUNS, run["budget_s"])
+        actual = backend.time(builder, candidate_attempt, candidate_executable,
+                              run["candidate_args"], run["env"], candidate_outputs,
+                              TIMED_RUNS, run["budget_s"])
+    except Exception as exc:
+        raise ComponentError(
+            f"original comparison run {run['name']!r} could not finish: {exc}"
+        ) from exc
+
+    report = {"name": run["name"], "outputs": [], PASS: False,
+              "original_runs_s": expected.runs_s,
+              "candidate_runs_s": actual.runs_s,
+              "original_binary": {EXECUTABLE_IDENTITY_KEY: expected.executable_identity},
+              "candidate_binary": {EXECUTABLE_IDENTITY_KEY: actual.executable_identity}}
+    if any(not r.ok or len(r.outputs) != TIMED_RUNS or len(r.runs_s) != TIMED_RUNS
+           for r in (expected, actual)):
+        return report, f"{run['name']}: both programs must complete two runs"
+
+    for output in run["outputs"]:
+        result = {"original": output["original"], "candidate": output["candidate"],
+                  "comparison": output["comparison"], PASS: False}
+        report["outputs"].append(result)
+        try:
+            reference_files = [_artifact(kept, r[output["original"]]) for r in expected.outputs]
+            candidate_files = [_artifact(kept, r[output["candidate"]]) for r in actual.outputs]
+            result["original_artifacts"] = [f[1] for f in reference_files]
+            result["candidate_artifacts"] = [f[1] for f in candidate_files]
+            result["deterministic"] = (reference_files[0][0] == reference_files[1][0]
+                                       and candidate_files[0][0] == candidate_files[1][0])
+            result["comparison_result"] = _comparison(
+                reference_files[0][0], candidate_files[0][0], output,
+            )
+            result[PASS] = result["deterministic"] and result["comparison_result"][PASS]
+        except (KeyError, ValueError, TypeError) as exc:
+            result["error"] = f"missing or malformed program output: {exc}"
+    report[PASS] = all(o[PASS] for o in report["outputs"])
+    return report, None
+
+
 def check(ctx: CheckContext, config: dict) -> CheckResult:
+    """Build the reviewed original, run both programs, and require agreement.
+
+    The original is built in a workspace of its own, under the baseline
+    strategy, and judged by the same three statements every other build
+    is: the reference's own recipe is not a manifest's, but what makes a
+    build count is the same either way.
+
+    Both programs' outputs are kept beside a claim that says they agreed,
+    so a person can look at what they agreed on. Only such a claim keeps
+    them: a comparison that did not come out agreeing is not evidence
+    about either program, and filing its files beside it would put bytes
+    in the ledger that no claim stands behind.
+    """
     if ctx.original_reference_path is None:
         problems = [
             "No reviewed original_reference is configured. Preserve the original program "
@@ -62,88 +143,62 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         raise ComponentError(f"cannot read reviewed original reference: {exc}") from exc
     with after_the_manifest_check_passed():
         manifest = ctx.tree.manifest()
-    candidate = manifest.build.targets.get("timing")
+    candidate = manifest.build.targets.get(TIMING_ROLE)
     if candidate is None:
         problems = ["candidate declares no timing target"]
         return failed({"problems": problems}, problems)
+
     baseline_strategy = ctx.baseline_strategy
-    builder = ctx.builder
-    compiler = fortran_of(baseline_strategy)
-    reference_attempt = attempt_id_for_strategy(
-        ctx.region_id + "-original", original.sha256, baseline_strategy.name,
+    reference_attempt = attempt_id_for_tree(
+        ctx.region_id, ORIGINAL, original.sha256, baseline_strategy.name,
     )
     candidate_attempt = ctx.provenance.attempt_id()
-    payload = [{"path": f["path"], "b64": base64.b64encode(f["content"]).decode("ascii")}
-               for f in original.files]
-    try:
-        build = builder.build(
-            reference_attempt, payload, original.makefile,
-            [{"role": "timing", "target": original.target, "executable": original.executable}],
-            compiler.compiler, list(compiler.flags), list(baseline_strategy.link_flags),
-            list(original.source_patterns),
-        )
-    except Exception as exc:
-        raise ComponentError(f"original reference build failed: {exc}") from exc
-    detail = {"reference_sha256": original.sha256, "provenance": original.provenance,
-              "reference_build": build.as_dict(), "runs": [], "problems": []}
+    build = build_verdict(
+        ctx.builder, reference_attempt,
+        [{"path": f["path"], "b64": base64.b64encode(f["content"]).decode("ascii")}
+         for f in original.files],
+        baseline_strategy,
+        Recipe(
+            makefile=original.makefile,
+            targets=({"role": TIMING_ROLE, "target": original.target,
+                      "executable": original.executable},),
+            source_patterns=original.source_patterns,
+        ),
+    )
+    detail = {REFERENCE_KEY: original.sha256, "provenance": original.provenance,
+              "reference_build": build.detail, "runs": [], "problems": []}
     # The reviewed original is what this verdict is a comparison against,
     # so it is a formal material rather than a note in the detail.
     materials = (Subject(kind="reference", sha256=original.sha256),)
-    if not (build.ok and build.flags_reached_every_compile and build.compiled_only_tree_source):
-        detail["problems"].append("original reference did not build under the reviewed baseline strategy")
-        return CheckResult(
-            verdict="fail", detail=detail, reasons=tuple(detail["problems"]),
-            materials=materials,
+    if build.verdict != PASS:
+        detail["problems"].append(
+            "original reference did not build under the reviewed baseline strategy"
         )
+        return CheckResult(
+            verdict=FAIL, detail=detail,
+            reasons=(*detail["problems"], *build.reasons), materials=materials,
+        )
+
     kept = []
     for run in original.runs:
-        original_outputs = sorted({o["original"] for o in run["outputs"]})
-        candidate_outputs = sorted({o["candidate"] for o in run["outputs"]})
-        try:
-            expected = builder.time(reference_attempt, original.executable, run["original_args"],
-                                    run["env"], original_outputs, 2, run["budget_s"])
-            actual = builder.time(candidate_attempt, candidate.executable, run["candidate_args"],
-                                  run["env"], candidate_outputs, 2, run["budget_s"])
-        except Exception as exc:
-            raise ComponentError(f"original comparison run {run['name']!r} could not finish: {exc}") from exc
-        report = {"name": run["name"], "outputs": [], "pass": False,
-                  "original_runs_s": expected.runs_s,
-                  "candidate_runs_s": actual.runs_s,
-                  "original_binary": {"executable_identity": expected.executable_identity},
-                  "candidate_binary": {"executable_identity": actual.executable_identity}}
+        report, problem = _one_run(
+            ctx.builder, run, original, candidate.executable,
+            reference_attempt, candidate_attempt, kept,
+        )
         detail["runs"].append(report)
-        if any(not r.ok or len(r.outputs) != 2 or len(r.runs_s) != 2
-               for r in (expected, actual)):
-            detail["problems"].append(f"{run['name']}: both programs must complete two runs")
-            continue
-        for output in run["outputs"]:
-            result = {"original": output["original"], "candidate": output["candidate"],
-                      "comparison": output["comparison"], "pass": False}
-            report["outputs"].append(result)
-            try:
-                reference_files = [_artifact(kept, r[output["original"]]) for r in expected.outputs]
-                candidate_files = [_artifact(kept, r[output["candidate"]]) for r in actual.outputs]
-                result["original_artifacts"] = [f[1] for f in reference_files]
-                result["candidate_artifacts"] = [f[1] for f in candidate_files]
-                result["deterministic"] = (reference_files[0][0] == reference_files[1][0]
-                                           and candidate_files[0][0] == candidate_files[1][0])
-                result["comparison_result"] = _comparison(reference_files[0][0], candidate_files[0][0], output)
-                result["pass"] = result["deterministic"] and result["comparison_result"]["pass"]
-            except (KeyError, ValueError, TypeError) as exc:
-                result["error"] = f"missing or malformed program output: {exc}"
-        report["pass"] = all(o["pass"] for o in report["outputs"])
-    passed = not detail["problems"] and all(run["pass"] for run in detail["runs"])
-    if passed:
+        if problem is not None:
+            detail["problems"].append(problem)
+
+    if not detail["problems"] and all(run[PASS] for run in detail["runs"]):
         return CheckResult(
-            verdict="pass", detail=detail, materials=materials, stores=tuple(kept),
+            verdict=PASS, detail=detail, materials=materials, stores=tuple(kept),
         )
     return CheckResult(
-        verdict="fail", detail=detail,
+        verdict=FAIL, detail=detail,
         reasons=tuple([
             *detail["problems"],
             *(f"{run['name']}: the two programs did not agree on every output"
-              for run in detail["runs"] if not run["pass"]),
+              for run in detail["runs"] if not run[PASS]),
         ]),
         materials=materials,
-        stores=tuple(kept),
     )

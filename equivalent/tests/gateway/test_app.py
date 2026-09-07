@@ -10,7 +10,7 @@ from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.gateway.conftest import region_config
-from equivalent.gateway.backend_client import HealthResponse
+from equivalent.components.answers import HealthResponse
 from equivalent.tests.fakes import EXECUTOR_IDENTITY, FakeBuilder, write_program
 
 TOKEN = "test-token"
@@ -172,7 +172,7 @@ def test_get_status_reports_the_real_current_tree_before_any_check_has_run(tmp_p
     expected = compute_status(
         store, requirements_for(cfg.phase, cfg.manifest), cfg.phase,
         tree=Subject(kind="tree", sha256=tree_sha), frozen=Subject(kind="frozen", sha256=frozen_sha),
-        context_verified=False,
+        required_materials=(), context_verified=False,
     )
     assert body == expected
     assert body["context_verified"] is False
@@ -225,7 +225,10 @@ def test_compute_status_and_history_without_repo_info_are_unchanged(tmp_path):
     # The CLI's own behaviour and golden file must keep working: no tree
     # or frozen argument means fall back to the claims-based guess.
     store = LedgerStore(tmp_path / "region")
-    status = compute_status(store, requirements_for(PORTING), PORTING, context_verified=True)
+    status = compute_status(
+        store, requirements_for(PORTING), PORTING,
+        required_materials=(), context_verified=True,
+    )
     history = compute_history(store)
     assert status["tree"] is None
     assert status["accepted"] is False

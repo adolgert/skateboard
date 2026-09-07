@@ -29,23 +29,31 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from equivalent.ledger.capture_sets import pack_program_set, program_arrays
 from equivalent.ledger.subjects import Subject
+from equivalent.ledger.vocabulary import (
+    EXECUTABLE_IDENTITY_KEY,
+    FAIL,
+    PASS,
+    POLICY_KEY,
+    PROGRAM_SET_KEY,
+)
 from equivalent.manifest.schema import Manifest
-from equivalent.tree import attempt_id_for
 
 from . import program_outputs
-from .build_replay import build_verdict
-from .context import CheckContext, CheckResult, failed
+from .build_replay import Recipe, build_verdict
+from .context import CheckContext, CheckResult
 from .errors import ComponentError
-from .names import PROGRAM_SET_KEY, TIMING_ROLE
+from .names import TIMING_ROLE
+from .workspaces import attempt_id_for_tree
 
 # The other claim a port's timing rests on: the program comparison that
 # says the port is still the same code at this size. Which claim carries
 # the build it was compiled by is the provenance's to name.
 PROGRAM_PREDICATE = "program/regression"
-# Which of the request's subjects a baseline timing is filed against.
+# Which of the request's subjects a baseline timing is filed against, and
+# what the builder's workspace for the baseline is for.
 BASELINE_SUBJECT = "baseline_tree"
+BASELINE = "baseline"
 # How many timed runs a request that says nothing asks for.
 DEFAULT_REPEATS = 5
 # What the baseline claim's detail says instead when there was nothing
@@ -70,7 +78,7 @@ def _measured(resp, manifest: Manifest, extra: dict) -> dict:
         "args": list(timing.args),
         "env": dict(timing.env),
         "outputs": program_outputs.collected(resp.outputs),
-        "executable_identity": resp.executable_identity,
+        EXECUTABLE_IDENTITY_KEY: resp.executable_identity,
         **extra,
     }
 
@@ -81,13 +89,15 @@ def check_port(ctx: CheckContext, config: dict) -> CheckResult:
     The flags come from the tree's own build claim -- the builder's record
     of what it passed to the compiler -- not recomputed from the strategy,
     so the timing claim describes the binary that really exists. Same
-    read-back pattern as regression_visible using gpu/executed's outputs.
+    read-back pattern as regression_visible using the run claim's outputs.
 
     Every repetition's files are compared with the baseline program's, not
     only the one program_regression already compared: a port whose answers
     drift between runs at timing size is a port whose measured time is of
     something other than the code, and this is the only check that runs the
-    program more than once.
+    program more than once. The two things that comparison rests on -- the
+    baseline's stored outputs and the bands they are compared within --
+    come back as the claim's materials.
     """
     manifest = ctx.provenance.manifest()
     flags = ctx.claims[ctx.provenance.build_predicate].predicate.detail.get("flags")
@@ -104,26 +114,30 @@ def check_port(ctx: CheckContext, config: dict) -> CheckResult:
     if refusal is not None:
         return refusal
 
-    bands, policy_sha = program_outputs.tolerance_policy(manifest)
+    per_file, policy = program_outputs.tolerance_policy(manifest)
     comparisons = [
-        program_outputs.compare_outputs(ctx.sets, program_set, manifest, run, bands)
+        program_outputs.compare_outputs(ctx.sets, program_set, manifest, run, per_file)
         for run in response.outputs
     ]
     detail = {
         **_measured(response, manifest, {"flags": flags}),
-        PROGRAM_SET_KEY: program_set, "policy_sha256": policy_sha,
+        PROGRAM_SET_KEY: program_set, POLICY_KEY: policy.sha256,
         "compared_repetitions": len(comparisons), "per_run": comparisons,
     }
+    materials = (policy, Subject(kind="capture_set", sha256=program_set))
     reasons = [
         reason for per_var in comparisons
         for reason in program_outputs.comparison_reasons(per_var)
     ]
-    if all(per_var and all(v["pass"] for v in per_var.values()) for per_var in comparisons):
-        return CheckResult(verdict="pass", detail=detail)
-    return failed(detail, reasons or [
-        "a timed repetition wrote nothing the baseline program's outputs could be "
-        "compared with"
-    ])
+    if all(per_var and all(v[PASS] for v in per_var.values()) for per_var in comparisons):
+        return CheckResult(verdict=PASS, detail=detail, materials=materials)
+    return CheckResult(
+        verdict=FAIL, detail=detail, materials=materials,
+        reasons=tuple(reasons or [
+            "a timed repetition wrote nothing the baseline program's outputs could be "
+            "compared with"
+        ]),
+    )
 
 
 def check_baseline(ctx: CheckContext, config: dict) -> CheckResult:
@@ -144,13 +158,14 @@ def check_baseline(ctx: CheckContext, config: dict) -> CheckResult:
     baseline_strategy = ctx.baseline_strategy
     # Not the provenance's workspace: what is built and timed here is the
     # pristine baseline, which the region's own build never touches.
-    attempt_id = attempt_id_for(f"{ctx.region_id}-baseline", ctx.baseline.sha)
+    attempt_id = attempt_id_for_tree(ctx.region_id, BASELINE, ctx.baseline.sha)
     build_result = build_verdict(
-        ctx.builder, attempt_id, ctx.baseline.payload(), baseline_strategy, manifest,
+        ctx.builder, attempt_id, ctx.baseline.payload(), baseline_strategy,
+        Recipe.from_manifest(manifest),
     )
-    if build_result.verdict != "pass":
+    if build_result.verdict != PASS:
         return CheckResult(
-            verdict="fail",
+            verdict=FAIL,
             detail={
                 "stage": "build", "strategy": baseline_strategy.name,
                 "build": build_result.detail,
@@ -179,7 +194,7 @@ def check_baseline(ctx: CheckContext, config: dict) -> CheckResult:
         (Subject(kind="capture_set", sha256=packed.sha256),) if packed is not None else ()
     )
     return CheckResult(
-        verdict="fail" if problems else "pass",
+        verdict=FAIL if problems else PASS,
         detail=detail,
         reasons=tuple(problems),
         materials=materials,
@@ -198,18 +213,14 @@ def _packed_program(manifest: Manifest, resp) -> tuple[dict, object, list]:
     and the claim would otherwise read as a baseline a port could be
     compared against.
     """
-    declared = manifest.timing.outputs
-    if not declared:
+    if not manifest.timing.outputs:
         return {
             PROGRAM_SET_KEY: None,
             PROGRAM_SET_ABSENT: "the manifest declares no timing outputs, so this run "
                                 "left nothing a port's own program run could be "
                                 "compared against",
         }, None, []
-    runs = resp.outputs
-    arrays, unreadable = program_arrays(runs[-1] if runs else {}, declared)
-    if unreadable:
-        problems = sorted(unreadable.values())
+    packed, problems = program_outputs.packed_program_set(manifest, resp)
+    if problems:
         return {PROGRAM_SET_KEY: None, "problems": problems}, None, problems
-    packed = pack_program_set(arrays)
     return {PROGRAM_SET_KEY: packed.sha256}, packed, []

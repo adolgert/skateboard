@@ -64,6 +64,19 @@ class Harness:
         self.claims: dict = {}
         self.repo_dir = tmp_path / "repo"
 
+    def pristine(self) -> Path:
+        """A repository whose baseline is a tree carrying no manifest.
+
+        What a baseline timing builds is the code as it was before any
+        port, which is not a tree an onboarding session wrote: it has no
+        manifest inside it, and the manifest it is judged by is the
+        promoted one the context carries.
+        """
+        seed = self.tmp_path / "seed" / "src"
+        seed.mkdir(parents=True, exist_ok=True)
+        (seed / "mod_kernel.f90").write_text("module mod_kernel\nend module\n")
+        return self.repo(self.tmp_path / "seed")
+
     def repo(self, seed=None) -> Path:
         """A repository whose baseline is `seed`, or the fixture code's tree.
 

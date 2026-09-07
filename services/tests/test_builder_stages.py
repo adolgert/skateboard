@@ -9,6 +9,7 @@ installed, so the suite still runs on a machine with no compiler.
 import base64
 import importlib.util
 import io
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -16,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from services.builder import stages, workspace
+from services.builder import compile_log, stages, workspace
 
 HARNESS = Path(__file__).resolve().parents[1] / "builder" / "harness"
 
@@ -193,6 +194,49 @@ def test_a_compile_error_is_a_failed_build_carrying_the_compiler_log(attempt):
     assert "Error" in result.log_tail or "error" in result.log_tail
 
 
+@needs_gfortran
+def test_the_protected_observer_reports_the_compiles_the_shim_log_reports(attempt):
+    # A deployment reads execve records instead of the shim's log, which
+    # removes the writable log file as a trust root. The two accounts have
+    # to say the same thing about the same build, or a claim would depend
+    # on which half of the harness produced it.
+    result = build(attempt, {
+        "Makefile": "replay: src/main.f90\n\t$(FC) $(FFLAGS) -o replay src/main.f90\n",
+        "src/main.f90": MAIN,
+    })
+    assert result.ok is True
+    logged = [
+        json.loads(line) for line in
+        Path(attempt.path(stages.LOG_NAME)).read_text().splitlines() if line.strip()
+    ]
+    assert logged
+
+    observed, audit, problem = stages._observed_compiler_log(
+        {"ok": True, "executions": [
+            {"path": shutil.which("gfortran"), "argv": ["gfortran", *entry["argv"]]}
+            for entry in logged
+        ]},
+        "gfortran", attempt.tree_dir,
+    )
+
+    assert problem is None
+    assert audit["protected"] is True
+    assert audit["compiler_invocations"] == len(logged)
+    assert compile_log.compile_records(
+        observed, attempt.tree_dir, FLAGS, PATTERNS, harness_dir=str(HARNESS),
+    ) == result.compiles
+
+
+def test_a_build_the_observer_saw_no_compiler_in_is_not_a_reported_build():
+    observed, audit, problem = stages._observed_compiler_log(
+        {"ok": True, "executions": [{"path": "/bin/sh", "argv": ["sh", "-c", "true"]}]},
+        "gfortran", "/tmp",
+    )
+
+    assert (observed, audit) == ("", {})
+    assert "observed no invocation" in problem
+
+
 def _never_returns(cmd, **kwargs):
     """Stands in for a job that never comes back."""
     raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
@@ -247,6 +291,19 @@ def test_run_writes_the_inputs_replays_each_case_and_collects_the_outputs(attemp
 
 
 @needs_gfortran
+def test_run_refuses_a_case_whose_array_did_not_arrive_as_array_bytes(attempt):
+    # A stage that let this reach the decoder would answer with a crashed
+    # service, which a reader cannot tell from a machine that fell over.
+    build(attempt, {"Makefile": WRITER_MAKEFILE, "src/writer.f90": WRITER})
+
+    result = stages.run(attempt, "replay", {"case0000": {"field": "not base64 at all"}})
+
+    assert result.ok is False
+    assert result.case == "case0000"
+    assert "base64" in result.log_tail
+
+
+@needs_gfortran
 def test_run_reports_the_executable_the_manifest_named_when_it_is_missing(attempt):
     build(attempt, {"Makefile": WRITER_MAKEFILE, "src/writer.f90": WRITER})
 
@@ -296,27 +353,15 @@ def test_time_run_repeats_the_program_and_returns_the_files_it_declared(attempt)
     assert b"done" in base64.b64decode(result.outputs[-1]["result.dat"])
 
 
-# A program whose declared output really is different every run. It counts
-# its own runs in a file beside the output rather than reading a clock:
-# two runs a few milliseconds apart can land on the same tick, and then
-# the test below would fail for a reason that has nothing to do with what
-# it is asking.
+# A program whose declared output really is different every run. It
+# writes its own process id rather than reading a clock: two runs a few
+# milliseconds apart can land on the same tick, and then the test below
+# would fail for a reason that has nothing to do with what it is asking.
+# It cannot count its runs in a file either -- each repetition works in a
+# fresh copy of the tree, which is the point of the test below it.
 DRIFTING_TIMER = """program drifting
-  integer :: n
-  logical :: there
-  n = 0
-  inquire(file='runs.dat', exist=there)
-  if (there) then
-    open(unit=11, file='runs.dat', status='old')
-    read(11, *) n
-    close(11)
-  end if
-  n = n + 1
-  open(unit=11, file='runs.dat', status='replace')
-  write(11, *) n
-  close(11)
   open(unit=10, file='result.dat')
-  write(10, *) n
+  write(10, *) getpid()
   close(10)
 end program drifting
 """
@@ -357,12 +402,11 @@ def test_time_run_fails_naming_an_output_file_the_program_did_not_write(attempt)
 
 
 @needs_gfortran
-def test_time_run_clears_a_declared_output_left_by_an_earlier_run(attempt):
+def test_time_run_does_not_collect_a_declared_output_the_tree_already_held(attempt):
     # Otherwise a program that stopped writing its output would be timed
     # happily and compared against the file the last port left behind.
     _timing_tree(attempt)
-    stale = Path(attempt.tree_dir) / "energy.csv"
-    stale.write_text("from an earlier attempt\n")
+    (Path(attempt.tree_dir) / "energy.csv").write_text("from an earlier attempt\n")
 
     result = stages.time_run(
         attempt, "whole_program", args=[], env={}, outputs=["energy.csv"],
@@ -370,7 +414,27 @@ def test_time_run_clears_a_declared_output_left_by_an_earlier_run(attempt):
     )
 
     assert result.ok is False
-    assert not stale.exists()
+    assert "energy.csv" in result.log_tail
+    assert result.outputs == []
+
+
+@needs_gfortran
+def test_every_timed_repetition_runs_in_its_own_copy_of_the_tree(attempt):
+    # The measured binary is executed from the tree it was built in and
+    # works in a copy of it, so nothing a run writes can reach the binary
+    # being measured or the run after it.
+    _timing_tree(attempt)
+
+    result = stages.time_run(
+        attempt, "whole_program", args=[], env={}, outputs=["result.dat"],
+        repeats=2, budget_s=60,
+    )
+
+    assert result.ok is True
+    assert not (Path(attempt.tree_dir) / "result.dat").exists()
+    assert sorted(p.name for p in Path(attempt.path("timing")).iterdir()) == [
+        "run-0001", "run-0002",
+    ]
 
 
 # A capture program small enough to read: it takes a number of cases and,
@@ -572,6 +636,27 @@ def test_properties_passes_when_every_property_holds(attempt):
     assert result.ok is True
     assert result.passed == 1
     assert result.failed == 0
+
+
+@needs_hypothesis
+def test_a_code_gets_the_determinism_property_from_the_library(attempt):
+    # The draw from the corpus, the bitwise comparison and "the region is
+    # a function of its inputs" are the same for every code, so a code's
+    # own module is left holding its physics and nothing else.
+    _property_tree(attempt, files={"harness/properties.py": (
+        "import harness_properties as harness\n"
+        "\n"
+        "\n"
+        "test_the_region_is_a_function_of_its_inputs = harness.determinism_property()\n"
+    )})
+
+    result = stages.properties(
+        attempt, "replay", "harness/properties.py", PROPERTY_CASES,
+        seed=7, max_examples=5, harness_dir=HARNESS,
+    )
+
+    assert result.ok is True, result.log_tail
+    assert result.passed == 1
 
 
 @needs_hypothesis

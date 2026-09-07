@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from equivalent.components import backend, build_replay, harness_build, harness_replay, run_replay
-from equivalent.components.context import provenance_for
+from equivalent.components.phase import provenance_for
 from equivalent.components.errors import ComponentError
 from equivalent.components.names import TIMING_ROLE
 from equivalent.manifest.schema import load_manifest
@@ -23,7 +23,7 @@ from equivalent.tests.components.conftest import (
     write_visible_dataset,
 )
 from equivalent.tests.fakes import FakeBuilder, write_program, write_tree
-from equivalent.tree import attempt_id_for, attempt_id_for_strategy
+from equivalent.components.workspaces import attempt_id_for, attempt_id_for_strategy
 
 REGION = "tsunami:onboarding"
 
@@ -135,8 +135,8 @@ def test_both_phases_run_the_replay_driver_through_the_one_shared_call(harness, 
                                                                       monkeypatch):
     asked = []
 
-    def record(ctx, attempt_id, executable, cases, *, notify=None, mandatory=False):
-        asked.append(ctx.phase)
+    def record(builder, attempt_id, executable, cases, *, notify=None, mandatory=False):
+        asked.append(attempt_id)
         raise AssertionError("stop here: what is being asked is who called")
 
     monkeypatch.setattr(backend, "replay", record)
@@ -151,10 +151,15 @@ def test_both_phases_run_the_replay_driver_through_the_one_shared_call(harness, 
     # approved, so it starts from one.
     onboarding_harness = Harness(tmp_path / "onboarding")
     onboarding_harness.captured()
+    onboarding = onboarding_harness.context(region_id=REGION)
 
     with pytest.raises(AssertionError):
         run_replay.check(porting, {})
     with pytest.raises(AssertionError):
-        harness_replay.check(onboarding_harness.context(region_id=REGION), {})
+        harness_replay.check(onboarding, {})
 
-    assert asked == ["porting", "onboarding"]
+    # One call, and each phase asked it for its own workspace.
+    assert asked == [
+        attempt_id_for(REGION, porting.tree.sha),
+        attempt_id_for_strategy(REGION, onboarding.tree.sha, BASELINE_STRATEGY),
+    ]

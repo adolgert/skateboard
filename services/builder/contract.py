@@ -26,10 +26,30 @@ class TreeFile(BaseModel):
     b64: str     # the file's bytes; a tree holds namelists and data, not only text
 
 
-class BuildTarget(BaseModel):
-    role: str        # what the manifest calls this target: replay, timing, capture
+class ReplayTarget(BaseModel):
     target: str      # what `make` is asked for
     executable: str  # what that target must leave in the tree, relative to its root
+
+
+class BuildTarget(ReplayTarget):
+    role: str        # what the manifest calls this target: replay, timing, capture
+
+
+# One case's arrays as they travel: {variable: base64 of that variable's
+# .npy file}. The file says what type and shape the array is, so nothing
+# on the wire repeats it.
+Arrays = dict[str, str]
+# What a replay, a sanitizer or a property run is given: {case: its inputs}.
+Cases = dict[str, Arrays]
+# And what a capture produced: each case's inputs beside the answers the
+# baseline wrote for them, keyed "inputs" and "outputs".
+CapturedCases = dict[str, dict[str, Arrays]]
+# The tolerance policy's band per output variable, as the policy file
+# spells it. What is inside one band is deliberately left alone: `ulp` is
+# a count of representable steps and `abs` and `rel` are real numbers,
+# and a band whose integer had been widened to a float on the way in
+# would be a different policy from the one the oracle checked.
+Bands = dict[str, dict]
 
 
 class BuildRequest(BaseModel):
@@ -51,9 +71,8 @@ class BuildRequest(BaseModel):
 class RunRequest(BaseModel):
     attempt_id: str
     executable: str  # the manifest's replay target
-    # {name: {variable: base64 of that variable's .npy file}}. The file
-    # says what type and shape the array is; nothing else has to.
-    cases: dict
+    # The file says what type and shape each array is; nothing else has to.
+    cases: Cases
     # The strategy's device proof: which offload runtime should be asked
     # to announce its kernel launches, or none at all.
     notify: str | None = None
@@ -73,10 +92,9 @@ class CaptureRequest(BaseModel):
 class SanitizeRequest(BaseModel):
     attempt_id: str
     executable: str
-    # One entry per case to sanitize, shaped like RunRequest.cases. How many
-    # cases that is comes from the gateway's hashed strategy file; the
-    # builder runs whatever it is sent.
-    cases: dict
+    # One entry per case to sanitize. How many cases that is comes from the
+    # gateway's hashed strategy file; the builder runs whatever it is sent.
+    cases: Cases
     tools: list = ["memcheck", "racecheck"]
 
 
@@ -84,9 +102,9 @@ class PropertiesRequest(BaseModel):
     attempt_id: str
     executable: str  # the manifest's replay target, which the properties call
     module: str      # the manifest's properties module, relative to the tree root
-    # The visible cases, shaped like RunRequest.cases. They become the corpus
-    # the code's own properties draw from.
-    cases: dict
+    # The visible cases, which become the corpus the code's own properties
+    # draw from.
+    cases: Cases
     seed: int
     max_examples: int
 
@@ -96,17 +114,15 @@ class MutateRequest(BaseModel):
     makefile: str
     # The manifest's replay target: what `make` is asked for, and what it
     # must leave behind for each mutant to be replayed.
-    replay_target: dict
+    replay_target: ReplayTarget
     # The files the manifest says implement the region. Nothing here
     # decides which those are; the gateway read them from the manifest.
     files: list[str] = []
-    # The visible capture set: {name: {"inputs": {variable: b64 npy},
-    # "outputs": {...}}}. The inputs are replayed and the outputs are what
-    # each mutant is scored against.
-    cases: dict = {}
-    # The tolerance policy's band per output variable, which is what
-    # decides whether a changed answer was noticed.
-    bands: dict = {}
+    # The visible capture set: the inputs are replayed and the outputs are
+    # what each mutant is scored against.
+    cases: CapturedCases = {}
+    # What decides whether a changed answer was noticed.
+    bands: Bands = {}
     compiler: str
     flags: list[str] = []
     link_flags: list[str] = []
@@ -119,7 +135,8 @@ class TimeRequest(BaseModel):
     attempt_id: str
     executable: str  # the manifest's timing target
     args: list[str] = []
-    env: dict = {}
+    # Values, not code: the manifest's own environment for a fair measurement.
+    env: dict[str, str] = {}
     outputs: list[str] = []  # files the run must write, collected and returned
     repeats: int = Field(default=5, ge=1)
     budget_s: int = Field(default=300, ge=1)

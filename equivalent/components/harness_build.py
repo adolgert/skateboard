@@ -16,6 +16,7 @@ copy of the same reasoning here.
 """
 from __future__ import annotations
 
+from equivalent.ledger.vocabulary import PASS
 from . import build_replay
 from .context import CheckContext, CheckResult, failed
 
@@ -33,19 +34,20 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     """
     manifest = ctx.provenance.manifest()
     tree = ctx.tree.payload()
+    recipe = build_replay.Recipe.from_manifest(manifest)
 
     per_strategy = {
         one.name: build_replay.build_verdict(
-            ctx.builder, ctx.provenance.attempt_id(one), tree, one, manifest,
+            ctx.builder, ctx.provenance.attempt_id(one), tree, one, recipe,
         )
         for one in ctx.provenance.strategies()
     }
 
-    did_not_build = [name for name, result in per_strategy.items() if result.verdict != "pass"]
+    did_not_build = [name for name, result in per_strategy.items() if result.verdict != PASS]
     detail = {
         "strategies": {name: result.detail for name, result in per_strategy.items()},
         "failed_strategies": did_not_build,
-        "targets_asked_for": [target["role"] for target in build_replay.build_targets(manifest)],
+        "targets_asked_for": [target["role"] for target in recipe.targets],
         "manifest_sha256": manifest.sha256,
     }
     if did_not_build:
@@ -53,4 +55,4 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
             f"strategy '{name}': {reason}"
             for name in did_not_build for reason in per_strategy[name].reasons
         ])
-    return CheckResult(verdict="pass", detail=detail)
+    return CheckResult(verdict=PASS, detail=detail)

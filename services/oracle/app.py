@@ -50,6 +50,8 @@ try:
 except ImportError:
     from equivalent.capture import compare as cmp
 
+from . import contract
+
 # The capture format, spelled out because this service cannot import the
 # package that defines it. One directory per case; `case.json` names the
 # variables that directory holds; each is an .npy file that says for
@@ -69,6 +71,17 @@ PROGRAM_DIR_VAR = "PROGRAM_DIR"
 DEFAULT_PROGRAM_DIR = "/program"
 MANIFEST_NAME = "manifest.yaml"
 CAPTURES_NAME = "captures"
+
+# The manifest keys this service reads. They are spelled here because
+# this image cannot import the package that defines the manifest, and a
+# test in that package holds these against its schema: an oracle looking
+# for a key the manifest no longer writes reports itself not-ready rather
+# than wrong.
+INTERFACE_KEY = "interface"
+OUTPUTS_KEY = "outputs"
+TOLERANCES_KEY = "tolerances"
+SOURCE_KEY = "source"
+SOURCE_ROOT_KEY = "root"
 
 # What a request needs before it can be answered, named the way the
 # not-ready reply names it.
@@ -142,9 +155,9 @@ def _declared_outputs(manifest_path) -> list | None:
     hold to a tolerance band, and nothing to compare either.
     """
     manifest = _manifest(manifest_path)
-    if manifest is None or "interface" not in manifest:
+    if manifest is None or INTERFACE_KEY not in manifest:
         return None
-    return list(manifest["interface"]["outputs"])
+    return list(manifest[INTERFACE_KEY][OUTPUTS_KEY])
 
 
 def policy_path_for(program_dir, manifest_path):
@@ -155,9 +168,9 @@ def policy_path_for(program_dir, manifest_path):
     than beside the manifest.
     """
     manifest = _manifest(manifest_path)
-    if manifest is None or "tolerances" not in manifest or "source" not in manifest:
+    if manifest is None or TOLERANCES_KEY not in manifest or SOURCE_KEY not in manifest:
         return None
-    return Path(program_dir) / manifest["source"]["root"] / manifest["tolerances"]
+    return Path(program_dir) / manifest[SOURCE_KEY][SOURCE_ROOT_KEY] / manifest[TOLERANCES_KEY]
 
 
 def _what_is_missing(captures_dir: Path, tolerances_path, outputs) -> list:
@@ -205,7 +218,7 @@ def _check_policy(policy: dict, outputs: list) -> None:
             raise ValueError(
                 f"the tolerance policy for output variable '{name}' is missing {missing}"
             )
-        problem = cmp._tolerance_problem(band)
+        problem = cmp.tolerance_problem(band)
         if problem:
             raise ValueError(
                 f"the tolerance policy for output variable '{name}' is invalid: {problem}"
@@ -270,7 +283,7 @@ def create_app(captures_dir, tolerances_path, manifest_path, token: str = "") ->
     def _load(dataset: str, case: str, name: str, suffix: str) -> np.ndarray:
         return np.load(captures_dir / dataset / case / f"{name}{suffix}", allow_pickle=False)
 
-    @app.get("/v1/policy")
+    @app.get("/v1/policy", response_model=contract.PolicyResponse)
     def get_policy(authorization: str | None = Header(default=None)):
         _auth(authorization)
         _ready()
@@ -280,7 +293,7 @@ def create_app(captures_dir, tolerances_path, manifest_path, token: str = "") ->
             "oracle_identity": oracle_identity,
         }
 
-    @app.get("/v1/dataset/holdout/inputs")
+    @app.get("/v1/dataset/holdout/inputs", response_model=contract.HoldoutInputsResponse)
     def holdout_inputs(authorization: str | None = Header(default=None)):
         """Served once, at acceptance. Inputs only -- never expected outputs."""
         _auth(authorization)
@@ -293,7 +306,10 @@ def create_app(captures_dir, tolerances_path, manifest_path, token: str = "") ->
             }
         return {"dataset": "holdout", "cases": cases}
 
-    @app.post("/v1/compare")
+    # A held-out answer carries no per-case detail at all, so the key is
+    # left out of the reply rather than sent empty.
+    @app.post("/v1/compare", response_model=contract.CompareResponse,
+              response_model_exclude_none=True)
     def compare_outputs(req: CompareReq, authorization: str | None = Header(default=None)):
         _auth(authorization)
         _ready()

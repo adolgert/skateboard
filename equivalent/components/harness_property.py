@@ -20,6 +20,7 @@ claim.
 """
 from __future__ import annotations
 
+from equivalent.ledger.vocabulary import PASS
 from . import harness_capture, harness_replay, property_check
 from .context import CheckContext, CheckResult
 from .errors import ComponentError
@@ -53,7 +54,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     """
     manifest = ctx.provenance.manifest()
     if manifest.properties is None:
-        return CheckResult(verdict="pass", detail={"module": None, "note": NO_PROPERTIES})
+        return CheckResult(verdict=PASS, detail={"module": None, "note": NO_PROPERTIES})
 
     sets = harness_capture.captured_sets(ctx)
     if VISIBLE not in sets:

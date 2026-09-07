@@ -1,3 +1,4 @@
+import pathlib
 from pathlib import Path
 
 import pytest
@@ -201,3 +202,42 @@ def test_any_other_case_selection_is_rejected_by_name(tmp_path):
 
     assert "sanitize_cases" in str(excinfo.value)
     assert "some" in str(excinfo.value)
+
+
+def _written(tmp_path, change) -> pathlib.Path:
+    """The stdpar strategy with one thing changed, written where it can be loaded."""
+    d = _base_dict()
+    change(d)
+    path = tmp_path / "changed.yaml"
+    path.write_text(yaml.safe_dump(d))
+    return path
+
+
+def test_a_pattern_written_as_one_string_is_refused_by_name(tmp_path):
+    # YAML reads a bare string as a string, and a list of its characters
+    # is what an allow-list of one pattern would silently become: a region
+    # allowed to edit "s", "r", "c". The message names the file and the
+    # field, because the person reading it is editing that file.
+    path = _written(tmp_path, lambda d: d.__setitem__("allow_globs", "src/*.f90"))
+
+    with pytest.raises(ValueError, match="allow_globs"):
+        load_strategy(path)
+
+    with pytest.raises(ValueError, match=str(path)):
+        load_strategy(path)
+
+
+def test_a_key_the_reader_does_not_know_is_refused_rather_than_ignored(tmp_path):
+    # A misspelled field that loads is the dangerous one: the file says
+    # something and the build does something else.
+    path = _written(tmp_path, lambda d: d.__setitem__("sanitisers", []))
+
+    with pytest.raises(ValueError, match="sanitisers"):
+        load_strategy(path)
+
+
+def test_a_version_that_is_not_a_number_is_refused(tmp_path):
+    path = _written(tmp_path, lambda d: d.__setitem__("version", "one"))
+
+    with pytest.raises(ValueError, match="version"):
+        load_strategy(path)

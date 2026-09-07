@@ -193,8 +193,10 @@ def _mutate(attempt, bands, **kwargs) -> dict:
     cases = _cases()
     scored = _reference(attempt, cases)
     return stages.mutate(
-        attempt, "Makefile", REPLAY_TARGET, ["src/mod_kernel.f90"], scored, bands,
-        "gfortran", FLAGS, [], PATTERNS, jobs=2, harness_dir=HARNESS, **kwargs,
+        attempt, makefile="Makefile", replay_target=REPLAY_TARGET,
+        files=["src/mod_kernel.f90"], cases=scored, bands=bands, compiler="gfortran",
+        flags=FLAGS, link_flags=[], source_patterns=PATTERNS, jobs=2,
+        harness_dir=HARNESS, **kwargs,
     )
 
 
@@ -289,8 +291,9 @@ def test_a_mutant_that_does_not_compile_is_reported_rather_than_scored(attempt):
     }
 
     result = stages.mutate(
-        attempt, "Makefile", REPLAY_TARGET, ["src/mod_kernel.f90"], scored, TIGHT,
-        "gfortran", FLAGS, [], PATTERNS, jobs=2, harness_dir=HARNESS,
+        attempt, makefile="Makefile", replay_target=REPLAY_TARGET,
+        files=["src/mod_kernel.f90"], cases=scored, bands=TIGHT, compiler="gfortran",
+        flags=FLAGS, link_flags=[], source_patterns=PATTERNS, jobs=2, harness_dir=HARNESS,
     )
 
     assert result.ok is True
@@ -301,8 +304,9 @@ def test_a_file_the_tree_does_not_hold_is_refused_rather_than_mutated(attempt):
     attempt.write_tree(_tree_payload(TREE))
 
     result = stages.mutate(
-        attempt, "Makefile", REPLAY_TARGET, ["../../escape.f90"], {}, TIGHT,
-        "gfortran", FLAGS, [], PATTERNS, harness_dir=HARNESS,
+        attempt, makefile="Makefile", replay_target=REPLAY_TARGET,
+        files=["../../escape.f90"], cases={}, bands=TIGHT, compiler="gfortran",
+        flags=FLAGS, link_flags=[], source_patterns=PATTERNS, harness_dir=HARNESS,
     )
 
     assert result.ok is False
@@ -311,8 +315,9 @@ def test_a_file_the_tree_does_not_hold_is_refused_rather_than_mutated(attempt):
 
 def test_a_tree_that_was_never_built_is_reported_rather_than_mutated(tmp_path):
     result = stages.mutate(
-        stages.workspace_for("attempt-2", work_root=tmp_path), "Makefile", REPLAY_TARGET,
-        ["src/mod_kernel.f90"], {}, TIGHT, "gfortran", FLAGS, [], PATTERNS,
+        stages.workspace_for("attempt-2", work_root=tmp_path), makefile="Makefile",
+        replay_target=REPLAY_TARGET, files=["src/mod_kernel.f90"], cases={}, bands=TIGHT,
+        compiler="gfortran", flags=FLAGS, link_flags=[], source_patterns=PATTERNS,
         harness_dir=HARNESS,
     )
 

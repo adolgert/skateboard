@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import json
 
-from equivalent.ledger.acceptance import FINISHED_WORD
-
 from .session import parse_ts
 
 
@@ -17,7 +15,17 @@ def short(sha256) -> str:
 
 
 def render_status(status: dict, region: str) -> str:
-    lines = [f"region {region}   tree {short(status['tree'])} (frozen {short(status['frozen'])})"]
+    """The one status answer as a person reads it, note and all.
+
+    The note says the reading is advisory and why. It is printed here
+    rather than by whoever called the computation, so that a reader is
+    never shown the rows without the sentence that says how far to trust
+    them.
+    """
+    lines = []
+    if status.get("note"):
+        lines.append(status["note"])
+    lines.append(f"region {region}   tree {short(status['tree'])} (frozen {short(status['frozen'])})")
     for row in status["rows"]:
         if row["status"] == "present":
             lines.append(f"  {row['predicateType']:<20} {row['verdict']:<6} {row['claim_id']}")
@@ -31,9 +39,10 @@ def render_status(status: dict, region: str) -> str:
         else:
             lines.append(f"  {row['predicateType']:<20} MISSING  (run: {row['producing_action']})")
     if status["accepted"]:
-        # The word depends on the phase: an onboarded code is ready for a
-        # person to review and promote, an accepted port is ready to merge.
-        lines.append(f"{FINISHED_WORD[status['phase']]} on {short(status['tree'])}")
+        # The word depends on the phase -- an onboarded code is ready for
+        # a person to review and promote, an accepted port is ready to
+        # merge -- and the computation says which word this phase uses.
+        lines.append(f"{status['finished_word']} on {short(status['tree'])}")
     return "\n".join(lines) + "\n"
 
 

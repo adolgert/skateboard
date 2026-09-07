@@ -6,6 +6,7 @@ respect to file ordering and path normalization.
 """
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import re
 import struct
@@ -57,6 +58,36 @@ def _normalize_path(path: str) -> str:
     while path.startswith("./"):
         path = path[2:]
     return path
+
+
+def glob_matches(path: str, pattern: str) -> bool:
+    """Does one pattern cover this path. The only rule anyone matches by.
+
+    A pattern is written once and read in several places: a strategy's
+    allow-list decides what a session may edit, the same list decides
+    what a submit accepts and which baseline files are frozen out of the
+    hash, and a manifest's source patterns decide what counts as source.
+    Two readers with two rules would allow an edit and then reject it, or
+    freeze a file one of them thought was allowed to move, so all of them
+    ask here.
+
+    The rule: the path is normalized first, so "./src/a.f90" and
+    "src/a.f90" are one path. Matching ignores case, because Fortran
+    spells the same extension both ways and a tree may hold either. A
+    leading "**/" means "at any depth, including none", so "**/*.f90"
+    covers both mod_kernel.f90 and src/mod_kernel.f90; elsewhere "*"
+    already crosses "/", so no other pattern needs the prefix.
+
+    Both sides are lower-cased and then matched case-sensitively rather
+    than leaving the choice to fnmatch, whose own case rule follows the
+    operating system: this answers the same on every machine.
+    """
+    lowered = _normalize_path(path).lower()
+    pattern = pattern.lower()
+    if pattern.startswith("**/"):
+        rest = pattern[3:]
+        return fnmatch.fnmatchcase(lowered, rest) or fnmatch.fnmatchcase(lowered, f"*/{rest}")
+    return fnmatch.fnmatchcase(lowered, pattern)
 
 
 def hash_files(files: list[dict]) -> str:
@@ -111,6 +142,25 @@ def strategy_subject(data: bytes) -> Subject:
 
 def binary_subject(data: bytes) -> Subject:
     return Subject(kind="binary", sha256=hash_bytes(data))
+
+
+def policy_subject(policy_bytes: bytes) -> Subject:
+    """The tolerance policy a comparison was judged within, as a material.
+
+    Plain sha256 of the file's bytes, because this digest crosses the
+    image boundary: the oracle computes it from the bytes it was given
+    and puts it in the answer it returns, and a check puts the same
+    digest on the claim it files. Anything else -- a framed file-set
+    hash, a hash of the path with it -- would be a second name for one
+    file, and a claim would carry two policy subjects for the policy it
+    was actually judged under.
+
+    A ledger written before this was settled carries the framed digest,
+    which is not this one, so those claims read as stale under the
+    current policy. That is what the material is for: a claim only counts
+    as evidence when it names the inputs that are in force now.
+    """
+    return Subject(kind="policy", sha256=hash_bytes(policy_bytes))
 
 
 def outputs_subject(cases: dict) -> Subject:

@@ -1,9 +1,6 @@
-from pathlib import Path
-
 from equivalent.components import sese_check
-from equivalent.strategy.schema import load_strategy
+from equivalent.tests.components.conftest import PORT_STRATEGY, strategy as strategy_named
 
-STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
 SPEC_PATH = "notes/regions/ch04-step.sese.yaml"
 
 CLEAN_SOURCE = """\
@@ -86,7 +83,7 @@ def _check(harness, strategy):
 
 def test_clean_region_passes_and_reports_file_list_and_allow_globs(harness):
     _one_file_repo(harness, CLEAN_SOURCE)
-    strategy = load_strategy(STRATEGY_PATH)
+    strategy = strategy_named(PORT_STRATEGY)
 
     result = _check(harness, strategy)
 
@@ -102,7 +99,7 @@ def test_a_region_spanning_two_files_unfreezes_both_of_them_and_the_spec(harness
         _spec(files, "src/mod_kernel.f90", 5, callee_file="src/mod_diff.f90"),
         {"src/mod_kernel.f90": CLEAN_SOURCE, "src/mod_diff.f90": DIFF_SOURCE},
     )
-    strategy = load_strategy(STRATEGY_PATH)
+    strategy = strategy_named(PORT_STRATEGY)
 
     result = _check(harness, strategy)
 
@@ -113,7 +110,7 @@ def test_a_region_spanning_two_files_unfreezes_both_of_them_and_the_spec(harness
 
 def test_region_with_goto_fails_and_names_the_violation(harness):
     _one_file_repo(harness, GOTO_SOURCE, hi=8)
-    strategy = load_strategy(STRATEGY_PATH)
+    strategy = strategy_named(PORT_STRATEGY)
 
     result = _check(harness, strategy)
 
@@ -128,7 +125,7 @@ def test_anchor_outside_the_strategys_allow_globs_fails_without_a_pass(harness):
     # lib/*.f90 isn't covered by stdpar_managed's allow_globs (src/*.f90),
     # even though the code itself is clean SESE control flow.
     _one_file_repo(harness, CLEAN_SOURCE, anchor_file="lib/mod_kernel.f90")
-    strategy = load_strategy(STRATEGY_PATH)
+    strategy = strategy_named(PORT_STRATEGY)
 
     result = _check(harness, strategy)
 
@@ -146,7 +143,7 @@ def test_a_second_listed_file_outside_the_allow_globs_fails_and_names_that_file(
         _spec(["src/mod_kernel.f90", "lib/mod_diff.f90"], "src/mod_kernel.f90", 5),
         {"src/mod_kernel.f90": CLEAN_SOURCE, "lib/mod_diff.f90": DIFF_SOURCE},
     )
-    strategy = load_strategy(STRATEGY_PATH)
+    strategy = strategy_named(PORT_STRATEGY)
 
     result = _check(harness, strategy)
 
@@ -166,7 +163,7 @@ def test_a_spec_that_lists_no_files_is_a_failed_verdict(harness):
         "  entry_symbol: step\n"
     )
     _repo(harness, spec_text, {"src/mod_kernel.f90": CLEAN_SOURCE})
-    strategy = load_strategy(STRATEGY_PATH)
+    strategy = strategy_named(PORT_STRATEGY)
 
     result = _check(harness, strategy)
 
@@ -182,7 +179,7 @@ def test_check_reads_the_committed_tree_not_whatever_is_on_disk_in_repo_dir(harn
     # only what was actually committed to the ref being checked.
     repo_dir = _one_file_repo(harness, CLEAN_SOURCE)
     (repo_dir / "src" / "mod_kernel.f90").write_text(GOTO_SOURCE)
-    strategy = load_strategy(STRATEGY_PATH)
+    strategy = strategy_named(PORT_STRATEGY)
 
     result = _check(harness, strategy)
 

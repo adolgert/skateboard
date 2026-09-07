@@ -149,31 +149,6 @@ def _accel_lines(text: str) -> str:
     return "\n".join(lines[:40])
 
 
-def build_env(compiler, flags, link_flags, log_path, harness_dir=HARNESS) -> dict:
-    """The environment a submitted makefile is run in, wherever it is run.
-
-    The compiler it is handed is the logging shim, not the strategy's
-    compiler directly, so every invocation is recorded; the flags are in
-    the environment rather than on make's command line, so a makefile
-    that ignores them wins and is then visible in the log. The mutation
-    stage builds its mutants with this same environment, because a mutant
-    built some other way would say nothing about the build a port faces.
-    """
-    env = {
-        **os.environ,
-        "FC": os.path.join(harness_dir, "fc-shim"),
-        "FC_REAL": compiler,
-        "FC_LOG": log_path,
-        "FFLAGS": " ".join(flags),
-        "LDFLAGS": " ".join(link_flags),
-        "HARNESS": harness_dir,
-    }
-    module_flag = compile_log.module_flag(compiler)
-    if module_flag is not None:
-        env["MODFLAG"] = module_flag
-    return env
-
-
 @dataclass
 class Made:
     """One `make` invocation and what the compiler was observed to do in it."""
@@ -228,9 +203,9 @@ def _make(workspace, *, cwd, makefile, targets, env, timeout, compiler, flags,
     """
     command = ["make", "-f", makefile, *targets]
     job = workspace.execute(
-        command, cwd=cwd, env=env, timeout=timeout, mode="audited", what=what,
+        command, cwd=cwd, env=env, timeout=timeout, mode="build", what=what,
     )
-    if workspace.policy.audited:
+    if workspace.records_executions:
         log, audit, problem = _observed_compiler_log(job.evidence, compiler, cwd)
     else:
         log, problem = _read_log(log_path), None
@@ -259,7 +234,10 @@ def build(workspace, tree, makefile, targets, compiler, flags, link_flags, sourc
     Makefile that ignores FFLAGS wins -- and is then visible.
     """
     workspace.reset()
-    tree_dir = workspace.write_tree(tree)
+    try:
+        tree_dir = workspace.write_tree(tree)
+    except ValueError as exc:
+        return BuildResponse.failure(str(exc))
     log_path = workspace.path(LOG_NAME)
 
     makefile_path = workspace.in_tree(makefile)
@@ -273,11 +251,7 @@ def build(workspace, tree, makefile, targets, compiler, flags, link_flags, sourc
                 f"target executable '{target['executable']}' leaves the tree"
             )
 
-    env = build_env(compiler, flags, link_flags, log_path, harness_dir)
-    # The protected exec observer records the compiler itself.  Giving make
-    # the real compiler also removes the writable fc.jsonl shim as a trust root.
-    if workspace.policy.audited:
-        env["FC"] = compiler
+    env = workspace.build_env(compiler, flags, link_flags, log_path, harness_dir)
     workspace.prepare_job_files(include_tree=True)
     try:
         made = _make(
@@ -367,8 +341,14 @@ def _write_case(cdir, arrs):
     for variable, encoded in arrs.items():
         if not _plain_name(variable):
             raise ValueError(f"case variable {variable!r} is not a plain name")
+        try:
+            data = base64.b64decode(encoded)
+        except (ValueError, TypeError):
+            raise ValueError(
+                f"variable {variable!r} did not arrive as base64 array bytes"
+            ) from None
         with open(os.path.join(cdir, f"{variable}{INPUT_SUFFIX}"), "wb") as f:
-            f.write(base64.b64decode(encoded))
+            f.write(data)
     return cdir
 
 
@@ -402,6 +382,9 @@ def run(workspace, executable, cases, notify=None, mandatory=False,
     `<executable> <case_dir>` -- the one contract a replay driver has --
     and whatever `<variable>.out.npy` files it leaves come back.
     """
+    problem = _case_problem(cases)
+    if problem is not None:
+        return RunResponse.failure(problem)
     replay, identity = workspace.executable(executable)
     if replay is None:
         return RunResponse.failure(
@@ -415,11 +398,10 @@ def run(workspace, executable, cases, notify=None, mandatory=False,
     launched_at = set()
     log_tail = ""
     for name, arrs in cases.items():
-        if not _plain_name(name):
-            return RunResponse.failure(
-                f"case name {name!r} is not a plain name", case=str(name),
-            )
-        cdir = _write_case(workspace.path("cases", name), arrs)
+        try:
+            cdir = _write_case(workspace.path("cases", name), arrs)
+        except ValueError as exc:
+            return RunResponse.failure(f"case '{name}': {exc}", case=name)
         workspace.prepare_job_files()
         try:
             job = workspace.execute(
@@ -465,6 +447,32 @@ def _plain_name(name) -> bool:
         isinstance(name, str) and name not in ("", ".", "..")
         and "/" not in name and "\\" not in name
     )
+
+
+def _case_problem(cases, sections=()) -> str | None:
+    """Why these cases cannot be written to disk, or None if they can.
+
+    A case name or a variable name that is not a plain name is a path out
+    of the directory it belongs in. Every stage that writes cases asks
+    this before it writes any of them, so a name like that is one stage's
+    refusal, in the shape that stage promised, rather than an exception
+    the caller reads as a crashed service.
+    """
+    if not isinstance(cases, dict):
+        return "the cases must be a mapping of case name to its arrays"
+    for name, arrays in cases.items():
+        if not _plain_name(name):
+            return f"case name {name!r} is not a plain name"
+        if not isinstance(arrays, dict):
+            return f"case '{name}' is not a mapping of variable name to array"
+        groups = [arrays.get(section, {}) for section in sections] if sections else [arrays]
+        for group in groups:
+            if not isinstance(group, dict):
+                return f"case '{name}' does not hold a mapping of variable name to array"
+            for variable in group:
+                if not _plain_name(variable):
+                    return f"case '{name}' names a variable {variable!r}, which is not a plain name"
+    return None
 
 
 def _read_captured_case(case_dir):
@@ -564,6 +572,9 @@ def sanitize(workspace, executable, cases, tools, *, timeout=SANITIZE_TIMEOUT_S)
     the cases and a tool fails if it failed on any of them, so a caller
     that asks for more cases gets a stricter verdict, not more verdicts.
     """
+    problem = _case_problem(cases)
+    if problem is not None:
+        return SanitizeResponse.failure(problem)
     replay, identity = workspace.executable(executable)
     if replay is None:
         return SanitizeResponse.failure(
@@ -578,7 +589,12 @@ def sanitize(workspace, executable, cases, tools, *, timeout=SANITIZE_TIMEOUT_S)
         last_log = ""
         unavailable = None
         for name, arrs in cases.items():
-            cdir = _write_case(workspace.path("san", name), arrs)
+            try:
+                cdir = _write_case(workspace.path("san", name), arrs)
+            except ValueError as exc:
+                failed = True
+                failing_log = f"case '{name}': {exc}"
+                break
             cmd = ["compute-sanitizer", "--tool", tool, "--error-exitcode", "1", replay, cdir]
             workspace.prepare_job_files()
             try:
@@ -682,6 +698,9 @@ def properties(workspace, executable, module, cases, seed, max_examples,
     is a different search rather than a repeat.
     """
     drawn = {"seed": seed, "max_examples": max_examples}
+    problem = _case_problem(cases)
+    if problem is not None:
+        return PropertiesResponse.failure(problem, **drawn)
     replay, identity = workspace.executable(executable)
     if replay is None:
         return PropertiesResponse.failure(
@@ -695,7 +714,10 @@ def properties(workspace, executable, module, cases, seed, max_examples,
             f"the properties module '{module}' {where}", **drawn,
         )
 
-    cases_dir = _write_dataset(workspace.path("property_cases"), cases)
+    try:
+        cases_dir = _write_dataset(workspace.path("property_cases"), cases)
+    except ValueError as exc:
+        return PropertiesResponse.failure(str(exc), **drawn)
     scratch = workspace.path("property_scratch")
     shutil.rmtree(scratch, ignore_errors=True)
     os.makedirs(scratch, exist_ok=True)
@@ -715,11 +737,11 @@ def properties(workspace, executable, module, cases, seed, max_examples,
     # .pytest_cache written into it would be a file nobody sent.
     command = [PYTHON, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--tb=short", module_path]
     workspace.prepare_job_files()
-    audited = workspace.policy.audited
+    audited = workspace.records_executions
     try:
         job = workspace.execute(
             command, cwd=workspace.tree_dir, env=env, timeout=timeout, gpu=True,
-            mode="audited" if audited else "plain", what="the property run",
+            mode="properties", what="the property run",
         )
     except ExecutionFailed as exc:
         return PropertiesResponse.failure(str(exc), **drawn)
@@ -918,13 +940,19 @@ def _mutation_corpus(workspace, cases) -> tuple:
         reference = os.path.join(refs_root, name)
         os.makedirs(reference, exist_ok=True)
         for variable, encoded in case.get("outputs", {}).items():
+            try:
+                data = base64.b64decode(encoded)
+            except (ValueError, TypeError):
+                raise ValueError(
+                    f"case '{name}' output {variable!r} did not arrive as base64 array bytes"
+                ) from None
             with open(os.path.join(reference, f"{variable}{OUTPUT_SUFFIX}"), "wb") as out:
-                out.write(base64.b64decode(encoded))
+                out.write(data)
     return inputs_root, refs_root
 
 
-def mutate(workspace, makefile, replay_target, files, cases, bands, compiler, flags,
-           link_flags, source_patterns, *, jobs=None, limit=None,
+def mutate(workspace, *, makefile, replay_target, files, cases, bands, compiler, flags,
+           link_flags, source_patterns, jobs=None, limit=None,
            harness_dir=HARNESS, timeout=MUTATE_TIMEOUT_S,
            ceiling=MUTATE_CEILING_S) -> MutateResponse:
     """Score every mutant of the region's own files against the captured answers.
@@ -953,6 +981,9 @@ def mutate(workspace, makefile, replay_target, files, cases, bands, compiler, fl
     Each result is one mutant and its verdict; the directories of the two
     verdicts a person has to read the source of are kept and named.
     """
+    problem = _case_problem(cases, ("inputs", "outputs"))
+    if problem is not None:
+        return MutateResponse.failure(problem)
     if not os.path.isdir(workspace.tree_dir):
         return MutateResponse.failure(
             f"there is no built tree for attempt '{workspace.attempt_id}'; "
@@ -980,16 +1011,17 @@ def mutate(workspace, makefile, replay_target, files, cases, bands, compiler, fl
             log_tail="no mutant was generated from the region's files",
         )
 
-    inputs_root, refs_root = _mutation_corpus(workspace, cases)
+    try:
+        inputs_root, refs_root = _mutation_corpus(workspace, cases)
+    except ValueError as exc:
+        return MutateResponse.failure(str(exc))
     payloads = []
     for mutant in todo:
         # One shim log per mutant: mutants are built at the same time, and
         # a log they shared would say that some other mutant's compile was
         # this one's.
         log_path = workspace.path("mutants", f"{mutant.mid}.fc.jsonl")
-        env = build_env(compiler, flags, link_flags, log_path, harness_dir)
-        if workspace.policy.audited:
-            env["FC"] = compiler
+        env = workspace.build_env(compiler, flags, link_flags, log_path, harness_dir)
         payloads.append({
             "mutant": mutant,
             "workspace": workspace,
@@ -1099,18 +1131,11 @@ def time_run(workspace, executable, args=(), env=None, outputs=(), repeats=5,
     collected = []
     last = ""
     for repetition in range(repeats):
-        # Production executes the immutable binary from the frozen tree but
-        # gives the application a fresh writable copy as its working directory.
-        # This supports ordinary relative input/config files and arbitrary
-        # scratch output without granting write access to the measured binary.
-        if workspace.policy.owns_files:
-            run_dir = workspace.path("timing", f"run-{repetition + 1:04d}")
-            shutil.rmtree(run_dir, ignore_errors=True)
-            shutil.copytree(workspace.tree_dir, run_dir, symlinks=True)
-            workspace.prepare_job_files()
-            workspace.writable_copy(run_dir)
-        else:
-            run_dir = workspace.tree_dir
+        # The immutable binary is executed from the frozen tree, and the
+        # application is given a fresh copy of that tree as its working
+        # directory: ordinary relative input, config and scratch files work,
+        # and nothing a run writes can reach the measured binary.
+        run_dir = workspace.run_directory(f"run-{repetition + 1:04d}")
         # A file left by an earlier run, or by an earlier attempt, would
         # otherwise be collected as if this run had written it.
         for relative in outputs:
@@ -1120,9 +1145,7 @@ def time_run(workspace, executable, args=(), env=None, outputs=(), repeats=5,
                     f"declared timing output '{relative}' leaves the tree",
                     runs_s=runs, outputs=collected,
                 )
-            if run_dir == workspace.tree_dir and (
-                os.path.samefile(path, program) if os.path.exists(path) else path == program
-            ):
+            if path == path_inside(run_dir, executable):
                 return TimeResponse.failure(
                     f"declared timing output '{relative}' is the measured executable",
                     runs_s=runs, outputs=collected,

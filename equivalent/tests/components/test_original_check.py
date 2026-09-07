@@ -7,8 +7,7 @@ import yaml
 
 from equivalent.capture import npy
 from equivalent.components import original_check
-from equivalent.reference.schema import load_reference, fingerprint_reference
-from equivalent.gateway.backend_client import TimeResponse
+from equivalent.components.answers import TimeResponse
 from equivalent.tests.fakes import FakeBuilder
 
 
@@ -29,14 +28,16 @@ def reference(tmp_path):
     return path
 
 
-def reference_builder(*, wrong_candidate=False, drift=False, incomplete=False) -> FakeBuilder:
+def reference_builder(*, wrong_candidate=False, drift=False, incomplete=False,
+                      value=42.0) -> FakeBuilder:
     """Both programs may be internally repeatable while disagreeing with one another."""
 
     def timed_runs(request):
         original = "-original-" in request["attempt_id"]
-        value = 42.0 if original or not wrong_candidate else -42.0
+        value_written = value if original or not wrong_candidate else -value
         written = [
-            {name: base64.b64encode(npy.encode(np.array([value + (i if drift else 0)]))).decode()
+            {name: base64.b64encode(
+                npy.encode(np.array([value_written + (i if drift else 0)]))).decode()
              for name in request["outputs"]}
             for i in range(request["repeats"])
         ]
@@ -74,6 +75,17 @@ def test_self_consistent_but_wrong_onboarded_program_fails(harness):
     assert comparison["comparison_result"]["pass"] is False
 
 
+def test_a_comparison_that_did_not_agree_keeps_nothing(harness):
+    # The claim that keeps both programs' outputs is the claim that says
+    # they agreed. A failing one leaves no bytes in the ledger for a
+    # reader to mistake for a comparison that was made.
+    result = check(harness, reference_builder(wrong_candidate=True),
+                   reference(harness.tmp_path))
+
+    assert result.verdict == "fail"
+    assert result.stores == ()
+
+
 @pytest.mark.parametrize("failure", ["drift", "incomplete"])
 def test_nonrepeatable_or_incomplete_reference_fails(harness, failure):
     builder = reference_builder(**{failure: True})
@@ -86,40 +98,14 @@ def test_no_reference_cannot_establish_onboarding(harness):
     assert "original_reference" in result.detail["problems"][0]
 
 
-def test_reference_identity_covers_contract_and_source(tmp_path):
-    path = reference(tmp_path)
-    before = fingerprint_reference(path)
-    source = tmp_path / "original" / "kernel.f90"
-    source.write_text(source.read_text().replace("42", "43"))
-    after_source = fingerprint_reference(path)
-    assert after_source != before
-    path.write_text(path.read_text().replace("13", "15"))
-    assert fingerprint_reference(path) != after_source
+def test_nan_cannot_establish_original_agreement(harness):
+    # Both programs wrote the same bytes twice over, and still agreed on
+    # no number: a comparison that reads "not unequal" as agreement would
+    # pass an onboarding whose program computes nothing.
+    result = check(harness, reference_builder(value=float("nan")),
+                   reference(harness.tmp_path))
 
-
-def test_reference_rejects_source_links(tmp_path):
-    path = reference(tmp_path)
-    (tmp_path / "original" / "extra.f90").symlink_to(tmp_path / "original" / "kernel.f90")
-    with pytest.raises(ValueError, match="symlink"):
-        load_reference(path)
-
-
-@pytest.mark.parametrize("change", [
-    lambda raw: raw.update(runs=[]),
-    lambda raw: raw["runs"][0].update(outputs=[]),
-    lambda raw: raw["runs"][0].update(budget_s=0),
-    lambda raw: raw["runs"][0]["outputs"][0].update(candidate="../escape"),
-    lambda raw: raw["runs"][0]["outputs"][0].update(comparison="anything"),
-])
-def test_incomplete_or_unsafe_contract_is_rejected(tmp_path, change):
-    path = reference(tmp_path)
-    raw = yaml.safe_load(path.read_text())
-    change(raw)
-    path.write_text(yaml.safe_dump(raw))
-    with pytest.raises(ValueError):
-        load_reference(path)
-
-
-def test_nan_cannot_establish_original_agreement():
-    data = npy.encode(np.array([np.nan]))
-    assert not original_check._comparison(data, data, {"comparison": "array_exact"})["pass"]
+    assert result.verdict == "fail"
+    comparison = result.detail["runs"][0]["outputs"][0]
+    assert comparison["deterministic"] is True
+    assert comparison["comparison_result"]["pass"] is False

@@ -25,7 +25,10 @@ pytest run:
 ===========================  ================================================
 
 A property module therefore names no path, no binary, and no seed of its
-own: it asks for the corpus, perturbs it, and calls `run_replay`.
+own: it asks for the corpus, perturbs it, and calls `run_replay`. The
+draw from the corpus, bitwise comparison, and the determinism property
+every code wants are here too, so a code's own module holds its physics
+and nothing every code repeats.
 """
 from __future__ import annotations
 
@@ -37,8 +40,9 @@ import subprocess
 from pathlib import Path
 
 import numpy as np
-from hypothesis import HealthCheck
+from hypothesis import HealthCheck, given
 from hypothesis import settings as hypothesis_settings
+from hypothesis import strategies as st
 
 REPLAY_VAR = "HARNESS_REPLAY"
 CASES_VAR = "HARNESS_CASES"
@@ -174,3 +178,63 @@ def run_replay(inputs: dict) -> dict:
     }
     shutil.rmtree(case_dir, ignore_errors=True)
     return outputs
+
+
+def case_strategy(cases=None):
+    """A draw of one captured case's inputs, copied so a property may change it.
+
+    Every property draws from the captured cases rather than from
+    invented arrays: a captured state is one the code was calibrated on,
+    and a state built from nothing tends to ask the region about
+    situations it is never run in. The copy is what makes perturbing the
+    drawn state safe -- the corpus is read once, at import, and shared by
+    every property in the module.
+    """
+    drawn = corpus() if cases is None else list(cases)
+    if not drawn:
+        raise PropertyHarnessError(
+            "the corpus holds no case; a property run needs the visible cases to draw from"
+        )
+    return st.sampled_from(drawn).map(
+        lambda case: {name: np.copy(array) for name, array in case.items()}
+    )
+
+
+def same_bits(first, second) -> bool:
+    """Identical bit patterns, which is stricter than == and says so for NaN.
+
+    The same question the mutation stage asks of a mutant's output: two
+    NaNs are equal and two zeros of opposite sign are not, because "the
+    answer did not change at all" cannot mean anything looser.
+    """
+    first = np.asarray(first)
+    second = np.asarray(second)
+    return (
+        first.shape == second.shape
+        and first.dtype == second.dtype
+        and first.tobytes() == second.tobytes()
+    )
+
+
+def determinism_property(states=None):
+    """The property every code wants: the region is a function of its inputs.
+
+    A port whose answer depends on how the work happened to be scheduled
+    -- a race, an unordered reduction, an uninitialized value -- fails
+    here, and it is the one failure that says nothing about physics, so
+    it is written once rather than once per code. `states` is the code's
+    own strategy where it has one; the plain corpus draw where it does
+    not.
+    """
+
+    @settings()
+    @given(case_strategy() if states is None else states)
+    def the_region_is_a_function_of_its_inputs(state):
+        first = run_replay(state)
+        second = run_replay(state)
+
+        assert sorted(first) == sorted(second)
+        for name in first:
+            assert same_bits(first[name], second[name]), f"'{name}' differed between two runs"
+
+    return the_region_is_a_function_of_its_inputs

@@ -22,29 +22,55 @@ RESPONSES = [
 REPLAY_TARGET = {"role": "replay", "target": "replay", "executable": "replay"}
 
 
+# A name that would write outside the directory it belongs in, which every
+# stage that is handed cases has to refuse in its own response shape
+# rather than by raising.
+ESCAPING = "../elsewhere"
+
+
 def refusals(attempt) -> list:
     """One call per stage that fails before it runs anything at all.
 
     Every one of them refuses for its own reason -- no makefile, no
-    executable, no built tree -- which is exactly the path where a
-    response shape is easiest to get wrong.
+    executable, no built tree, a name that leaves the directory it was
+    given -- which is exactly the path where a response shape is easiest
+    to get wrong.
     """
     return [
         (contract.BuildResponse, lambda: stages.build(
             attempt, [], "Makefile", [REPLAY_TARGET], "gfortran", [], [], [],
             harness_dir=HARNESS,
         )),
+        (contract.BuildResponse, lambda: stages.build(
+            attempt, [{"path": f"{ESCAPING}/main.f90", "b64": ""}], "Makefile",
+            [REPLAY_TARGET], "gfortran", [], [], [], harness_dir=HARNESS,
+        )),
         (contract.RunResponse, lambda: stages.run(attempt, "replay", {})),
+        (contract.RunResponse, lambda: stages.run(attempt, "replay", {ESCAPING: {}})),
         (contract.CaptureResponse, lambda: stages.capture(attempt, "gen_reference")),
         (contract.SanitizeResponse, lambda: stages.sanitize(
             attempt, "replay", {}, ["memcheck"],
+        )),
+        (contract.SanitizeResponse, lambda: stages.sanitize(
+            attempt, "replay", {"case0000": {ESCAPING: ""}}, ["memcheck"],
         )),
         (contract.PropertiesResponse, lambda: stages.properties(
             attempt, "replay", "harness/properties.py", {}, seed=1, max_examples=2,
             harness_dir=HARNESS,
         )),
+        (contract.PropertiesResponse, lambda: stages.properties(
+            attempt, "replay", "harness/properties.py", {"case0000": [1, 2]},
+            seed=1, max_examples=2, harness_dir=HARNESS,
+        )),
         (contract.MutateResponse, lambda: stages.mutate(
-            attempt, "Makefile", REPLAY_TARGET, [], {}, {}, "gfortran", [], [], [],
+            attempt, makefile="Makefile", replay_target=REPLAY_TARGET, files=[],
+            cases={}, bands={}, compiler="gfortran", flags=[], link_flags=[],
+            source_patterns=[], harness_dir=HARNESS,
+        )),
+        (contract.MutateResponse, lambda: stages.mutate(
+            attempt, makefile="Makefile", replay_target=REPLAY_TARGET, files=[],
+            cases={"case0000": {"inputs": {ESCAPING: ""}, "outputs": {}}}, bands={},
+            compiler="gfortran", flags=[], link_flags=[], source_patterns=[],
             harness_dir=HARNESS,
         )),
         (contract.TimeResponse, lambda: stages.time_run(attempt, "whole_program")),

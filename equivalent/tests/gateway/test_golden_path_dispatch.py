@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from equivalent.capture import npy
 from equivalent.gateway.app import create_app
 from equivalent.tree import init_baseline_repo
-from equivalent.ledger.capture_sets import program_variable
+from equivalent.components.program_outputs import program_variable
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy

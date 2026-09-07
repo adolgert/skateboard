@@ -9,9 +9,30 @@ import subprocess
 import sys
 
 
+def kernel_evidence(sqlite_file: str) -> dict:
+    """What the profiler's own export says the GPU ran.
+
+    The launch count in a device-proof claim is this number, read from
+    the profiler's tables rather than from anything the measured program
+    printed. A run whose export holds no kernel table has not been shown
+    to have launched anything, and raises rather than counting zero.
+    """
+    with sqlite3.connect(sqlite_file) as db:
+        count = db.execute("SELECT COUNT(*) FROM CUPTI_ACTIVITY_KIND_KERNEL").fetchone()[0]
+        names = db.execute(
+            "SELECT DISTINCT s.value FROM CUPTI_ACTIVITY_KIND_KERNEL k "
+            "JOIN StringIds s ON s.id = k.shortName ORDER BY s.value LIMIT 100"
+        ).fetchall()
+    return {
+        "ok": True, "kernels_launched": int(count),
+        "kernel_names": [row[0] for row in names],
+        "collector": "nsys/CUPTI_ACTIVITY_KIND_KERNEL",
+    }
+
+
 def main(argv: list[str]) -> int:
     if not argv or argv[0] != "--" or len(argv) == 1:
-        print("usage: profile-run.py -- command ...", file=sys.stderr)
+        print("usage: profile_run.py -- command ...", file=sys.stderr)
         return 64
     evidence_dir = "/run/evidence"
     os.chmod(evidence_dir, 0o700)
@@ -38,19 +59,7 @@ def main(argv: list[str]) -> int:
         )
         if exported.returncode == 0 and os.path.exists(sqlite_file):
             try:
-                with sqlite3.connect(sqlite_file) as db:
-                    count = db.execute(
-                        "SELECT COUNT(*) FROM CUPTI_ACTIVITY_KIND_KERNEL"
-                    ).fetchone()[0]
-                    names = db.execute(
-                        "SELECT DISTINCT s.value FROM CUPTI_ACTIVITY_KIND_KERNEL k "
-                        "JOIN StringIds s ON s.id = k.shortName ORDER BY s.value LIMIT 100"
-                    ).fetchall()
-                result = {
-                    "ok": True, "kernels_launched": int(count),
-                    "kernel_names": [row[0] for row in names],
-                    "collector": "nsys/CUPTI_ACTIVITY_KIND_KERNEL",
-                }
+                result = kernel_evidence(sqlite_file)
             except (sqlite3.DatabaseError, sqlite3.OperationalError) as exc:
                 result["error"] = f"could not read nsys SQLite export: {exc}"
         else:

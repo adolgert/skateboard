@@ -28,6 +28,12 @@ import numpy as np
 
 from equivalent.capture import npy
 
+from equivalent.ledger.vocabulary import (
+    CAPTURE_SET_KEY,
+    EXECUTABLE_IDENTITY_KEY,
+    FAIL,
+    PASS,
+)
 from . import backend, harness_capture
 from .context import CheckContext, CheckResult, capture_set_materials
 from .names import REPLAY_ROLE
@@ -99,9 +105,9 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     executable_identity = None
     for name in sorted(sets):
         cases = ctx.sets.load(sets[name])
-        resp = backend.replay(ctx, attempt_id, replay.executable, wire_inputs(cases))
+        resp = backend.replay(ctx.builder, attempt_id, replay.executable, wire_inputs(cases))
 
-        entry = {"cases": len(cases), "capture_set": sets[name]}
+        entry = {"cases": len(cases), CAPTURE_SET_KEY: sets[name]}
         executable_identity = executable_identity or resp.executable_identity
         if not resp.ok:
             entry["log_tail"] = resp.log_tail
@@ -120,13 +126,13 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
 
     detail = {
         "manifest_sha256": manifest.sha256,
-        "executable_identity": executable_identity,
+        EXECUTABLE_IDENTITY_KEY: executable_identity,
         "datasets": per_dataset,
         "datasets_that_disagreed": disagreed,
     }
     materials = capture_set_materials(detail)
     if disagreed:
         return CheckResult(
-            verdict="fail", detail=detail, reasons=tuple(reasons), materials=materials,
+            verdict=FAIL, detail=detail, reasons=tuple(reasons), materials=materials,
         )
-    return CheckResult(verdict="pass", detail=detail, materials=materials)
+    return CheckResult(verdict=PASS, detail=detail, materials=materials)

@@ -5,8 +5,9 @@ import pytest
 
 from equivalent.components import timing
 from equivalent.components.errors import ComponentError
-from equivalent.gateway.backend_client import TimeResponse
-from equivalent.ledger.capture_sets import load_capture_set, program_variable
+from equivalent.components.answers import TimeResponse
+from equivalent.components.program_outputs import program_variable
+from equivalent.ledger.capture_sets import load_capture_set
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.components.conftest import BASELINE_STRATEGY, strategy as strategy_named
 from equivalent.tests.fakes import (
@@ -26,14 +27,6 @@ def _manifest(tmp_path):
     return load_manifest(write_program(tmp_path) / "manifest.yaml")
 
 
-def _seed(harness):
-    """A pristine baseline tree, which is what a baseline timing builds."""
-    seed = harness.tmp_path / "seed" / "src"
-    seed.mkdir(parents=True, exist_ok=True)
-    (seed / "mod_kernel.f90").write_text("module mod_kernel\nend module\n")
-    return harness.tmp_path / "seed"
-
-
 def _already_built(harness, flags=("-O2", "-stdpar=gpu"), manifest=None):
     """A tree that has built and whose program has been compared, as a port's timing needs."""
     harness.claim("build/replay", {"flags": list(flags)})
@@ -46,7 +39,7 @@ def _already_built(harness, flags=("-O2", "-stdpar=gpu"), manifest=None):
 
 
 def _port(harness, manifest, builder=None, **config):
-    harness.repo(_seed(harness))
+    harness.pristine()
     return timing.check_port(
         harness.context(region_id="ch04:step", phase="porting", manifest=manifest,
                         builder=builder or harness.builder),
@@ -56,7 +49,7 @@ def _port(harness, manifest, builder=None, **config):
 
 def _baseline(harness, manifest, builder=None, *, baseline_strategy=None, **config):
     """The baseline timing, with the set it packed filed as the gateway files it."""
-    harness.repo(_seed(harness))
+    harness.pristine()
     result = timing.check_baseline(
         harness.context(
             region_id="ch04:step", phase="porting", manifest=manifest,
@@ -80,6 +73,23 @@ def test_port_pass_reports_the_measured_runs_and_the_build_claims_flags(harness)
     # The timing claim records the flags the binary was actually built
     # with, read back from the tree's own build/replay claim.
     assert result.detail["flags"] == ["-O2", "-stdpar=gpu"]
+
+
+def test_the_port_timing_names_what_its_comparison_rested_on(harness):
+    # The claim's detail says which baseline outputs and which bands the
+    # repetitions were compared under; the same two are the materials, so
+    # a verdict reached under one policy cannot read as a verdict under
+    # another.
+    manifest = _manifest(harness.tmp_path)
+    _already_built(harness, manifest=manifest)
+
+    result = _port(harness, manifest, FakeBuilder())
+
+    assert result.verdict == "pass"
+    assert [material.kind for material in result.materials] == ["policy", "capture_set"]
+    named = {material.kind: material.sha256 for material in result.materials}
+    assert named["policy"] == result.detail["policy_sha256"]
+    assert named["capture_set"] == result.detail["program_set"]
 
 
 def test_the_program_that_is_timed_is_the_one_the_manifest_names(harness):

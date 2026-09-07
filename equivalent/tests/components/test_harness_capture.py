@@ -17,9 +17,9 @@ import pytest
 from equivalent.capture import npy
 from equivalent.components import harness_capture
 from equivalent.components.errors import ComponentError
-from equivalent.tree import attempt_id_for_strategy
+from equivalent.components.workspaces import attempt_id_for_strategy
 from equivalent.ledger import capture_sets
-from equivalent.gateway.backend_client import CaptureResponse
+from equivalent.components.answers import CaptureResponse
 from equivalent.tests.fakes import FakeBuilder, captured, captured_cases, write_tree
 
 REGION = "tsunami:onboarding"

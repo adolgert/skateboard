@@ -14,7 +14,7 @@ import equivalent.tree
 from equivalent.tree import init_baseline_repo
 from equivalent.manifest.schema import IN_TREE_MANIFEST
 from equivalent.tests.fakes import write_tree
-from equivalent.tree import Tree, attempt_id_for
+from equivalent.tree import Tree
 
 # Fixed by the unambiguous v2 file-set serialization.  Legacy evidence used a
 # different hash and is intentionally invalid under evidence policy v2.
@@ -98,14 +98,25 @@ def test_a_file_that_is_not_utf8_travels_unchanged(tmp_path):
     assert files["src/legacy.f90"] == LATIN1_BYTES
 
 
-def test_a_materialized_tree_holds_the_bytes_the_tree_holds(tmp_path):
+def test_the_directory_a_tree_is_written_to_holds_the_bytes_the_tree_holds(tmp_path):
     repo_dir = _repo(tmp_path, {"data/coeffs.nml": LATIN1_BYTES})
 
-    with Tree.baseline(repo_dir).materialized() as scratch:
-        assert (Path(scratch) / "data" / "coeffs.nml").read_bytes() == LATIN1_BYTES
-        assert (Path(scratch) / "src" / "mod_kernel.f90").read_bytes() == (
-            b"subroutine step\nend subroutine\n"
-        )
+    tree = Tree.baseline(repo_dir)
+    scratch = tree.directory
+
+    assert (Path(scratch) / "data" / "coeffs.nml").read_bytes() == LATIN1_BYTES
+    assert (Path(scratch) / "src" / "mod_kernel.f90").read_bytes() == (
+        b"subroutine step\nend subroutine\n"
+    )
+
+
+def test_a_tree_is_written_to_one_directory_for_its_whole_life(tmp_path):
+    # A check asks for the tree on disk several times over; asking again
+    # must not be another walk of every file, and a path read out of the
+    # manifest must still point at something afterwards.
+    tree = Tree.baseline(_repo(tmp_path))
+
+    assert tree.directory is tree.directory
 
 
 def test_the_repository_is_read_once_however_often_the_files_are_asked_for(monkeypatch, tmp_path):
@@ -128,8 +139,7 @@ def test_the_repository_is_read_once_however_often_the_files_are_asked_for(monke
     assert tree.files is first
     assert tree.sha
     tree.payload()
-    with tree.materialized():
-        pass
+    tree.directory
 
     assert reads > 0
     assert len(calls) == reads
@@ -162,18 +172,3 @@ def test_the_policy_the_manifest_names_is_read_from_the_same_copy_of_the_tree(tm
     # call that loaded it: the tree's copy of itself lives as long as the
     # tree does, so a caller holding one can go back to it.
     assert Path(manifest.tolerances).read_bytes() == policy_bytes
-
-
-def test_attempt_ids_bind_the_full_tree_and_unambiguous_region_identity():
-    common_prefix = "a" * 63
-    first_tree = common_prefix + "1"
-    second_tree = common_prefix + "2"
-
-    first = attempt_id_for("code:a/b", first_tree)
-    second = attempt_id_for("code:a?b", first_tree)
-
-    assert first_tree in first
-    assert attempt_id_for("code:a/b", second_tree) != first
-    # Both ids have the same filesystem-safe spelling of the region, so
-    # their region digest is what keeps their builder workspaces distinct.
-    assert second != first

@@ -15,10 +15,13 @@ every one of them.
 """
 from __future__ import annotations
 
+from equivalent.ledger.vocabulary import EXECUTABLE_IDENTITY_KEY, PASS
 from equivalent.strategy.schema import Strategy
 
+from . import backend
 from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError
+from .names import REPLAY_ROLE
 
 # What each tool's own verdict is filed as. One builder call answers for
 # every tool the strategy asked for, and each answer is its own claim.
@@ -46,20 +49,18 @@ def check(ctx: CheckContext, config: dict) -> dict:
     attempt_id = ctx.provenance.attempt_id()
     cases = _chosen_cases(ctx.strategy, visible_cases)
     tools = list(ctx.strategy.sanitizers)
-    try:
-        resp = ctx.builder.sanitize(
-            attempt_id, ctx.manifest.build.targets["replay"].executable, cases, tools,
-        )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/sanitize call failed: {exc}") from exc
+    replay = ctx.provenance.manifest().build.targets[REPLAY_ROLE]
+    resp = backend.sanitize(ctx.builder, attempt_id, replay.executable, cases, tools)
 
     # One statement about the whole run: the builder said yes exactly when
     # every tool the strategy asked for said yes. A disagreement makes
     # every one of this run's verdicts a failure, because the answer as a
     # whole cannot be read.
+    # Every entry of `per_tool` is an object or the answer would not have
+    # parsed, so a tool the builder said nothing about is the only way
+    # `get` comes back with nothing here.
     expected_ok = all(
-        isinstance(resp.per_tool.get(tool), dict) and resp.per_tool[tool].get("ok") is True
-        for tool in tools
+        (resp.per_tool.get(tool) or {}).get("ok") is True for tool in tools
     )
     response_problem = None
     if resp.ok is not expected_ok:
@@ -77,7 +78,7 @@ def check(ctx: CheckContext, config: dict) -> dict:
             "cases": sorted(cases),
         }
         if resp.executable_identity is not None:
-            detail["executable_identity"] = resp.executable_identity
+            detail[EXECUTABLE_IDENTITY_KEY] = resp.executable_identity
         if response_problem:
             reason = response_problem
         elif t is None:
@@ -90,7 +91,7 @@ def check(ctx: CheckContext, config: dict) -> dict:
         else:
             reason = None
         if reason is None:
-            results[PREDICATE.format(tool=tool)] = CheckResult(verdict="pass", detail=detail)
+            results[PREDICATE.format(tool=tool)] = CheckResult(verdict=PASS, detail=detail)
         else:
             results[PREDICATE.format(tool=tool)] = failed({**detail, "reason": reason}, [reason])
     return results

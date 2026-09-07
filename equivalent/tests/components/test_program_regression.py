@@ -16,8 +16,8 @@ import pytest
 
 from equivalent.components import program_regression
 from equivalent.components.errors import ComponentError
-from equivalent.gateway.backend_client import TimeResponse
-from equivalent.ledger.capture_sets import program_variable
+from equivalent.components.answers import TimeResponse
+from equivalent.components.program_outputs import program_variable
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.fakes import (
     FakeBuilder,
@@ -110,7 +110,10 @@ def test_an_element_outside_the_band_fails_and_names_the_output(harness):
     assert result.detail["per_var"][failed[0]]["max_abs"] == 1.0
 
 
-def test_an_output_the_ported_program_did_not_write_fails_and_names_it(harness):
+def test_a_run_missing_a_declared_output_is_refused_before_anything_is_compared(harness):
+    # There is no comparison to report: a run that did not write what the
+    # manifest declares is not a measurement, which is the same answer a
+    # port's own timing gets for the same run.
     manifest = _manifest(harness.tmp_path)
     _with_baseline(harness, manifest)
     missing = manifest.timing.outputs[0]
@@ -123,7 +126,10 @@ def test_an_output_the_ported_program_did_not_write_fails_and_names_it(harness):
                     builder=FakeBuilder(time=partial(timed, files=forgetful)))
 
     assert result.verdict == "fail"
-    assert missing in result.detail["per_var"][program_variable(missing)]["error"]
+    assert "per_var" not in result.detail
+    assert any("declared output" in problem for problem in result.detail["problems"])
+    # The refusal still says what the comparison would have rested on.
+    assert [material.kind for material in result.materials] == ["policy", "capture_set"]
 
 
 def test_an_output_of_a_different_shape_fails(harness):
@@ -157,7 +163,7 @@ def test_a_baseline_claim_that_stored_no_set_is_not_a_reference(harness):
     with pytest.raises(ComponentError) as excinfo:
         _check(harness, manifest)
 
-    assert "time_baseline" in str(excinfo.value)
+    assert program_regression.BASELINE_PREDICATE in str(excinfo.value)
 
 
 def test_the_latest_baseline_set_is_the_one_compared_against(harness):
@@ -193,11 +199,11 @@ def test_a_float_output_with_no_band_fails_and_names_it(harness):
 def test_the_claim_can_name_the_policy_and_the_set_it_was_judged_against(harness):
     manifest = _manifest(harness.tmp_path)
     _with_baseline(harness, manifest)
-    policy_sha = program_regression.tolerance_policy(manifest)[1]
+    policy = program_regression.tolerance_policy(manifest)[1]
 
     result = _check(harness, manifest)
 
-    assert result.detail["policy_sha256"] == policy_sha
+    assert result.detail["policy_sha256"] == policy.sha256
     assert len(result.detail["program_set"]) == 64
 
 

@@ -75,7 +75,7 @@ def _flat(array: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(np.asarray(array).reshape(-1, order="F"))
 
 
-def _tolerance_problem(tol) -> str | None:
+def tolerance_problem(tol) -> str | None:
     if not isinstance(tol, dict):
         return "floating-point tolerance is not a mapping"
     for name in ("abs", "rel"):
@@ -111,10 +111,10 @@ def compare_variable(ref: np.ndarray, got: np.ndarray, tol) -> dict:
         bad = ref != got
         return {"pass": bool(not bad.any()), "n_bad": int(bad.sum()), "n": int(ref.size)}
 
-    tolerance_problem = _tolerance_problem(tol)
-    if tolerance_problem:
+    problem = tolerance_problem(tol)
+    if problem:
         return {
-            "pass": False, "error": tolerance_problem,
+            "pass": False, "error": problem,
             "n_bad": int(ref.size), "n": int(ref.size),
         }
 

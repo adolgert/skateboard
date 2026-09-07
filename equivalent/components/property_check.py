@@ -26,10 +26,13 @@ from __future__ import annotations
 
 import random
 
+from equivalent.ledger.vocabulary import EXECUTABLE_IDENTITY_KEY, FAIL, PASS
 from equivalent.manifest.schema import Manifest
 
+from . import backend
 from .context import CheckContext, CheckResult
 from .errors import ComponentError
+from .names import REPLAY_ROLE
 
 # How many examples each property draws when a request does not say. Large
 # enough that a search is worth calling one, small enough that a gate stays
@@ -68,24 +71,19 @@ def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
     Raises ComponentError if the builder could not be reached, or answered
     something that cannot be read as a property run at all.
     """
-    if isinstance(max_examples, bool):
+    # The action table is the gate on a request's `max_examples`, checked
+    # before the gateway dispatches; a caller inside the harness passes a
+    # constant of its own.
+    if max_examples <= 0:
         raise ComponentError("property max_examples must be a positive integer")
-    try:
-        examples = int(max_examples)
-    except (TypeError, ValueError) as exc:
-        raise ComponentError("property max_examples must be a positive integer") from exc
-    if examples <= 0:
-        raise ComponentError("property max_examples must be a positive integer")
+    examples = max_examples
     drawn = random.SystemRandom().getrandbits(SEED_BITS) if seed is None else int(seed)
     module = properties_module(manifest)
-    replay = manifest.build.targets["replay"]
+    replay = manifest.build.targets[REPLAY_ROLE]
 
-    try:
-        resp = builder.properties(
-            attempt_id, replay.executable, module, cases, drawn, examples,
-        )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/properties call failed: {exc}") from exc
+    resp = backend.properties(
+        builder, attempt_id, replay.executable, module, cases, drawn, examples,
+    )
 
     problems = []
     if resp.seed != drawn:
@@ -142,16 +140,16 @@ def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
         "log_tail": resp.log_tail[-LOG_TAIL_CHARS:],
     }
     if resp.executable_identity is not None:
-        detail["executable_identity"] = resp.executable_identity
+        detail[EXECUTABLE_IDENTITY_KEY] = resp.executable_identity
     if problems:
         detail["problems"] = problems
-        return CheckResult(verdict="fail", detail=detail, reasons=tuple(problems))
+        return CheckResult(verdict=FAIL, detail=detail, reasons=tuple(problems))
     if not successful:
         return CheckResult(
-            verdict="fail", detail=detail,
+            verdict=FAIL, detail=detail,
             reasons=("the property run did not pass every test it collected",),
         )
-    return CheckResult(verdict="pass", detail=detail)
+    return CheckResult(verdict=PASS, detail=detail)
 
 
 def check(ctx: CheckContext, config: dict) -> CheckResult:

@@ -27,42 +27,24 @@ import base64
 import hashlib
 
 from equivalent.capture import npy
-from equivalent.ledger.capture_sets import pack_capture_set
+from equivalent.ledger.capture_sets import (
+    CAPTURED_PREDICATE,
+    pack_capture_set,
+    sets_named_by,
+)
 
+from equivalent.ledger.vocabulary import CAPTURE_SET_KEY, EXECUTABLE_IDENTITY_KEY, PASS
 from . import backend
 from .context import CheckContext, CheckResult, capture_set_materials, failed
 from .errors import ComponentError
 from .names import CAPTURE_ROLE, HOLDOUT, VISIBLE
 
-# The claim that says which capture set each declared dataset was stored
-# under. Spelled here because this is where it is written and read.
-CAPTURED_PREDICATE = "harness/captured"
 # What a manifest with no capture target leaves the harness without, in
 # the words the message about it uses.
 NO_PROGRAM_TO_CAPTURE = "no program to write the datasets it declares"
 # What a case's two halves are called on the wire and in the manifest's
 # interface, in the words a message about one should use.
 SECTIONS = (("inputs", "input"), ("outputs", "output"))
-
-
-def sets_named_by(claim, where: str) -> dict:
-    """The capture set each dataset was stored under, from one capture claim.
-
-    A passing claim that names no set at all is a fault on the harness's
-    side rather than a verdict about the code, so it is raised. Promotion
-    reads the same claim the same way, which is why this takes a claim
-    rather than a context.
-    """
-    sets = {
-        name: entry["capture_set"]
-        for name, entry in claim.predicate.detail.get("datasets", {}).items()
-        if entry.get("capture_set")
-    }
-    if not sets:
-        raise ComponentError(
-            f"the {CAPTURED_PREDICATE} claim for {where} names no capture set"
-        )
-    return sets
 
 
 def captured_sets(ctx: CheckContext) -> dict:
@@ -73,8 +55,15 @@ def captured_sets(ctx: CheckContext) -> dict:
     the outputs of a run: by reading the claim, not by capturing again.
     The claim itself is always there -- the precondition table is what
     puts it in the context.
+
+    A claim naming no set is broken evidence. To a check that is a fault
+    on the harness's side rather than a verdict about the code, so it
+    comes back as an error rather than as a fail.
     """
-    return sets_named_by(ctx.claims[CAPTURED_PREDICATE], f"tree {ctx.tree.sha}")
+    try:
+        return sets_named_by(ctx.claims[CAPTURED_PREDICATE], f"tree {ctx.tree.sha}")
+    except ValueError as exc:
+        raise ComponentError(str(exc)) from exc
 
 
 def _declared(manifest, section: str) -> dict:
@@ -165,7 +154,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     problems = []
     for name in sorted(manifest.datasets):
         resp = backend.capture(
-            ctx, attempt_id, capture.executable, manifest.datasets[name].args, name,
+            ctx.builder, attempt_id, capture.executable, manifest.datasets[name].args, name,
         )
 
         cases = resp.cases if resp.ok else {}
@@ -197,7 +186,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         return failed(
             {
                 **described, "datasets": per_dataset, "problems": problems,
-                "executable_identity": executable_identity,
+                EXECUTABLE_IDENTITY_KEY: executable_identity,
             },
             problems,
         )
@@ -205,13 +194,13 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     packed = []
     for name, cases in captured.items():
         one = pack_capture_set(name, {case: case_arrays(cases[case]) for case in cases})
-        per_dataset[name]["capture_set"] = one.sha256
+        per_dataset[name][CAPTURE_SET_KEY] = one.sha256
         packed.append(one)
     detail = {
         **described, "datasets": per_dataset,
-        "executable_identity": executable_identity,
+        EXECUTABLE_IDENTITY_KEY: executable_identity,
     }
     return CheckResult(
-        verdict="pass", detail=detail,
+        verdict=PASS, detail=detail,
         materials=capture_set_materials(detail), stores=tuple(packed),
     )

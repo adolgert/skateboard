@@ -22,6 +22,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
+from equivalent.ledger.vocabulary import PASS
 from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError
 
@@ -54,21 +55,21 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     what the caller must use to compute the subject a later claim is
     filed against (see the fixed-point note in equivalent.gateway.app).
     """
-    with ctx.tree.materialized() as scratch:
-        spec_file = Path(scratch) / ctx.spec_path
-        result = subprocess.run(
-            [*shlex.split(ctx.strategy.analyzer_command), str(spec_file),
-             "--repo-root", scratch, "--json"],
-            capture_output=True, text=True,
-        )
-        try:
-            analysis = json.loads(result.stdout)
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise AnalyzerError(
-                f"analyzer produced no usable output (exit {result.returncode}): {result.stderr[-2000:]}"
-            ) from exc
+    scratch = ctx.tree.directory
+    spec_file = Path(scratch) / ctx.spec_path
+    result = subprocess.run(
+        [*shlex.split(ctx.strategy.analyzer_command), str(spec_file),
+         "--repo-root", scratch, "--json"],
+        capture_output=True, text=True,
+    )
+    try:
+        analysis = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise AnalyzerError(
+            f"analyzer produced no usable output (exit {result.returncode}): {result.stderr[-2000:]}"
+        ) from exc
 
-    if analysis["verdict"] != "pass":
+    if analysis["verdict"] != PASS:
         return failed(
             {
                 "violations": analysis["violations"], "notes": analysis["notes"],
@@ -88,7 +89,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         )
 
     return CheckResult(
-        verdict="pass",
+        verdict=PASS,
         detail={
             "file_list": analysis["src_files"], "allow_globs": candidate_globs,
             "resolved_ranges": analysis.get("resolved_ranges", []),

@@ -1,28 +1,11 @@
 """Adversarial checks for the boundary around submitted programs."""
 import base64
-import importlib.util
+import sqlite3
 from pathlib import Path
 
 import pytest
 
-from services.builder import executor, stages, workspace
-
-_AUDIT_SPEC = importlib.util.spec_from_file_location(
-    "builder_audit_run", Path(__file__).resolve().parents[1] / "builder/audit-run.py",
-)
-audit_run = importlib.util.module_from_spec(_AUDIT_SPEC)
-_AUDIT_SPEC.loader.exec_module(audit_run)
-
-
-class ChecksIdentities(workspace.InProcessJobs):
-    """Commands still run here, but an executable must match the record kept for it.
-
-    That check is the production one, and it needs no container to
-    exercise: the supervisor writes what it built and refuses a file
-    whose bytes no longer answer to it.
-    """
-
-    audited = True
+from services.builder import audit_run, executor, profile_run, stages, workspace
 
 
 def test_service_credentials_are_not_forwarded_to_jobs():
@@ -89,7 +72,14 @@ def test_sanitized_attempt_cannot_collide_with_a_directly_supplied_id(tmp_path):
 
 
 def test_artifact_identity_detects_executable_replacement(tmp_path):
-    attempt = stages.workspace_for("attempt-1", work_root=tmp_path, policy=ChecksIdentities())
+    # Commands still run in this process, but an executable must match the
+    # record kept for it, which is the production check and needs no
+    # container: the supervisor writes what it built and refuses a file
+    # whose bytes no longer answer to it.
+    attempt = stages.workspace_for(
+        "attempt-1", work_root=tmp_path,
+        policy=workspace.InProcessJobs(records_artifacts=True),
+    )
     tree = Path(attempt.tree_dir)
     tree.mkdir(parents=True)
     executable = tree / "replay"
@@ -114,7 +104,7 @@ def test_a_build_with_no_protected_account_of_the_compiler_is_a_failed_build(tmp
     # build rather than a build nobody watched.
     attempt = stages.workspace_for(
         "attempt-1", work_root=tmp_path,
-        policy=ChecksIdentities(runner=_without_evidence),
+        policy=workspace.InProcessJobs(audited=True, runner=_without_evidence),
     )
     makefile = base64.b64encode(b"replay:\n\ttrue\n").decode()
 
@@ -161,3 +151,65 @@ def test_program_stderr_is_not_accepted_as_gpu_profiler_evidence(attempt):
     result = stages.run(attempt, "replay", {"case": {}}, notify="acc", mandatory=True)
     assert result.ok is False
     assert "protected nsys evidence" in result.log_tail
+
+
+def _watched_nothing(cmd, **kwargs):
+    """A job whose protected account names no invocation of the replay driver."""
+    return executor.JobResult(
+        0, "1 passed", "",
+        {"ok": True, "executions": [{"path": "/usr/bin/true", "argv": ["true"]}]},
+    )
+
+
+def test_a_property_run_the_observer_never_saw_replay_in_is_a_failed_run(tmp_path):
+    # The counts come from the submitted process's own output, so what
+    # says they are about the built binary is the observer having seen it
+    # run. None seen means nothing was measured, whatever pytest printed.
+    attempt = stages.workspace_for(
+        "attempt-1", work_root=tmp_path,
+        policy=workspace.InProcessJobs(audited=True, runner=_watched_nothing),
+    )
+    tree = Path(attempt.tree_dir)
+    (tree / "harness").mkdir(parents=True)
+    (tree / "harness" / "properties.py").write_text("def test_nothing():\n    pass\n")
+    replay = tree / "replay"
+    replay.write_text("#!/bin/sh\nexit 0\n")
+    replay.chmod(0o755)
+
+    result = stages.properties(
+        attempt, "replay", "harness/properties.py", {}, seed=1, max_examples=2,
+    )
+
+    assert result.ok is False
+    assert result.replays_observed == 0
+    assert "no replay invocation" in result.log_tail
+
+
+def test_the_profiler_reports_the_kernels_its_own_export_recorded(tmp_path):
+    # The launch count in a claim is read from the profiler's SQLite
+    # export, so this is the query that decides whether a device proof
+    # says anything ran at all.
+    export = tmp_path / "profile.sqlite"
+    with sqlite3.connect(export) as db:
+        db.execute("CREATE TABLE StringIds (id INTEGER PRIMARY KEY, value TEXT)")
+        db.execute("CREATE TABLE CUPTI_ACTIVITY_KIND_KERNEL (shortName INTEGER)")
+        db.executemany(
+            "INSERT INTO StringIds VALUES (?, ?)", [(1, "step_kernel"), (2, "diff_kernel")],
+        )
+        db.executemany(
+            "INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (?)", [(1,), (1,), (2,)],
+        )
+
+    evidence = profile_run.kernel_evidence(str(export))
+
+    assert evidence["ok"] is True
+    assert evidence["kernels_launched"] == 3
+    assert evidence["kernel_names"] == ["diff_kernel", "step_kernel"]
+
+
+def test_a_profile_export_without_the_kernel_table_is_not_kernel_evidence(tmp_path):
+    empty = tmp_path / "empty.sqlite"
+    sqlite3.connect(empty).close()
+
+    with pytest.raises(sqlite3.DatabaseError):
+        profile_run.kernel_evidence(str(empty))

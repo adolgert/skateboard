@@ -17,8 +17,8 @@ import pytest
 
 from equivalent.components import harness_self_check
 from equivalent.components.errors import ComponentError
-from equivalent.gateway.backend_client import MutateResponse
-from equivalent.tree import attempt_id_for_strategy
+from equivalent.components.answers import MutateResponse
+from equivalent.components.workspaces import attempt_id_for_strategy
 from equivalent.tests.fakes import TOLERANCES_IN_TREE, FakeBuilder, mutant_row, mutated
 
 REGION = "tsunami:onboarding"

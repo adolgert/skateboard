@@ -53,10 +53,10 @@ class Predicate:
 class Claim:
     id: str
     ts: str
-    subject: tuple  # tuple[Subject, ...]
+    subject: tuple[Subject, ...]
     predicateType: str
     predicate: Predicate
-    materials: tuple  # tuple[Subject, ...]
+    materials: tuple[Subject, ...]
     session: str
     version: int = SCHEMA_VERSION
 

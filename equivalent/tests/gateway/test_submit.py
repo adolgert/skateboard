@@ -4,6 +4,7 @@ from equivalent.gateway.submit import submit
 from equivalent.ledger.acceptance import ONBOARDING, PORTING
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
+from equivalent.ledger.subjects import frozen_subject
 from equivalent.region.current import current_commit, resolve_allow_globs
 from equivalent.strategy.schema import load_strategy
 from equivalent.tree import Tree, init_baseline_repo
@@ -67,6 +68,33 @@ def test_file_outside_allow_list_is_rejected(tmp_path):
     assert {"path": "Makefile", "reason": "not_allowed"} in receipt.rejected
     tree = Tree(repo_dir, "region/ch04-step").files
     assert tree["Makefile"] == b"all:\n\techo build\n"
+
+
+def test_a_file_the_strategy_allows_is_submitted_and_left_out_of_the_frozen_set(tmp_path):
+    # Fortran spells the same extension both ways, so "src/*.f90" and
+    # "src/Mod_Kernel.F90" have to be one file to everyone who reads the
+    # allow-list. A file the strategy says a session may edit that submit
+    # then turned away would be an edit nobody could file a claim about,
+    # and hashing it into the frozen set would record it as held still
+    # while it was being changed.
+    seed = tmp_path / "seed"
+    _write(seed, "src/Mod_Kernel.F90", "subroutine step\nend subroutine\n")
+    _write(seed, "Makefile", "all:\n\techo build\n")
+    repo_dir = tmp_path / "repo"
+    init_baseline_repo(repo_dir, seed)
+
+    working = tmp_path / "working"
+    _write(working, "src/Mod_Kernel.F90", "subroutine step\n! ported\nend subroutine\n")
+
+    assert STRATEGY.allows("src/Mod_Kernel.F90")
+    receipt = submit(repo_dir, "ch04:step", working, list(STRATEGY.allow_globs), "sess-1")
+
+    assert receipt.rejected == ()
+    tree = Tree(repo_dir, "region/ch04-step").files
+    assert tree["src/Mod_Kernel.F90"] == b"subroutine step\n! ported\nend subroutine\n"
+    assert receipt.frozen == frozen_subject(
+        [{"path": "Makefile", "content": b"all:\n\techo build\n"}]
+    ).sha256
 
 
 def test_new_allowed_file_is_added_new_disallowed_file_is_rejected(tmp_path):

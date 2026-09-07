@@ -28,14 +28,14 @@ the same whether the manifest sits beside that tree or inside it.
 """
 from __future__ import annotations
 
-import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 from equivalent.capture.variables import DTYPES, MAX_RANK, Variable
-from equivalent.ledger.subjects import Subject, hash_bytes
+from equivalent.ledger.loading import check_keys
+from equivalent.ledger.subjects import Subject, glob_matches, hash_bytes
 
 VERSION = 1
 
@@ -89,7 +89,7 @@ class BuildTarget:
 @dataclass(frozen=True)
 class Build:
     makefile: str  # relative to the tree root
-    targets: dict  # {role: BuildTarget}
+    targets: dict[str, BuildTarget]  # keyed by role
 
 
 @dataclass(frozen=True)
@@ -126,7 +126,7 @@ class Manifest:
     # present together; the loader accepts no state in between.
     build: Build | None
     interface: Interface | None
-    datasets: dict | None  # {name: Dataset}
+    datasets: dict[str, Dataset] | None
     timing: Timing | None
     tolerances: Path | None  # resolved against the source tree root
     properties: Path | None  # a pytest module of invariants, or none declared
@@ -155,21 +155,6 @@ class Manifest:
         return Subject(kind="manifest", sha256=self.sha256)
 
 
-def _check_keys(given, required, where: str, *, optional=(), allow_extra: bool = False) -> None:
-    if not isinstance(given, dict):
-        raise ValueError(f"{where} is not a mapping")
-    missing = [field for field in required if field not in given]
-    if missing:
-        raise ValueError(f"{where} missing field(s): {missing}")
-    if allow_extra:
-        return
-    unknown = sorted(set(given) - set(required) - set(optional))
-    if unknown:
-        raise ValueError(
-            f"{where} has unknown key(s): {unknown}; allowed: {sorted((*required, *optional))}"
-        )
-
-
 def _name(value, where: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{where} is {value!r}; it must be a non-empty name")
@@ -181,7 +166,7 @@ def _resolve(directory: Path, value, where: str) -> Path:
 
 
 def _load_source(raw: dict, directory: Path, where: str) -> Source:
-    _check_keys(raw, REQUIRED_SOURCE_FIELDS, f"{where} source")
+    check_keys(raw, REQUIRED_SOURCE_FIELDS, f"{where} source")
     root = _resolve(directory, raw["root"], f"{where} source root")
     if not root.is_dir():
         raise ValueError(f"{where} source root {raw['root']!r} is not a directory ({root})")
@@ -192,11 +177,11 @@ def _load_source(raw: dict, directory: Path, where: str) -> Source:
 
 
 def _load_build(raw: dict, where: str) -> Build:
-    _check_keys(raw, REQUIRED_BUILD_FIELDS, f"{where} build")
+    check_keys(raw, REQUIRED_BUILD_FIELDS, f"{where} build")
     targets = {}
     for role, spec in raw["targets"].items():
         target_where = f"{where} build target '{role}'"
-        _check_keys(spec, REQUIRED_TARGET_FIELDS, target_where)
+        check_keys(spec, REQUIRED_TARGET_FIELDS, target_where)
         targets[role] = BuildTarget(
             target=_name(spec["target"], f"{target_where} target"),
             executable=_name(spec["executable"], f"{target_where} executable"),
@@ -210,7 +195,7 @@ def _load_build(raw: dict, where: str) -> Build:
 
 
 def _load_variable(raw: dict, where: str) -> Variable:
-    _check_keys(raw, REQUIRED_VARIABLE_FIELDS, where)
+    check_keys(raw, REQUIRED_VARIABLE_FIELDS, where)
     name = _name(raw["name"], f"{where} name")
     if raw["dtype"] not in DTYPES:
         raise ValueError(
@@ -227,7 +212,7 @@ def _load_variable(raw: dict, where: str) -> Variable:
 
 
 def _load_interface(raw: dict, where: str) -> Interface:
-    _check_keys(raw, REQUIRED_INTERFACE_FIELDS, f"{where} interface")
+    check_keys(raw, REQUIRED_INTERFACE_FIELDS, f"{where} interface")
     files = tuple(_name(f, f"{where} interface file") for f in raw["files"])
     if not files:
         # A region nobody can point at is a region nobody can port or
@@ -249,11 +234,11 @@ def _load_interface(raw: dict, where: str) -> Interface:
 def _load_datasets(raw: dict, where: str) -> dict:
     # Named datasets beyond the two required ones are allowed, so a code
     # can declare more without this reader being taught each name.
-    _check_keys(raw, REQUIRED_DATASETS, f"{where} datasets", allow_extra=True)
+    check_keys(raw, REQUIRED_DATASETS, f"{where} datasets", allow_extra=True)
     datasets = {}
     for name, spec in raw.items():
         dataset_where = f"{where} dataset '{name}'"
-        _check_keys(spec, REQUIRED_DATASET_FIELDS, dataset_where)
+        check_keys(spec, REQUIRED_DATASET_FIELDS, dataset_where)
         datasets[name] = Dataset(args=tuple(str(a) for a in spec["args"]))
     if datasets["visible"].args == datasets["holdout"].args:
         raise ValueError(
@@ -265,7 +250,7 @@ def _load_datasets(raw: dict, where: str) -> dict:
 
 
 def _load_timing(raw: dict, where: str) -> Timing:
-    _check_keys(raw, REQUIRED_TIMING_FIELDS, f"{where} timing", optional=OPTIONAL_TIMING_FIELDS)
+    check_keys(raw, REQUIRED_TIMING_FIELDS, f"{where} timing", optional=OPTIONAL_TIMING_FIELDS)
     budget = raw["budget_s"]
     if not isinstance(budget, (int, float)) or isinstance(budget, bool) or budget <= 0:
         raise ValueError(f"{where} timing budget_s is {budget!r}; it must be a positive number")
@@ -333,7 +318,7 @@ def load_manifest(path, *, source_base=None) -> Manifest:
     where = f"manifest {path}"
     raw_bytes = path.read_bytes()
     raw = yaml.safe_load(raw_bytes)
-    _check_keys(raw, REQUIRED_FIELDS, where, optional=COMPLETING_FIELDS)
+    check_keys(raw, REQUIRED_FIELDS, where, optional=COMPLETING_FIELDS)
     if raw["version"] != VERSION:
         raise ValueError(f"{where} has version {raw['version']!r}; this reader understands {VERSION}")
 
@@ -355,8 +340,8 @@ def load_manifest(path, *, source_base=None) -> Manifest:
     _in_tree_path(source.root, build.makefile, f"{where} build makefile")
 
     interface = _load_interface(raw["interface"], where)
-    for path in interface.files:
-        _in_tree_path(source.root, path, f"{where} interface file")
+    for interface_file in interface.files:
+        _in_tree_path(source.root, interface_file, f"{where} interface file")
 
     properties = None
     if raw["properties"] is not None:
@@ -391,32 +376,10 @@ def load_tree_manifest(tree_dir) -> Manifest:
     return manifest
 
 
-def _normalized(path: str) -> str:
-    path = path.replace("\\", "/")
-    while path.startswith("./"):
-        path = path[2:]
-    return path
-
-
-def _matches(path: str, pattern: str) -> bool:
-    """Does one source pattern cover this path.
-
-    Matching ignores case, because Fortran spells the same extension both
-    ways and the tree may hold either. A leading "**/" means "at any
-    depth, including none", so "**/*.f90" covers both mod_kernel.f90 and
-    src/mod_kernel.f90. Elsewhere "*" already crosses "/", so no other
-    pattern needs the prefix.
-
-    The comparison lower-cases both sides and then matches
-    case-sensitively rather than leaving the choice to fnmatch, whose own
-    case rule follows the operating system.
-    """
-    lowered = _normalized(path).lower()
-    pattern = pattern.lower()
-    if pattern.startswith("**/"):
-        rest = pattern[3:]
-        return fnmatch.fnmatchcase(lowered, rest) or fnmatch.fnmatchcase(lowered, f"*/{rest}")
-    return fnmatch.fnmatchcase(lowered, pattern)
+# The builder has its own copy of the matching rule, because it runs in
+# an image this package is not installed in, and a test compares the two
+# answer for answer under the name the rule had while it lived here.
+_matches = glob_matches
 
 
 def source_files(manifest: Manifest, paths) -> list:
@@ -425,4 +388,4 @@ def source_files(manifest: Manifest, paths) -> list:
     The order given is the order returned, so a caller that sorted its
     paths keeps that order.
     """
-    return [p for p in paths if any(_matches(p, pattern) for pattern in manifest.source.patterns)]
+    return [p for p in paths if any(glob_matches(p, pattern) for pattern in manifest.source.patterns)]

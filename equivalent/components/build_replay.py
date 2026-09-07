@@ -14,18 +14,23 @@ flags is a `fail` with the offending command line named, not a pass.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+from equivalent.ledger.vocabulary import PASS, TARGETS_KEY
 from equivalent.manifest.schema import Manifest, source_files
 from equivalent.strategy.schema import Strategy
 
+from . import backend
 from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError
+from .names import CAPTURE_ROLE, REPLAY_ROLE, TIMING_ROLE
 
 # The targets the builder is asked for, in the order it asks. `replay` is
 # what every regression check runs and every manifest must offer; the
 # other two are built when the code declares them, so that a tree which
 # no longer builds its own program or its own capture program says so at
 # the build step rather than three actions later.
-BUILD_ROLES = ("replay", "timing", "capture")
+BUILD_ROLES = (REPLAY_ROLE, TIMING_ROLE, CAPTURE_ROLE)
 
 
 def build_targets(manifest: Manifest) -> list[dict]:
@@ -37,6 +42,30 @@ def build_targets(manifest: Manifest) -> list[dict]:
     ]
 
 
+@dataclass(frozen=True)
+class Recipe:
+    """What a build is asked for, whoever asked for it.
+
+    A code's own manifest describes one of these; the reviewed original
+    reference, which is not a code this harness has brought in, describes
+    another in its own words. Both are built the same way and judged by
+    the same three statements, so both arrive here rather than at two
+    builder calls that could drift apart.
+    """
+
+    makefile: str
+    targets: tuple
+    source_patterns: tuple
+
+    @classmethod
+    def from_manifest(cls, manifest: Manifest) -> "Recipe":
+        return cls(
+            makefile=manifest.build.makefile,
+            targets=tuple(build_targets(manifest)),
+            source_patterns=tuple(manifest.source.patterns),
+        )
+
+
 def fortran_of(strategy: Strategy):
     fortran = strategy.languages.get("fortran")
     if fortran is None:
@@ -45,17 +74,13 @@ def fortran_of(strategy: Strategy):
 
 
 def build_tree(builder, attempt_id: str, tree: list[dict], strategy: Strategy,
-               manifest: Manifest):
-    """One /v1/build call, described entirely by the strategy and the manifest."""
+               recipe: Recipe):
+    """One /v1/build call, described entirely by the strategy and the recipe."""
     fortran = fortran_of(strategy)
-    try:
-        return builder.build(
-            attempt_id, tree, manifest.build.makefile, build_targets(manifest),
-            fortran.compiler, list(fortran.flags), list(strategy.link_flags),
-            list(manifest.source.patterns),
-        )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/build call failed: {exc}") from exc
+    return backend.build(
+        builder, attempt_id, tree, recipe.makefile, list(recipe.targets),
+        fortran.compiler, fortran.flags, strategy.link_flags, recipe.source_patterns,
+    )
 
 
 def _without_flags(compiles) -> list:
@@ -72,7 +97,7 @@ def _outside_tree(compiles) -> list:
 
 
 def build_verdict(builder, attempt_id: str, tree: list[dict], strategy: Strategy,
-                  manifest: Manifest) -> CheckResult:
+                  recipe: Recipe) -> CheckResult:
     """One tree, one strategy: build it and say whether that build counts.
 
     Three statements have to hold, and each is a verdict about the code
@@ -80,13 +105,14 @@ def build_verdict(builder, attempt_id: str, tree: list[dict], strategy: Strategy
     reached every compile, and every file compiled was the tree's own
     source. This is the whole of what a build claim means, so both the
     porting check below and onboarding's two-strategy check call it
-    rather than each deciding for itself.
+    rather than each deciding for itself, and so does the comparison
+    against the reviewed original, whose recipe is not a manifest's.
     """
-    resp = build_tree(builder, attempt_id, tree, strategy, manifest)
+    resp = build_tree(builder, attempt_id, tree, strategy, recipe)
 
     common = {
         "attempt_id": attempt_id, "flags": resp.flags,
-        "targets": resp.targets, "compiles": resp.compiles,
+        TARGETS_KEY: resp.targets, "compiles": resp.compiles,
         "executor_identity": resp.executor_identity,
         "image_id": resp.image_id,
     }
@@ -120,7 +146,7 @@ def build_verdict(builder, attempt_id: str, tree: list[dict], strategy: Strategy
         )
 
     return CheckResult(
-        verdict="pass",
+        verdict=PASS,
         detail={
             **common, "minfo_excerpt": resp.minfo_excerpt,
             "log_tail": resp.log_tail,
@@ -152,5 +178,5 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     strategy, = ctx.provenance.strategies()
     return build_verdict(
         ctx.builder, ctx.provenance.attempt_id(strategy), ctx.tree.payload(),
-        strategy, manifest,
+        strategy, Recipe.from_manifest(manifest),
     )

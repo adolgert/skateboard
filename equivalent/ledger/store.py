@@ -38,6 +38,10 @@ class LedgerStore:
         self.region_dir.mkdir(parents=True, exist_ok=True)
         (self.region_dir / "artifacts").mkdir(exist_ok=True)
         self._lock = threading.Lock()
+        # The parsed claims file, and what the file looked like when they
+        # were parsed. See `_read_claims`.
+        self._claims = None
+        self._claims_stamp = None
 
     @contextmanager
     def _writer_lock(self):
@@ -95,7 +99,25 @@ class LedgerStore:
         return out
 
     def _read_claims(self) -> list[Claim]:
-        return [Claim.from_dict(d) for d in self._read_jsonl(self.claims_path)]
+        """Every claim, parsed once per version of the file.
+
+        A single status reading, a run gate, or a promotion walks the
+        whole ledger several times over, and a ledger is read far more
+        often than it is appended to. The parse is kept and reused while
+        the file on disk is the one it was made from -- the same size and
+        the same modification time -- so a line the gateway appends from
+        another process is picked up rather than served stale, and this
+        store's own appends drop it outright.
+        """
+        try:
+            stat = self.claims_path.stat()
+            stamp = (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            stamp = None
+        if self._claims is None or self._claims_stamp != stamp:
+            self._claims = [Claim.from_dict(d) for d in self._read_jsonl(self.claims_path)]
+            self._claims_stamp = stamp
+        return self._claims
 
     def _read_requests(self) -> list[RequestLogLine]:
         return [RequestLogLine.from_dict(d) for d in self._read_jsonl(self.requests_path)]
@@ -115,6 +137,7 @@ class LedgerStore:
         with self._writer_lock():
             with open(self.claims_path, "a") as f:
                 f.write(json.dumps(claim.to_dict(), sort_keys=True) + "\n")
+        self._claims = None
         return claim
 
     def record_claim(self, subject, predicateType: str, predicate, materials, session: str) -> Claim:
@@ -135,6 +158,7 @@ class LedgerStore:
             )
             with open(self.claims_path, "a") as f:
                 f.write(json.dumps(claim.to_dict(), sort_keys=True) + "\n")
+        self._claims = None
         return claim
 
     def append_request(self, line: RequestLogLine) -> RequestLogLine:
@@ -180,7 +204,8 @@ class LedgerStore:
     # --- queries ---
 
     def all_claims(self) -> list[Claim]:
-        return self._read_claims()
+        # A copy, because the list behind it is kept and reused.
+        return list(self._read_claims())
 
     def all_requests(self) -> list[RequestLogLine]:
         return self._read_requests()
@@ -225,14 +250,6 @@ class LedgerStore:
             if c.predicateType == predicate_type and subject in c.subject
         ]
         return sorted(matches, key=lambda c: c.ts)[-1] if matches else None
-
-    def exists_pass(self, predicate_type: str, subject: Subject, *, required_materials) -> bool:
-        return any(
-            c.predicateType == predicate_type and subject in c.subject
-            and c.predicate.verdict == "pass"
-            and claim_matches_context(c, required_materials)
-            for c in self._read_claims()
-        )
 
     def find_duplicate(
         self, predicate_type: str, tree: Subject, config_hash: str, *, required_materials,

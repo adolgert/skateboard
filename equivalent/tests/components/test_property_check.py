@@ -143,8 +143,8 @@ def test_an_expected_failure_or_unexpected_pass_cannot_hide_in_a_property_pass(h
     assert any(status in problem for problem in result.detail["problems"])
 
 
-@pytest.mark.parametrize("max_examples", [0, -1, True])
-def test_a_nonpositive_or_boolean_example_count_is_rejected_before_execution(harness, max_examples):
+@pytest.mark.parametrize("max_examples", [0, -1])
+def test_a_nonpositive_example_count_is_rejected_before_execution(harness, max_examples):
     builder = harness.builder
 
     with pytest.raises(ComponentError):

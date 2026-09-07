@@ -4,7 +4,7 @@ from equivalent.components import regression
 from equivalent.components.errors import ComponentError
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.components.conftest import PORT_STRATEGY, strategy as strategy_named
-from equivalent.gateway.backend_client import RunResponse
+from equivalent.components.answers import RunResponse
 from equivalent.tests.fakes import FakeBuilder, FakeOracle, fixture_case, write_program
 
 
@@ -74,5 +74,5 @@ def test_the_tolerance_policy_a_verdict_was_reached_under_is_a_material(harness)
     result = regression.check_visible(_porting(harness), {})
 
     assert [(s.kind, s.sha256) for s in result.materials] == [
-        ("policy", FakeOracle().policy()["policy_sha256"]),
+        ("policy", FakeOracle().policy().policy_sha256),
     ]

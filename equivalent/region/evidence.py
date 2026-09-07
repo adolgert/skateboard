@@ -22,8 +22,10 @@ from equivalent.ledger.subjects import (
     evidence_policy_subject,
     hash_bytes,
     hash_files,
+    policy_subject,
 )
 from equivalent.reference.schema import fingerprint_reference
+from equivalent.region.config import RegionConfig
 from equivalent.strategy.schema import load_strategy
 
 
@@ -41,7 +43,9 @@ def _files_subject(path: Path, kind: str) -> Subject:
     return Subject(kind=kind, sha256=digest)
 
 
-def evidence_materials_for(cfg, strategy=None, baseline_strategy=None) -> tuple[Subject, ...]:
+def evidence_materials_for(
+    cfg: RegionConfig, strategy=None, baseline_strategy=None,
+) -> tuple[Subject, ...]:
     """Recompute the dependencies shared by every current region claim."""
     strategy = strategy or load_strategy(cfg.strategy_path)
     baseline_strategy = baseline_strategy or load_strategy(cfg.baseline_strategy_path)
@@ -52,7 +56,10 @@ def evidence_materials_for(cfg, strategy=None, baseline_strategy=None) -> tuple[
         cfg.manifest.as_subject(),
     ]
     if cfg.manifest.tolerances is not None:
-        materials.append(_files_subject(cfg.manifest.tolerances, "policy"))
+        # The oracle names this file by the plain sha256 of its bytes and
+        # puts that digest in the answers a check turns into a claim, so
+        # the material and the claim have to be the one subject.
+        materials.append(policy_subject(Path(cfg.manifest.tolerances).read_bytes()))
     if cfg.manifest.properties is not None:
         materials.append(_files_subject(cfg.manifest.properties, "policy"))
     if cfg.visible_dataset_dir is not None:
@@ -65,10 +72,8 @@ def evidence_materials_for(cfg, strategy=None, baseline_strategy=None) -> tuple[
         materials.append(Subject(
             kind="reference", sha256=hash_bytes(b"equivalent:no-original-reference:v1"),
         ))
-    executor_pin = getattr(cfg, "executor_identity", None)
-    oracle_pin = getattr(cfg, "oracle_identity", None)
-    if executor_pin is not None:
-        materials.append(Subject(kind="executor", sha256=executor_pin))
-    if oracle_pin is not None:
-        materials.append(Subject(kind="oracle", sha256=oracle_pin))
+    if cfg.executor_identity is not None:
+        materials.append(Subject(kind="executor", sha256=cfg.executor_identity))
+    if cfg.oracle_identity is not None:
+        materials.append(Subject(kind="oracle", sha256=cfg.oracle_identity))
     return tuple(materials)

@@ -111,9 +111,9 @@ class TimelineRow:
 
 @dataclass(frozen=True)
 class JoinResult:
-    rows: tuple  # tuple[TimelineRow, ...], in time order
-    unmatched_calls: tuple  # tuple[SessionEvent, ...] -- tool calls with no request line
-    unmatched_requests: tuple  # tuple[RequestLogLine, ...] -- request lines with no tool call
+    rows: tuple["TimelineRow", ...]  # in time order
+    unmatched_calls: tuple["SessionEvent", ...]  # tool calls with no request line
+    unmatched_requests: tuple[RequestLogLine, ...]  # request lines with no tool call
 
 
 @dataclass(frozen=True)

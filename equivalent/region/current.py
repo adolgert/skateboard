@@ -16,14 +16,13 @@ without the gateway being installed.
 """
 from __future__ import annotations
 
-import fnmatch
 import os
 from pathlib import Path
 
 from equivalent.ledger.acceptance import ONBOARDING
 from equivalent.ledger.evidence import claim_matches_context
 from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import frozen_subject
+from equivalent.ledger.subjects import frozen_subject, glob_matches
 from equivalent.region.config import region_branch
 from equivalent.tree import Tree, rev_parse
 
@@ -50,8 +49,16 @@ def working_copy_files(working_copy_dir) -> dict[str, bytes]:
 
 
 def matches_any(path: str, globs: list[str]) -> bool:
-    """Whether this path is covered by any pattern in the allow-list."""
-    return any(fnmatch.fnmatch(path, g) for g in globs)
+    """Whether this path is covered by any pattern in the allow-list.
+
+    This gates a submit and decides which baseline files are frozen out
+    of the hash, so it matches by the one rule a strategy's `allows` and
+    a manifest's source patterns also match by. A file the reviewed
+    allow-list covers has to be accepted here and left out of the frozen
+    set, or a session would be told it may edit a file it then cannot
+    submit.
+    """
+    return any(glob_matches(path, g) for g in globs)
 
 
 def resolve_allow_globs(

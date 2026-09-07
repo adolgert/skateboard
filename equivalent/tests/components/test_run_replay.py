@@ -6,7 +6,7 @@ import pytest
 
 from equivalent.capture import npy
 from equivalent.components import run_replay
-from equivalent.gateway.backend_client import RunResponse
+from equivalent.components.answers import RunResponse
 from equivalent.components.errors import ComponentError
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.components.conftest import PORT_STRATEGY, strategy as strategy_named

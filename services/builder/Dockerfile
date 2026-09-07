@@ -41,8 +41,8 @@ COPY services/builder/harness/npy_io.f90 services/builder/harness/fc-shim \
 RUN chmod +x /opt/harness/fc-shim
 # Service code (the build contract and the gate command lines live here).
 COPY services/builder /app/services/builder
-COPY services/builder/profile-run.py services/builder/audit-run.py /opt/sandbox/
-RUN chmod 0555 /opt/sandbox/profile-run.py /opt/sandbox/audit-run.py /opt/harness/fc-shim \
+COPY services/builder/profile_run.py services/builder/audit_run.py /opt/sandbox/
+RUN chmod 0555 /opt/sandbox/profile_run.py /opt/sandbox/audit_run.py /opt/harness/fc-shim \
  && chmod -R a-w /opt/harness /opt/sandbox /app
 
 # The comparator, which is the same file the oracle is built around and the

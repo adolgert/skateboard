@@ -19,14 +19,13 @@ from pathlib import Path
 class PackedSet:
     """A dataset written into a directory of its own, named by its content.
 
-    `kind` is the subject kind the sha names ("capture_set"), `name` is
-    what the manifest calls the dataset and is deliberately not part of
-    the hash, and `directory` is a temporary place that goes away with
-    this value unless the gateway keeps it.
+    The hash is the whole of what identifies it: what the manifest calls
+    the dataset is deliberately not part of it, so two datasets holding
+    the same arrays are one set rather than two copies a later comparison
+    would have to know are the same. `directory` is a temporary place
+    that goes away with this value unless the gateway keeps it.
     """
 
-    kind: str
-    name: str
     sha256: str
     directory: Path
 

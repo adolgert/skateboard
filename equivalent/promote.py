@@ -27,9 +27,13 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from equivalent.components import harness_capture
 from equivalent.ledger.acceptance import FINISHED_WORD, ONBOARDING, requirements_for
-from equivalent.ledger.capture_sets import load_capture_set, write_dataset
+from equivalent.ledger.capture_sets import (
+    CAPTURED_PREDICATE,
+    load_capture_set,
+    sets_named_by,
+    write_dataset,
+)
 from equivalent.ledger.evidence import required_materials_by_predicate
 from equivalent.ledger.status import compute_status
 from equivalent.ledger.store import LedgerStore
@@ -41,7 +45,7 @@ from equivalent.manifest.layout import (
     MANIFEST_NAME,
     promoted_manifest_text,
 )
-from equivalent.manifest.schema import IN_TREE_MANIFEST
+from equivalent.manifest.schema import IN_TREE_MANIFEST, REQUIRED_DATASETS
 from equivalent.region.config import RegionConfig
 from equivalent.region.current import (
     current_commit,
@@ -56,6 +60,12 @@ from equivalent.tree import Tree
 
 class PromoteRefused(Exception):
     """Something was not as promoting requires, and nothing was written."""
+
+
+# The dataset a porting session is allowed to see, which is the one
+# promotion splits. The manifest names the two datasets every code must
+# declare, visible first.
+VISIBLE = REQUIRED_DATASETS[0]
 
 
 @dataclass(frozen=True)
@@ -97,7 +107,7 @@ def promoted_sets(sets: dict) -> list[PromotedSet]:
     """
     promoted = []
     for name in sorted(sets):
-        if name == harness_capture.VISIBLE:
+        if name == VISIBLE:
             promoted.append(PromotedSet(
                 f"{DATASETS_DIR}/{name}", sets[name], inputs=True, outputs=False,
             ))
@@ -247,10 +257,15 @@ def promote(config: GatewayConfig, cfg: RegionConfig, programs=None, replace: bo
         raise PromoteRefused(str(exc)) from exc
 
     captured = store.latest(
-        harness_capture.CAPTURED_PREDICATE, subject,
-        required_materials=contexts[harness_capture.CAPTURED_PREDICATE],
+        CAPTURED_PREDICATE, subject, required_materials=contexts[CAPTURED_PREDICATE],
     )
-    sets = promoted_sets(harness_capture.sets_named_by(captured, f"tree {subject.sha256}"))
+    try:
+        sets = promoted_sets(sets_named_by(captured, f"tree {subject.sha256}"))
+    except ValueError as exc:
+        # A capture claim that named no set is broken evidence, and there
+        # is nothing to copy. The person gets the sentence, not a
+        # traceback out of the command they ran.
+        raise PromoteRefused(str(exc)) from exc
 
     code_dir = Path(config.paths.programs if programs is None else programs) / cfg.code
     destinations = [

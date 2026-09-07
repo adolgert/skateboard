@@ -2,8 +2,14 @@
 
 Trust role: none. Whatever this module gets wrong shows up as a normal
 request failure, not as a false claim -- the gateway itself still decides
-everything. This exists so the CLI and, later, the pi extension call the
-same five things the same way.
+everything.
+
+This is what the walkthrough scripts under `deploy/` drive a session
+with. The pi extension does not import it: it is TypeScript, and it
+speaks to the same five endpoints in its own code, so a change to what
+the gateway expects has to be made in both. That is why these calls stay
+plain -- one function per endpoint, no state -- so the two are easy to
+read against each other.
 """
 from __future__ import annotations
 

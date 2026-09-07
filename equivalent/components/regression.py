@@ -16,39 +16,38 @@ not the only thing enforcing it.
 from __future__ import annotations
 
 from equivalent.ledger.subjects import Subject
+from equivalent.ledger.vocabulary import POLICY_KEY
 
+from . import backend
 from .context import CheckContext, CheckResult
 from .errors import ComponentError
-from .harness_capture import HOLDOUT
-
-# What the oracle's answer says the bands it judged by were.
-POLICY_KEY = "policy_sha256"
+from .names import HOLDOUT, REPLAY_ROLE, VISIBLE
+from .run_replay import RUN_PREDICATE
 
 
-def _policy_material(resp: dict) -> tuple:
-    """The tolerance policy that shaped a verdict, as the material it is."""
-    return (Subject(kind="policy", sha256=resp[POLICY_KEY]),)
+def _policy_material(resp) -> tuple:
+    """The tolerance policy that shaped a verdict, as the material it is.
+
+    The digest is the oracle's own, of the file it judged by; the subject
+    is built from it rather than from bytes this side never sees.
+    """
+    return (Subject(kind="policy", sha256=resp.policy_sha256),)
 
 
 def check_visible(ctx: CheckContext, config: dict) -> CheckResult:
-    run_claim = ctx.claims["gpu/executed"]
+    run_claim = ctx.claims[RUN_PREDICATE]
     if "outputs" not in run_claim.predicate.detail:
-        raise ComponentError("the gpu/executed claim for this tree recorded no outputs")
+        raise ComponentError(f"the {RUN_PREDICATE} claim for this tree recorded no outputs")
 
-    try:
-        resp = ctx.oracle.compare(
-            dataset="visible", outputs=run_claim.predicate.detail["outputs"],
-        )
-    except Exception as exc:
-        raise ComponentError(f"oracle /v1/compare call failed: {exc}") from exc
-
-    per_case = resp.get("per_case", {})
+    resp = backend.compare(
+        ctx.oracle, dataset=VISIBLE, outputs=run_claim.predicate.detail["outputs"],
+    )
     return CheckResult(
-        verdict=resp["verdict"],
-        detail={"per_case": per_case, POLICY_KEY: resp[POLICY_KEY]},
+        verdict=resp.verdict,
+        detail={"per_case": resp.per_case, POLICY_KEY: resp.policy_sha256},
         reasons=tuple(
             f"case '{name}' is outside the code's tolerance bands"
-            for name in sorted(per_case) if not per_case[name].get("pass")
+            for name in resp.cases_that_failed()
         ),
         materials=_policy_material(resp),
     )
@@ -56,17 +55,18 @@ def check_visible(ctx: CheckContext, config: dict) -> CheckResult:
 
 def check_holdout(ctx: CheckContext, config: dict) -> CheckResult:
     attempt_id = ctx.provenance.attempt_id()
-    replay = ctx.manifest.build.targets["replay"]
+    replay = ctx.provenance.manifest().build.targets[REPLAY_ROLE]
     try:
-        holdout = ctx.oracle.holdout_inputs()["cases"]
+        holdout = ctx.oracle.holdout_inputs().cases
         run_resp = ctx.builder.run(
             attempt_id, replay.executable, holdout,
             notify=ctx.strategy.device_proof.notify,
             mandatory=ctx.strategy.device_proof.mandatory,
         )
     except Exception as exc:
-        # Transport errors can include backend response bodies. During a
-        # held-out run those bodies are influenced by the submitted code.
+        # Not backend.py's failure rule, deliberately: transport errors can
+        # include backend response bodies, and during a held-out run those
+        # bodies are influenced by the submitted code.
         raise ComponentError("could not execute the held-out cases; private diagnostic withheld") from exc
     if not run_resp.ok:
         raise ComponentError("held-out run failed; private diagnostic withheld")
@@ -82,7 +82,7 @@ def check_holdout(ctx: CheckContext, config: dict) -> CheckResult:
     # same rule governs the reasons: a session is told the verdict, and
     # which held-out case failed is not something it may learn.
     return CheckResult(
-        verdict=resp["verdict"],
-        detail={POLICY_KEY: resp[POLICY_KEY]},
+        verdict=resp.verdict,
+        detail={POLICY_KEY: resp.policy_sha256},
         materials=_policy_material(resp),
     )

@@ -26,7 +26,6 @@ arrays.
 """
 from __future__ import annotations
 
-import base64
 import json
 import shutil
 import tempfile
@@ -37,15 +36,38 @@ from equivalent.capture import npy
 from equivalent.ledger.packed import PackedSet
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import hash_files
-
-# The subject kind a stored set's hash names.
-CAPTURE_SET = "capture_set"
+from equivalent.ledger.vocabulary import CAPTURE_SET_KEY
 
 # What a timing run's own outputs are stored as: one dataset holding one
 # case, whose variables are the files the program wrote. The baseline
 # stores such a set and a port is compared against it, so both sides name
 # it the same way here rather than each spelling it for itself.
 PROGRAM_SET = "program"
+
+# The claim that says which stored set each declared dataset was written
+# into. It is spelled beside the sets themselves because two layers read
+# it: the check that files it, and the promotion command that copies the
+# sets it named into the code's own directory.
+CAPTURED_PREDICATE = "harness/captured"
+
+
+def sets_named_by(claim, where: str) -> dict:
+    """The capture set each dataset was stored under, from one capture claim.
+
+    This is how anyone finds the arrays a passing capture approved: by
+    reading the claim, never by capturing again. A passing claim that
+    names no set at all is broken evidence rather than a verdict about
+    the code, so it is raised; a caller decides whether that is an error
+    on the harness's side or a reason to refuse.
+    """
+    sets = {
+        name: entry[CAPTURE_SET_KEY]
+        for name, entry in claim.predicate.detail.get("datasets", {}).items()
+        if entry.get(CAPTURE_SET_KEY)
+    }
+    if not sets:
+        raise ValueError(f"the {CAPTURED_PREDICATE} claim for {where} names no capture set")
+    return sets
 
 
 class SetReader:
@@ -109,8 +131,9 @@ def pack_capture_set(name: str, cases: dict) -> PackedSet:
 
     `cases` is {case: {"inputs": {variable: array}, "outputs": {...}}},
     which is what the capture reader hands back for a dataset directory.
-    `name` is what the manifest calls this dataset; it is for the caller's
-    own messages and is deliberately not part of the hash, so that two
+    `name` is what the manifest calls this dataset. It names the staging
+    directory, so a person looking at what a run left behind can see
+    which dataset it was, and it is kept out of the hash, so that two
     datasets holding the same arrays are one artifact rather than two
     copies that a later comparison would have to know are the same.
 
@@ -119,12 +142,10 @@ def pack_capture_set(name: str, cases: dict) -> PackedSet:
     compare it with one already stored, and hand back only what should
     survive.
     """
-    staging = Path(tempfile.mkdtemp(prefix="equivalent-set-"))
+    readable = "".join(c if c.isalnum() or c in "._-" else "-" for c in name)
+    staging = Path(tempfile.mkdtemp(prefix=f"equivalent-set-{readable}-"))
     write_dataset(staging, cases)
-    packed = PackedSet(
-        kind=CAPTURE_SET, name=name,
-        sha256=hash_files(_files_under(staging)), directory=staging,
-    )
+    packed = PackedSet(sha256=hash_files(_files_under(staging)), directory=staging)
     weakref.finalize(packed, shutil.rmtree, staging, True)
     return packed
 
@@ -132,39 +153,6 @@ def pack_capture_set(name: str, cases: dict) -> PackedSet:
 def load_capture_set(store: LedgerStore, sha256: str) -> dict:
     """The cases of one stored set, in the shape `pack_capture_set` took."""
     return SetReader(store.capture_sets_dir).load(sha256)
-
-
-def program_variable(path: str) -> str:
-    """The variable a file a program wrote is stored under: its path without the suffix.
-
-    A file in a directory of the program's own keeps that directory in
-    its name, so two files called `rho.npy` in different directories stay
-    two variables.
-    """
-    return path[: -len(npy.INPUT_SUFFIX)] if path.endswith(npy.INPUT_SUFFIX) else path
-
-
-def program_arrays(written: dict, declared) -> tuple[dict, dict]:
-    """The declared files one run wrote, as arrays, and a message per file that is not one.
-
-    `written` is what the builder hands back for one run: {path: base64 of
-    that file's bytes}. The program's outputs are compared as arrays, like
-    the region's, so a file that is not an NPY file is a problem named
-    here -- keyed by the path it came from, so a caller comparing one
-    output at a time can say which one -- rather than a comparison that
-    quietly did not happen.
-    """
-    arrays = {}
-    problems = {}
-    for path in declared:
-        try:
-            arrays[program_variable(path)] = npy.decode(base64.b64decode(written[path]))
-        except Exception as exc:
-            problems[path] = (
-                f"the timing run's '{path}' does not read as an array ({exc}); the "
-                f"program's outputs are compared as arrays, like the region's"
-            )
-    return arrays, problems
 
 
 def pack_program_set(arrays: dict) -> PackedSet:

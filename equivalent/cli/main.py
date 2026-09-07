@@ -37,7 +37,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from equivalent.ledger.acceptance import PORTING, requirements_for
-from equivalent.ledger.evidence import required_materials_by_predicate
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject, evidence_policy_subject
@@ -280,9 +279,6 @@ def main(argv=None) -> int:
             region.store, requirements, region.phase,
             tree=region.tree, frozen=region.frozen,
             required_materials=region.materials,
-            required_materials_by_predicate=(required_materials_by_predicate(
-                region.store, requirements, region.phase, region.tree, region.materials,
-            ) if region.tree is not None else {}),
             # There is no builder here to ask whether the executables the
             # claims name are still in place; the gateway's own status
             # endpoint answers that. What this command can vouch for is
@@ -293,8 +289,6 @@ def main(argv=None) -> int:
         if args.json:
             print(json.dumps(status, indent=2, sort_keys=True))
         else:
-            if status.get("note"):
-                print(status["note"])
             print(render.render_status(status, args.region or region.name), end="")
         return 0
 

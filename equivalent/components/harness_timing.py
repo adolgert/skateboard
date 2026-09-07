@@ -28,20 +28,15 @@ thing said about two different programs.
 """
 from __future__ import annotations
 
-from equivalent.ledger.capture_sets import pack_program_set, program_arrays
 from equivalent.ledger.subjects import Subject
+from equivalent.ledger.vocabulary import EXECUTABLE_IDENTITY_KEY, PASS, PROGRAM_SET_KEY
 
 from . import program_outputs
 from .context import CheckContext, CheckResult, failed
-from .names import PROGRAM_SET_KEY
 
 # How many times the program is run. Two is what the question needs: one
 # run to measure and a second to disagree with it.
 REPEATS = 2
-
-
-def _fail(problems: list, detail=None) -> CheckResult:
-    return failed({**(detail or {}), "problems": problems}, problems)
 
 
 def _drifted(first: dict, second: dict, declared) -> list:
@@ -60,11 +55,14 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     """Run the timing program twice and pack what its last run wrote.
 
     The detail holds the two runs' wall-clock seconds, whether the GPU was
-    to itself, the files the program declared, and the capture set the
-    ledger will hold them under. A manifest that names no timing program
-    is a `fail` here rather than an error, because the manifest is the
-    agent's own work while a code is being brought in. Raises
-    ComponentError if the builder could not be reached.
+    to itself, what the last run wrote and what the manifest said it would
+    write, and the capture set the ledger will hold the files under. The
+    two are recorded separately, and `outputs` means here what it means in
+    a port's own timing claim: the files that were written, named and
+    hashed. A manifest that names no timing program is a `fail` here
+    rather than an error, because the manifest is the agent's own work
+    while a code is being brought in. Raises ComponentError if the builder
+    could not be reached.
     """
     manifest = ctx.provenance.manifest()
     described = {"manifest_sha256": manifest.sha256}
@@ -81,19 +79,18 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         **described,
         "runs_s": resp.runs_s,
         "gpu_exclusive": resp.gpu_exclusive,
-        "outputs": list(timing.outputs),
-        "executable_identity": resp.executable_identity,
+        "outputs": program_outputs.collected(runs),
+        "declared_outputs": list(timing.outputs),
+        EXECUTABLE_IDENTITY_KEY: resp.executable_identity,
     }
 
-    problems = _drifted(runs[0], runs[1], timing.outputs)
-    arrays, unreadable = program_arrays(runs[-1], timing.outputs)
-    problems.extend(unreadable.values())
+    packed, unreadable = program_outputs.packed_program_set(manifest, resp)
+    problems = [*_drifted(runs[0], runs[1], timing.outputs), *unreadable]
     if problems:
-        return _fail(problems, measured)
+        return failed({**measured, "problems": problems}, problems)
 
-    packed = pack_program_set(arrays)
     return CheckResult(
-        verdict="pass", detail={**measured, PROGRAM_SET_KEY: packed.sha256},
+        verdict=PASS, detail={**measured, PROGRAM_SET_KEY: packed.sha256},
         materials=(Subject(kind="capture_set", sha256=packed.sha256),),
         stores=(packed,),
     )

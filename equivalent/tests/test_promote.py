@@ -322,3 +322,28 @@ def test_it_refuses_a_region_that_is_not_being_onboarded(tmp_path, capsys):
 
     assert rc == 1
     assert "onboarding" in err
+
+
+def test_a_capture_claim_that_named_no_set_is_refused_rather_than_raised(tmp_path, capsys):
+    # Promoting copies the sets the capture claim named, so a claim that
+    # names none has nothing to copy. That is broken evidence, and the
+    # person running the command is told so rather than shown a stack
+    # trace out of a check they did not run.
+    deployment = _deployment(tmp_path)
+    cfg = load_gateway_config(deployment["config"]).regions[REGION]
+    store = LedgerStore(cfg.ledger_dir)
+    store.record_claim(
+        [Subject(kind="tree", sha256=Tree.baseline(cfg.repo_dir).sha)], CAPTURED,
+        Predicate(
+            tool="t", version="0.1", configHash="cfg", verdict="pass",
+            detail={"datasets": {"visible": {"cases": 1}}},
+        ),
+        (*evidence_materials_for(cfg), Subject(kind="binary", sha256="d" * 64)), "sess-2",
+    )
+
+    rc = _promote(deployment)
+    err = capsys.readouterr().err
+
+    assert rc == 1
+    assert "no capture set" in err
+    assert not (deployment["destination"] / CODE).exists()

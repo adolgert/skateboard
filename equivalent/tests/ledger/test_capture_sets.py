@@ -40,7 +40,6 @@ def test_a_stored_set_comes_back_case_for_case_and_array_for_array(tmp_path):
     store.keep(packed)
     back = capture_sets.load_capture_set(store, packed.sha256)
 
-    assert packed.kind == "capture_set"
     assert sorted(back) == ["case0000", "case0001"]
     assert np.array_equal(back["case0000"]["inputs"]["h"], _arrays()["h"])
     assert np.array_equal(back["case0001"]["outputs"]["u"], _arrays(3)["u"])

@@ -5,7 +5,7 @@ import yaml
 
 from equivalent.components import sanitize
 from equivalent.components.errors import ComponentError
-from equivalent.gateway.backend_client import SanitizeResponse
+from equivalent.components.answers import SanitizeResponse
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
 from equivalent.tests.components.conftest import (

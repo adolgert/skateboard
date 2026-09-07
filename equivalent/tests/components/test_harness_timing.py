@@ -16,8 +16,8 @@ import numpy as np
 
 from equivalent.capture import npy
 from equivalent.components import harness_timing
-from equivalent.gateway.backend_client import TimeResponse
-from equivalent.tree import attempt_id_for_strategy
+from equivalent.components.answers import TimeResponse
+from equivalent.components.workspaces import attempt_id_for_strategy
 from equivalent.ledger import capture_sets
 from equivalent.tests.fakes import (
     FakeBuilder,
@@ -49,7 +49,12 @@ def test_two_runs_that_agree_pass_and_store_what_the_program_wrote(harness):
     assert result.verdict == "pass"
     assert result.detail["runs_s"] == run_seconds(harness_timing.REPEATS)
     assert result.detail["gpu_exclusive"] is True
-    assert result.detail["outputs"] == DECLARED_OUTPUTS
+    # What the program wrote, named and hashed, is what a port's own
+    # timing claim calls `outputs` too; what the manifest said it would
+    # write is a separate line, so the two cannot be read for each other.
+    assert result.detail["declared_outputs"] == DECLARED_OUTPUTS
+    assert sorted(result.detail["outputs"]) == DECLARED_OUTPUTS
+    assert all(len(digest) == 64 for digest in result.detail["outputs"].values())
     # The program's own outputs are a capture set of one case, whose
     # variables are the files the program wrote, named the way a baseline
     # timing claim names its own.

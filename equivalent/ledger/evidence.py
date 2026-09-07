@@ -15,9 +15,15 @@ from __future__ import annotations
 
 from equivalent.ledger.records import SCHEMA_VERSION
 from equivalent.ledger.subjects import Subject, hash_bytes
+from equivalent.ledger.vocabulary import EXECUTABLE_IDENTITY_KEY, TARGETS_KEY
 
 
 BUILD_PREDICATE = {"porting": "build/replay", "onboarding": "harness/builds"}
+# The claims that are not judged against an executable cohort: the build
+# itself, and the checks that run before any build exists. Written out
+# rather than derived from the precondition table, because which claims
+# are exempt from the current build is what a reader of this rule most
+# needs to see; a test holds it to the table so it cannot drift.
 FOUNDATION_PREDICATES = {
     "sese/verified", "manifest/valid", "build/replay", "harness/builds",
     "timing/baseline",
@@ -52,9 +58,9 @@ def binary_materials(detail: dict) -> tuple[Subject, ...]:
 
     def visit(value, key=None):
         if isinstance(value, dict):
-            if key == "executable_identity" and isinstance(value.get("sha256"), str):
+            if key == EXECUTABLE_IDENTITY_KEY and isinstance(value.get("sha256"), str):
                 digests.add(value["sha256"])
-            if key == "targets":
+            if key == TARGETS_KEY:
                 for target in value.values() if isinstance(value, dict) else ():
                     if isinstance(target, dict) and isinstance(target.get("sha256"), str):
                         digests.add(target["sha256"])

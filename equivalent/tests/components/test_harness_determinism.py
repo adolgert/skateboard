@@ -14,7 +14,7 @@ from itertools import count
 
 from equivalent.capture import npy
 from equivalent.components import harness_determinism
-from equivalent.gateway.backend_client import RunResponse
+from equivalent.components.answers import RunResponse
 from equivalent.tests.fakes import FakeBuilder, captured, captured_cases, replayed
 
 REGION = "tsunami:onboarding"

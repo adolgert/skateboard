@@ -25,18 +25,10 @@ from equivalent.tests.components.conftest import (
 from equivalent.tests.fakes import FakeBuilder, timed, write_program, write_tree
 
 
-def _baseline_seed(harness):
-    """A pristine baseline tree, which is what a baseline timing builds."""
-    seed = harness.tmp_path / "seed" / "src"
-    seed.mkdir(parents=True, exist_ok=True)
-    (seed / "mod_kernel.f90").write_text("module mod_kernel\nend module\n")
-    return harness.tmp_path / "seed"
-
-
 def _time_baseline(harness):
     """The porting check that times the pristine baseline and keeps its files."""
     manifest = load_manifest(write_program(harness.tmp_path) / "manifest.yaml")
-    harness.repo(_baseline_seed(harness))
+    harness.pristine()
     result = timing.check_baseline(
         harness.porting(
             region_id="ch04:step", manifest=manifest,
@@ -100,7 +92,7 @@ def test_a_builder_answer_that_is_not_a_measurement_fails_in_both_phases(harness
         return FakeBuilder(time=partial(timed, repetitions=1))
 
     manifest = load_manifest(write_program(harness.tmp_path) / "manifest.yaml")
-    harness.repo(_baseline_seed(harness))
+    harness.pristine()
     baseline = timing.check_baseline(
         harness.porting(
             region_id="ch04:step", manifest=manifest,

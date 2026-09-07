@@ -14,6 +14,11 @@ region's own bands live beside it under `variables` and are not these:
 they band one call of the region, where a whole-program run accumulates
 the difference between two compilations over every step it takes.
 
+Reading what the builder hands back is here too, rather than beside the
+sets in the ledger: the base64 of a file a program wrote is the
+builder's wire, and the ledger's business is the arrays after somebody
+has decided they are arrays.
+
 This sits below `timing` and `program_regression` so that both can read
 it without importing each other.
 """
@@ -21,21 +26,19 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import math
 from pathlib import Path
 
-from equivalent.capture import compare
-from equivalent.ledger.capture_sets import (
-    PROGRAM_SET,
-    program_arrays,
-    program_variable,
-)
+from equivalent.capture import compare, npy
+from equivalent.ledger.capture_sets import PROGRAM_SET, pack_program_set
+from equivalent.ledger.subjects import policy_subject
+from equivalent.ledger.vocabulary import PASS
 from equivalent.manifest.schema import Manifest
 
+from . import backend
 from .context import CheckContext, failed
 from .errors import ComponentError
-from .names import FILE_BANDS, TIMING_ROLE
+from .names import FILE_BANDS, TIMING_ROLE, bands
 
 # What a manifest with no timing target leaves the harness without, in the
 # words the message about it uses.
@@ -50,6 +53,55 @@ def timing_target(ctx: CheckContext, manifest: Manifest, described=None):
     harness's side. Which it is, and why, is the provenance's to say.
     """
     return ctx.provenance.build_target(manifest, TIMING_ROLE, NO_PROGRAM_TO_TIME, described)
+
+
+def program_variable(path: str) -> str:
+    """The variable a file a program wrote is stored under: its path without the suffix.
+
+    A file in a directory of the program's own keeps that directory in
+    its name, so two files called `rho.npy` in different directories stay
+    two variables.
+    """
+    return path[: -len(npy.INPUT_SUFFIX)] if path.endswith(npy.INPUT_SUFFIX) else path
+
+
+def program_arrays(written: dict, declared) -> tuple[dict, dict]:
+    """The declared files one run wrote, as arrays, and a message per file that is not one.
+
+    `written` is what the builder hands back for one run: {path: base64 of
+    that file's bytes}. The program's outputs are compared as arrays, like
+    the region's, so a file that is not an NPY file is a problem named
+    here -- keyed by the path it came from, so a caller comparing one
+    output at a time can say which one -- rather than a comparison that
+    quietly did not happen.
+    """
+    arrays = {}
+    problems = {}
+    for path in declared:
+        try:
+            arrays[program_variable(path)] = npy.decode(base64.b64decode(written[path]))
+        except Exception as exc:
+            problems[path] = (
+                f"the timing run's '{path}' does not read as an array ({exc}); the "
+                f"program's outputs are compared as arrays, like the region's"
+            )
+    return arrays, problems
+
+
+def packed_program_set(manifest: Manifest, resp) -> tuple:
+    """What one timing run leaves for a port's own run to be compared against.
+
+    Answers `(packed, problems)` for the last run's files: the set to
+    keep, or why the program's declared outputs are not something a later
+    run could be compared with. Both the baseline timing and the
+    onboarding timing leave the same kind of reference behind, so both
+    pack it here.
+    """
+    runs = resp.outputs
+    arrays, unreadable = program_arrays(runs[-1] if runs else {}, manifest.timing.outputs)
+    if unreadable:
+        return None, sorted(unreadable.values())
+    return pack_program_set(arrays), []
 
 
 def collected(runs: list) -> dict:
@@ -90,15 +142,15 @@ def time_program(ctx: CheckContext, attempt_id: str, manifest: Manifest, repeats
     if refusal is not None:
         return None, refusal
     timing = manifest.timing
-    if type(repeats) is not int or not 1 <= repeats <= 100:
-        raise ComponentError("timing repeats must be an integer between 1 and 100")
-    try:
-        resp = ctx.builder.time(
-            attempt_id, target.executable, list(timing.args), dict(timing.env),
-            list(timing.outputs), repeats, timing.budget_s,
-        )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/time call failed: {exc}") from exc
+    # The action table is the gate on a request's `repeats`, checked
+    # before the gateway dispatches; the checks that pass their own
+    # constant are the only other callers.
+    if repeats < 1:
+        raise ComponentError("timing repeats must be a positive whole number")
+    resp = backend.time(
+        ctx.builder, attempt_id, target.executable, timing.args, timing.env,
+        timing.outputs, repeats, timing.budget_s,
+    )
 
     if not resp.ok:
         # An exceeded budget and a declared file the program never wrote
@@ -123,25 +175,23 @@ def time_program(ctx: CheckContext, attempt_id: str, manifest: Manifest, repeats
     return resp, None
 
 
-def tolerance_policy(manifest: Manifest) -> tuple[dict, str]:
-    """The code's band per timing output file, and the hash of the file they came from.
+def tolerance_policy(manifest: Manifest) -> tuple:
+    """The code's band per timing output file, and the policy itself as a material.
 
-    The bytes hashed are the tolerance file's own, which is what the
-    oracle hashes for the same file -- so the policy subject on a program
-    claim and the one on a regression claim are the same subject when they
-    are the same policy.
+    The subject is made from the tolerance file's own bytes, which is what
+    the oracle hashes for the same file -- so the policy a program claim
+    names and the one a regression claim names are the same subject when
+    they are the same policy.
     """
     try:
         data = Path(manifest.tolerances).read_bytes()
-        bands = json.loads(data).get(FILE_BANDS, {})
-        if not isinstance(bands, dict):
-            raise TypeError(f"'{FILE_BANDS}' is not a mapping")
-    except (OSError, ValueError, TypeError) as exc:
+        _, per_file = bands(data)
+    except (OSError, ValueError) as exc:
         raise ComponentError(
             f"the code's tolerance policy at {manifest.tolerances} does not read as a "
             f"policy naming a band per file the timing run writes: {exc}"
         ) from exc
-    return bands, hashlib.sha256(data).hexdigest()
+    return per_file, policy_subject(data)
 
 
 def reference_outputs(sets, sha256: str) -> dict:
@@ -158,14 +208,14 @@ def _compare_one(path: str, name: str, reference, written: dict, bands: dict) ->
     """One declared output of the port's run against the baseline's."""
     if name not in written:
         return {
-            "pass": False,
+            PASS: False,
             "error": f"the timing run wrote no '{path}', which the manifest declares and "
                      f"the baseline program wrote",
         }
     band = bands.get(path)
     if reference.dtype.kind == "f" and band is None:
         return {
-            "pass": False,
+            PASS: False,
             "error": f"the timing output '{path}' holds floating-point numbers and the "
                      f"code's tolerance policy names no band for it under "
                      f"'{FILE_BANDS}', so how close is close enough is a question "
@@ -174,7 +224,7 @@ def _compare_one(path: str, name: str, reference, written: dict, bands: dict) ->
     return compare.compare_variable(reference, written[name], band)
 
 
-def compare_outputs(sets, program_set, manifest, encoded_outputs, bands):
+def compare_outputs(sets, program_set, manifest, encoded_outputs, per_file):
     """Compare one measured repetition with the reviewed baseline outputs."""
     reference = reference_outputs(sets, program_set)
     written, unreadable = program_arrays(
@@ -184,11 +234,11 @@ def compare_outputs(sets, program_set, manifest, encoded_outputs, bands):
     for path in manifest.timing.outputs:
         name = program_variable(path)
         if path in unreadable:
-            per_var[name] = {"pass": False, "error": unreadable[path]}
+            per_var[name] = {PASS: False, "error": unreadable[path]}
         elif name not in reference:
-            per_var[name] = {"pass": False, "error": f"baseline capture set holds no '{name}'"}
+            per_var[name] = {PASS: False, "error": f"baseline capture set holds no '{name}'"}
         else:
-            per_var[name] = _compare_one(path, name, reference[name], written, bands)
+            per_var[name] = _compare_one(path, name, reference[name], written, per_file)
     return per_var
 
 
@@ -196,5 +246,5 @@ def comparison_reasons(per_var: dict) -> list:
     """Why a comparison failed, one line per output that did not match."""
     return [
         f"the timing run's '{name}': {entry.get('error', 'is not the baseline program\'s')}"
-        for name, entry in sorted(per_var.items()) if not entry["pass"]
+        for name, entry in sorted(per_var.items()) if not entry[PASS]
     ]

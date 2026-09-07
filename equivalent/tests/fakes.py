@@ -3,12 +3,12 @@
 Unlike check_sese.py (cheap, pure Python, safe to run for real in
 tests), the builder needs nvfortran/compute-sanitizer/a GPU and the
 oracle needs its baked capture data -- none of which exist in this
-development environment. The builder's fake answers with the same typed
-responses the real client parses (equivalent/gateway/backend_client.py),
-and equivalent/tests/test_builder_parity.py is what says those are still
-the shapes the service writes -- so the gateway dispatch code under test
-is exercised the same way it would be against the real thing; only
-what's inside the box differs.
+development environment. Both fakes answer with the same typed responses
+a check reads from the real ones (equivalent/components/answers.py), and
+equivalent/tests/test_builder_parity.py and test_oracle_parity.py are
+what say those are still the shapes the services write -- so the gateway
+dispatch code under test is exercised the same way it would be against
+the real thing; only what's inside the box differs.
 
 `write_program` is not a fake: it writes a small but real code directory,
 laid out the way `programs/<code>/` is, so every test that needs a
@@ -31,12 +31,15 @@ import numpy as np
 import yaml
 
 from equivalent.capture import npy
-from equivalent.gateway.backend_client import (
+from equivalent.components.answers import (
     ArtifactsResponse,
     BuildResponse,
     CaptureResponse,
+    CompareResponse,
     HealthResponse,
+    HoldoutInputsResponse,
     MutateResponse,
+    PolicyResponse,
     PropertiesResponse,
     RunResponse,
     SanitizeResponse,
@@ -650,21 +653,18 @@ class FakeOracle:
         self.holdout_verdict = "pass"
 
     def policy(self):
-        return {
-            "policy_version": "1", "policy_sha256": "f" * 64,
-            "oracle_identity": "0" * 64,
-        }
+        return PolicyResponse(policy_sha256="f" * 64, oracle_identity="0" * 64)
 
     def holdout_inputs(self):
-        return {"dataset": "holdout", "cases": {"hcase0": fixture_case(offset=7)}}
+        return HoldoutInputsResponse(cases={"hcase0": fixture_case(offset=7)})
 
     def compare(self, dataset, outputs, attempt_id="unknown"):
         self.compare_calls.append({"dataset": dataset, "outputs": outputs, "attempt_id": attempt_id})
         verdict = self.visible_verdict if dataset == "visible" else self.holdout_verdict
-        resp = {
-            "verdict": verdict, "dataset": dataset,
-            "policy_sha256": "f" * 64, "oracle_identity": "0" * 64,
-        }
-        if dataset == "visible":
-            resp["per_case"] = {name: {"pass": verdict == "pass"} for name in outputs}
-        return resp
+        # Held-out comes back with no per-case detail, as the real oracle
+        # answers it: there is nothing quantitative for a session to read.
+        per_case = (
+            {name: {"pass": verdict == "pass"} for name in outputs}
+            if dataset == "visible" else {}
+        )
+        return CompareResponse(verdict=verdict, policy_sha256="f" * 64, per_case=per_case)

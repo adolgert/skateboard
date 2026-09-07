@@ -1,7 +1,8 @@
 """Builder service. Thin HTTP shim over stages.py.
 
 Trust role: routing only. Every command line lives in stages.py; this
-file turns a request body into a call and the answer into JSON. What it
+file turns a request body into a call and the answer into JSON, which
+FastAPI validates against the response type the contract declares. What it
 must get right is that nothing it invents reaches stages.py -- the tree,
 the makefile, the targets, the compiler, the flags, and the executables
 all come from the gateway, which read them from the code's hashed
@@ -44,74 +45,83 @@ def _workspace(attempt_id: str):
     return stages.workspace_for(attempt_id)
 
 
-@app.post("/v1/build")
+@app.post("/v1/build", response_model=contract.BuildResponse)
 def build(req: contract.BuildRequest, authorization: str | None = Header(default=None)):
     _auth(authorization)
     return stages.build(
-        _workspace(req.attempt_id), [f.model_dump() for f in req.tree], req.makefile,
-        [t.model_dump() for t in req.targets], req.compiler,
-        req.flags, req.link_flags, req.source_patterns,
+        _workspace(req.attempt_id), tree=[f.model_dump() for f in req.tree],
+        makefile=req.makefile, targets=[t.model_dump() for t in req.targets],
+        compiler=req.compiler, flags=req.flags, link_flags=req.link_flags,
+        source_patterns=req.source_patterns,
     )
 
 
-@app.post("/v1/run")
+@app.post("/v1/run", response_model=contract.RunResponse)
 def run(req: contract.RunRequest, authorization: str | None = Header(default=None)):
     _auth(authorization)
     return stages.run(
-        _workspace(req.attempt_id), req.executable, req.cases,
+        _workspace(req.attempt_id), executable=req.executable, cases=req.cases,
         notify=req.notify, mandatory=req.mandatory,
     )
 
 
-@app.post("/v1/capture")
+@app.post("/v1/capture", response_model=contract.CaptureResponse)
 def capture(req: contract.CaptureRequest, authorization: str | None = Header(default=None)):
     _auth(authorization)
-    return stages.capture(_workspace(req.attempt_id), req.executable, req.args, req.run_name)
+    return stages.capture(
+        _workspace(req.attempt_id), executable=req.executable, args=req.args,
+        run_name=req.run_name,
+    )
 
 
-@app.post("/v1/sanitize")
+@app.post("/v1/sanitize", response_model=contract.SanitizeResponse)
 def sanitize(req: contract.SanitizeRequest, authorization: str | None = Header(default=None)):
     _auth(authorization)
-    return stages.sanitize(_workspace(req.attempt_id), req.executable, req.cases, req.tools)
+    return stages.sanitize(
+        _workspace(req.attempt_id), executable=req.executable, cases=req.cases,
+        tools=req.tools,
+    )
 
 
-@app.post("/v1/properties")
+@app.post("/v1/properties", response_model=contract.PropertiesResponse)
 def properties(req: contract.PropertiesRequest, authorization: str | None = Header(default=None)):
     _auth(authorization)
     return stages.properties(
-        _workspace(req.attempt_id), req.executable, req.module, req.cases,
-        req.seed, req.max_examples,
+        _workspace(req.attempt_id), executable=req.executable, module=req.module,
+        cases=req.cases, seed=req.seed, max_examples=req.max_examples,
     )
 
 
-@app.post("/v1/mutate")
+@app.post("/v1/mutate", response_model=contract.MutateResponse)
 def mutate(req: contract.MutateRequest, authorization: str | None = Header(default=None)):
     _auth(authorization)
     return stages.mutate(
-        _workspace(req.attempt_id), req.makefile, req.replay_target, req.files,
-        req.cases, req.bands, req.compiler, req.flags, req.link_flags,
-        req.source_patterns, jobs=req.jobs, limit=req.limit,
+        _workspace(req.attempt_id), makefile=req.makefile,
+        replay_target=req.replay_target.model_dump(), files=req.files,
+        cases=req.cases, bands=req.bands, compiler=req.compiler, flags=req.flags,
+        link_flags=req.link_flags, source_patterns=req.source_patterns,
+        jobs=req.jobs, limit=req.limit,
     )
 
 
-@app.post("/v1/time")
+@app.post("/v1/time", response_model=contract.TimeResponse)
 def time_run(req: contract.TimeRequest, authorization: str | None = Header(default=None)):
     _auth(authorization)
     return stages.time_run(
-        _workspace(req.attempt_id), req.executable, args=req.args, env=req.env,
-        outputs=req.outputs, repeats=req.repeats, budget_s=req.budget_s,
+        _workspace(req.attempt_id), executable=req.executable, args=req.args,
+        env=req.env, outputs=req.outputs, repeats=req.repeats, budget_s=req.budget_s,
         expected_outputs=req.expected_outputs,
     )
 
 
-@app.get("/v1/artifacts/{attempt_id}")
+@app.get("/v1/artifacts/{attempt_id}", response_model=contract.ArtifactsResponse)
 def artifacts(attempt_id: str, authorization: str | None = Header(default=None)):
     """Protected executable identities, reverified against bytes on disk."""
     _auth(authorization)
     return _workspace(attempt_id).artifact_identities()
 
 
-@app.get("/healthz")
+@app.get("/healthz", response_model=contract.HealthResponse)
 def healthz():
     """Liveness, plus what this image can actually run.
 

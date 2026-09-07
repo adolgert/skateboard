@@ -27,9 +27,16 @@ import base64
 from equivalent.capture import npy
 from equivalent.ledger.capture_sets import pack_capture_set
 
+from equivalent.ledger.vocabulary import (
+    CAPTURE_SET_KEY,
+    EXECUTABLE_IDENTITY_KEY,
+    FAIL,
+    PASS,
+)
 from . import backend, harness_capture, harness_replay
 from .context import CheckContext, CheckResult, capture_set_materials
 from .errors import ComponentError
+from .names import CAPTURE_ROLE, REPLAY_ROLE, VISIBLE
 
 # What the second run of a dataset's capture is called, so it writes into
 # a directory of its own: a program that appends to what is already there
@@ -72,7 +79,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     manifest = ctx.provenance.manifest()
     sets = harness_capture.captured_sets(ctx)
     capture, refusal = ctx.provenance.build_target(
-        manifest, harness_capture.CAPTURE_ROLE, harness_capture.NO_PROGRAM_TO_CAPTURE,
+        manifest, CAPTURE_ROLE, harness_capture.NO_PROGRAM_TO_CAPTURE,
         {"manifest_sha256": manifest.sha256},
     )
     if refusal is not None:
@@ -82,7 +89,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     differed = []
     per_dataset = {}
     for name in sorted(sets):
-        entry = {"capture_set": sets[name]}
+        entry = {CAPTURE_SET_KEY: sets[name]}
         dataset = manifest.datasets.get(name)
         if dataset is None:
             # The manifest lost a dataset the capture claim was filed
@@ -92,7 +99,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
                 f"capture claim for this tree was filed about"
             )
         resp = backend.capture(
-            ctx, attempt_id, capture.executable, dataset.args, f"{name}{AGAIN}",
+            ctx.builder, attempt_id, capture.executable, dataset.args, f"{name}{AGAIN}",
         )
         cases = resp.cases if resp.ok else {}
         if not cases:
@@ -112,20 +119,19 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
                 )
         per_dataset[name] = entry
 
-    if harness_capture.VISIBLE not in sets:
+    if VISIBLE not in sets:
         raise ComponentError(
-            f"the capture claim for this tree names no '{harness_capture.VISIBLE}' set to "
-            f"replay twice"
+            f"the capture claim for this tree names no '{VISIBLE}' set to replay twice"
         )
-    visible = ctx.sets.load(sets[harness_capture.VISIBLE])
-    replay = manifest.build.targets[harness_replay.REPLAY_ROLE]
-    replay_detail = {"dataset": harness_capture.VISIBLE, "cases": len(visible)}
+    visible = ctx.sets.load(sets[VISIBLE])
+    replay = manifest.build.targets[REPLAY_ROLE]
+    replay_detail = {"dataset": VISIBLE, "cases": len(visible)}
     cases = harness_replay.wire_inputs(visible)
     runs = [
-        backend.replay(ctx, attempt_id, replay.executable, cases),
-        backend.replay(ctx, attempt_id, replay.executable, cases),
+        backend.replay(ctx.builder, attempt_id, replay.executable, cases),
+        backend.replay(ctx.builder, attempt_id, replay.executable, cases),
     ]
-    replay_detail["executable_identity"] = next(
+    replay_detail[EXECUTABLE_IDENTITY_KEY] = next(
         (run.executable_identity for run in runs if run.executable_identity), None,
     )
     if not all(run.ok for run in runs):
@@ -145,13 +151,13 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
 
     detail = {
         "manifest_sha256": manifest.sha256,
-        "executable_identity": replay_detail.get("executable_identity"),
+        EXECUTABLE_IDENTITY_KEY: replay_detail.get(EXECUTABLE_IDENTITY_KEY),
         "datasets": per_dataset,
         "replay": replay_detail,
         "differed": differed,
     }
     return CheckResult(
-        verdict="fail" if differed else "pass",
+        verdict=FAIL if differed else PASS,
         detail=detail,
         reasons=tuple(differed),
         materials=capture_set_materials(detail),

@@ -32,7 +32,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from equivalent.components.context import CheckContext, CheckResult, provenance_for
+from equivalent.components.context import CheckContext, CheckResult
+from equivalent.components.phase import provenance_for
 from equivalent.components.errors import ComponentError
 from equivalent.ledger.acceptance import (
     ACCEPTANCE_REQUIREMENTS,
@@ -44,7 +45,6 @@ from equivalent.ledger.evidence import (
     FOUNDATION_PREDICATES,
     binary_materials,
     current_build_claim,
-    required_materials_by_predicate,
 )
 from equivalent.ledger.capture_sets import SetReader
 from equivalent.ledger.predicates import agent_receipt
@@ -268,21 +268,15 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                     detail="builder executor_identity does not match the reviewed region pin",
                 )
         if oracle is not None and provenance_for(cfg.phase).oracle_judges:
+            # An answer that names no identity, or names something that is
+            # not a digest, is not an oracle this gateway can pin: reading
+            # the policy answer at all is what says so.
             try:
-                oracle_identity = oracle.policy().get("oracle_identity")
+                oracle_identity = oracle.policy().oracle_identity
             except Exception as exc:
                 raise HTTPException(
                     status_code=503, detail=f"cannot establish oracle identity: {exc}",
                 ) from exc
-            if not oracle_identity:
-                raise HTTPException(status_code=503, detail="oracle returned no oracle_identity")
-            if (
-                not isinstance(oracle_identity, str)
-                or re.fullmatch(r"[0-9a-f]{64}", oracle_identity) is None
-            ):
-                raise HTTPException(
-                    status_code=503, detail="oracle returned an invalid oracle_identity",
-                )
             expected = getattr(cfg, "oracle_identity", None)
             if expected is not None and oracle_identity != expected:
                 raise HTTPException(
@@ -336,16 +330,11 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 return False
             if report.executor_identity != executor_identity:
                 return False
-            executables = report.executables
             for target in targets.values():
                 if not isinstance(target, dict):
                     return False
-                actual = executables.get(target.get("executable"), {})
-                if (
-                    actual.get("verified") is not True
-                    or actual.get("sha256") != target.get("sha256")
-                    or actual.get("size") != target.get("size")
-                ):
+                still_there = report.executables.get(target.get("executable"))
+                if still_there is None or not still_there.matches(target):
                     return False
         return True
 
@@ -440,10 +429,6 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             tree=tree_subject,
             frozen=Subject(kind="frozen", sha256=frozen_sha),
             required_materials=materials,
-            required_materials_by_predicate=required_materials_by_predicate(
-                store, requirements_for(cfg.phase, cfg.manifest), cfg.phase,
-                tree_subject, materials,
-            ),
             # The gateway can answer the question the ledger cannot: it
             # has just asked the builder whether it still holds the
             # executables the current build claim named, and the live

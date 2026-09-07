@@ -25,13 +25,10 @@ submission and a CLI reading a ledger need them.
 from __future__ import annotations
 
 import base64
-import hashlib
-import re
 import shutil
 import subprocess
 import tempfile
 import weakref
-from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -161,28 +158,23 @@ class Tree:
             out.write_bytes(content)
 
     @cached_property
-    def _scratch(self) -> Path:
-        """The one directory this Tree's files are written to.
+    def directory(self) -> Path:
+        """A directory holding these files, for a subprocess to read.
 
         A Tree's content never changes, so the copy is made once and kept
         for as long as the Tree is alive rather than rebuilt per call: a
-        single check materializes the tree several times over (the
+        single check needs the tree on disk several times over (the
         manifest, the policy the manifest names, an analyzer subprocess),
         and each rebuild would be another walk of every file. Keeping it
         also means a path the manifest carries still points at something
-        after the block that loaded it ends. The directory goes away when
-        the Tree does, which is what `weakref.finalize` is for; nothing
-        here holds the Tree alive.
+        after the code that loaded it has returned. The directory goes
+        away when the Tree does, which is what `weakref.finalize` is for;
+        nothing here holds the Tree alive.
         """
         scratch = Path(tempfile.mkdtemp(prefix="equivalent-tree-"))
         weakref.finalize(self, shutil.rmtree, scratch, True)
         self.write_to(scratch)
         return scratch
-
-    @contextmanager
-    def materialized(self):
-        """A directory holding these files, for a subprocess to read."""
-        yield self._scratch
 
     def manifest(self):
         """The manifest this tree carries, loaded from a copy of it.
@@ -200,13 +192,12 @@ class Tree:
         readable. What that means -- an error rather than a verdict about
         the code -- is the components layer's to say.
         """
-        with self.materialized() as scratch:
-            try:
-                return load_tree_manifest(scratch)
-            except (OSError, ValueError) as exc:
-                raise ValueError(
-                    f"the tree's own manifest at {IN_TREE_MANIFEST} did not load: {exc}"
-                ) from exc
+        try:
+            return load_tree_manifest(self.directory)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"the tree's own manifest at {IN_TREE_MANIFEST} did not load: {exc}"
+            ) from exc
 
     def manifest_and_policy(self) -> tuple:
         """This tree's manifest and the bytes of the tolerance policy it names.
@@ -227,33 +218,3 @@ class Tree:
             raise OSError(
                 f"the tolerance policy the tree's manifest names could not be read: {exc}"
             ) from exc
-
-
-def attempt_id_for_strategy(region_id: str, tree_sha: str, strategy_name: str) -> str:
-    """The workspace key for building one tree with one named strategy.
-
-    Onboarding builds the same tree twice, once per strategy, and each
-    build needs its own workspace on the builder -- two builds sharing one
-    would leave the second reading the first's object files. Every later
-    onboarding step that wants one of those builds derives the same key
-    from the same three things rather than being handed it.
-    """
-    safe_strategy = re.sub(r"[^A-Za-z0-9._-]", "-", strategy_name)[:32]
-    strategy_digest = hashlib.sha256(strategy_name.encode("utf-8")).hexdigest()[:12]
-    return f"{attempt_id_for(region_id, tree_sha)}-{safe_strategy}-{strategy_digest}"
-
-
-def attempt_id_for(region_id: str, tree_sha: str) -> str:
-    """A stable workspace key the builder can reuse across build/run/sanitize/time.
-
-    services/builder/stages.py keeps a workspace on disk per attempt_id and
-    never checks a tree hash itself; deriving the id from (region, tree)
-    means every action against the same tree reuses the same workspace
-    without the gateway needing to remember anything extra. This follows
-    the builder's real, stateful behavior; if the builder loses its
-    workspace (a container restart), re-running the build re-creates it
-    under the same id.
-    """
-    safe_region = re.sub(r"[^A-Za-z0-9._-]", "-", region_id)[:48]
-    region_digest = hashlib.sha256(region_id.encode("utf-8")).hexdigest()[:16]
-    return f"{safe_region}-{region_digest}-{tree_sha}"

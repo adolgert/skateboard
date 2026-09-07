@@ -14,8 +14,8 @@ from dataclasses import replace
 
 from equivalent.capture import npy
 from equivalent.components import harness_replay
-from equivalent.gateway.backend_client import RunResponse
-from equivalent.tree import attempt_id_for_strategy
+from equivalent.components.answers import RunResponse
+from equivalent.components.workspaces import attempt_id_for_strategy
 from equivalent.tests.fakes import FakeBuilder, replayed
 
 REGION = "tsunami:onboarding"

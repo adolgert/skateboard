@@ -12,8 +12,9 @@ and a person reads the failing example.
 It runs inside the builder, against the replay binary built from the
 submitted tree. `harness_properties` is the builder's own library, not
 part of this code: it turns "run the region on these arrays" into an
-invocation of that binary. Nothing here names a path, a binary, or a
-seed.
+invocation of that binary, and holds the draw from the captured cases,
+the bitwise comparison, and the determinism property every code shares.
+Nothing here names a path, a binary, or a seed.
 
 The inputs are drawn by perturbing the visible cases rather than being
 invented from nothing. A shallow-water state is not any pair of arrays:
@@ -22,7 +23,7 @@ time step is stable for. Scaling a captured state by a few per cent keeps
 the drawn state one the code is meant to be run on, so a failure is about
 the port and not about an input the baseline could not handle either.
 
-Why the third property holds bitwise rather than within a band: the
+Why the rotation property holds bitwise rather than within a band: the
 stencil in mod_diff is periodic, and both updates in mod_kernel are
 elementwise over the whole array. Rotating the grid therefore rotates
 which element each arithmetic operation lands on without changing the
@@ -69,7 +70,7 @@ MASS_REL = 1.2e-07
 @st.composite
 def states(draw):
     """One captured case with every element of h and u scaled a little."""
-    case = CORPUS[draw(st.integers(0, len(CORPUS) - 1))]
+    case = draw(harness.case_strategy(CORPUS))
     scaled = {}
     for name, array in case.items():
         factors = draw(npst.arrays(
@@ -83,25 +84,9 @@ def states(draw):
     return scaled
 
 
-def _same_bits(first, second) -> bool:
-    """Identical bit patterns, which is stricter than == and says so for NaN."""
-    return first.shape == second.shape and first.tobytes() == second.tobytes()
-
-
-@harness.settings()
-@given(states())
-def test_one_step_is_the_same_step_twice(state):
-    """The region is a function of its inputs and nothing else.
-
-    A port whose answer depends on how the work happened to be scheduled
-    fails here, and it is the one failure that says nothing about physics.
-    """
-    first = harness.run_replay(state)
-    second = harness.run_replay(state)
-
-    assert sorted(first) == sorted(second)
-    for name in first:
-        assert _same_bits(first[name], second[name]), f"'{name}' differed between two runs"
+# The region is a function of its inputs and nothing else, asked of the
+# same perturbed states the physics below is asked of.
+test_one_step_is_the_same_step_twice = harness.determinism_property(states())
 
 
 @harness.settings()
@@ -148,6 +133,6 @@ def test_a_rotated_grid_gives_a_rotated_answer(state, shift):
     }
 
     for name in then_rotated:
-        assert _same_bits(then_rotated[name], rotated_first[name]), (
+        assert harness.same_bits(then_rotated[name], rotated_first[name]), (
             f"'{name}' after rotating by {shift} is not the rotation of '{name}'"
         )

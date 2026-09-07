@@ -54,11 +54,13 @@ ALLOWED = {
     "tree": {"ledger", "manifest"},
     "region": {"ledger", "manifest", "reference", "strategy", "tree"},
     "components": {"capture", "ledger", "manifest", "reference", "strategy", "tree"},
-    "promote": {"components", "ledger", "manifest", "region", "strategy", "tree"},
-    "cli": {"ledger", "manifest", "promote", "region", "strategy", "tree"},
-    "gateway": {
-        "capture", "components", "ledger", "manifest", "region", "strategy", "tree",
-    },
+    # Promotion reads claims and copies files; the checks that produced
+    # those claims are not among what it needs, and reaching for one
+    # would put a component's errors in front of a person running a
+    # command.
+    "promote": {"ledger", "manifest", "region", "strategy", "tree"},
+    "cli": {"ledger", "promote", "region", "strategy"},
+    "gateway": {"components", "ledger", "region", "strategy", "tree"},
 }
 
 # What the deployment scripts may reach for. They drive the deployment
@@ -66,25 +68,44 @@ ALLOWED = {
 # names a code directory is laid out with. The CLI's own modules are not
 # among them -- a script that reached into `equivalent.cli` would be
 # depending on how a command is implemented rather than on what it does.
-DEPLOY_ALLOWED = {"client", "manifest", "cli.main"}
+DEPLOY_ALLOWED = {"client", "manifest"}
 
 
-def _imported_top_level(source: str, own_package: str) -> set[str]:
+def _package_of(path: Path) -> tuple[str, ...]:
+    """The dotted package one module lives in, as Python names it."""
+    return ("equivalent", *path.relative_to(PACKAGE).parts[:-1])
+
+
+def _absolute(node: ast.ImportFrom, package: tuple[str, ...]) -> str:
+    """One `from ... import` as the module name Python would resolve it to.
+
+    A relative import is resolved against the module's own package, one
+    dot per level, the way the interpreter resolves it. Reading every
+    relative import as the module's own package instead would hide the
+    import that matters most here: a component reaching up to the gateway
+    with `from ..gateway import ...` would look like no import at all.
+    """
+    if not node.level:
+        return node.module or ""
+    base = package[: len(package) - node.level + 1]
+    return ".".join((*base, node.module) if node.module else base)
+
+
+def _imported_top_level(source: str, package: tuple[str, ...]) -> set[str]:
     """The package's own top-level names that one module's source imports."""
     found = set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
             names = [alias.name for alias in node.names]
         elif isinstance(node, ast.ImportFrom):
-            # A relative import stays inside the module's own package.
-            names = [f"{own_package}." if node.level else (node.module or "")]
+            names = [_absolute(node, package)]
         else:
             continue
         for name in names:
             parts = name.split(".")
             if parts[0] == "equivalent" and len(parts) > 1 and parts[1] in TOP_LEVEL:
                 found.add(parts[1])
-    return found - {own_package}
+    return found
 
 
 def _adjacency() -> dict[str, set[str]]:
@@ -96,7 +117,7 @@ def _adjacency() -> dict[str, set[str]]:
             continue
         own = relative.parts[0] if len(relative.parts) > 1 else relative.stem
         if own in edges:
-            edges[own] |= _imported_top_level(path.read_text(), own)
+            edges[own] |= _imported_top_level(path.read_text(), _package_of(path)) - {own}
     return edges
 
 
@@ -145,7 +166,8 @@ def test_every_package_imports_only_what_its_layer_allows():
 
 
 def test_no_component_imports_the_gateway_or_a_deployed_region():
-    # A component is handed a tree and a store and answers a question
+    # A component is handed a tree, the claims it rests on, and read-only
+    # access to the sets it compares against, and answers a question
     # about them. Reaching for the gateway or for a region's own
     # configuration would make it unrunnable without a deployment around
     # it.
@@ -154,7 +176,9 @@ def test_no_component_imports_the_gateway_or_a_deployed_region():
     offenders = sorted(
         path.relative_to(PACKAGE.parent).as_posix()
         for path in sorted((PACKAGE / "components").rglob("*.py"))
-        if {"gateway", "region", "cli"} & _imported_top_level(path.read_text(), "components")
+        if {"gateway", "region", "cli"} & _imported_top_level(
+            path.read_text(), _package_of(path),
+        )
     )
 
     assert offenders == [], (

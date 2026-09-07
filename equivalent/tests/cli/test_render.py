@@ -8,6 +8,7 @@ from equivalent.ledger.acceptance import (
     ONBOARDING_REQUIREMENTS,
     PORTING,
 )
+from equivalent.ledger.evidence import BUILD_PREDICATE, FOUNDATION_PREDICATES
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.status import compute_status
 from equivalent.ledger.store import LedgerStore
@@ -16,12 +17,30 @@ from equivalent.ledger.subjects import Subject
 GOLDEN_DIR = Path(__file__).parent / "golden"
 
 
-def _all_passing_claims(store, tree, frozen):
-    for req in ACCEPTANCE_REQUIREMENTS:
+# The executable the build in these ledgers produced. A claim that rests
+# on a build counts only when it names that executable, so a ledger that
+# is meant to read as finished says so.
+BINARY = Subject(kind="binary", sha256="e" * 64)
+
+
+def _file_passing_claims(store, requirements, phase, tree, frozen):
+    """A ledger in which every requirement of one phase has passed."""
+    for req in requirements:
         sha256 = frozen if req.subject_kind == "frozen" else tree
         subject = Subject(kind=req.subject_kind, sha256=sha256)
-        predicate = Predicate(tool="t", version="0.1", configHash="cfg", verdict="pass", detail={})
-        store.record_claim([subject], req.predicate_type, predicate, [], "sess-1")
+        built = req.predicate_type == BUILD_PREDICATE[phase]
+        predicate = Predicate(
+            tool="t", version="0.1", configHash="cfg", verdict="pass",
+            detail={"targets": {"replay": {"sha256": BINARY.sha256}}} if built else {},
+        )
+        store.record_claim(
+            [subject], req.predicate_type, predicate,
+            () if req.predicate_type in FOUNDATION_PREDICATES else (BINARY,), "sess-1",
+        )
+
+
+def _all_passing_claims(store, tree, frozen):
+    _file_passing_claims(store, ACCEPTANCE_REQUIREMENTS, PORTING, tree, frozen)
 
 
 def test_status_text_matches_golden_file(tmp_path):
@@ -29,7 +48,10 @@ def test_status_text_matches_golden_file(tmp_path):
     store = LedgerStore(tmp_path / "region")
     _all_passing_claims(store, tree, frozen)
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING, context_verified=True)
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        required_materials=(), context_verified=True,
+    )
     text = render.render_status(status, "ch04:step")
 
     golden = (GOLDEN_DIR / "status_accepted.txt").read_text()
@@ -41,13 +63,12 @@ def test_a_finished_onboarding_reads_as_onboarded_rather_than_accepted(tmp_path)
     # a person to review and promote, an accepted port is ready to merge.
     tree, frozen = "a" * 64, "b" * 64
     store = LedgerStore(tmp_path / "region")
-    for req in ONBOARDING_REQUIREMENTS:
-        predicate = Predicate(tool="t", version="0.1", configHash="cfg", verdict="pass", detail={})
-        store.record_claim(
-            [Subject(kind=req.subject_kind, sha256=tree)], req.predicate_type, predicate, [], "sess-1",
-        )
+    _file_passing_claims(store, ONBOARDING_REQUIREMENTS, ONBOARDING, tree, tree)
 
-    status = compute_status(store, ONBOARDING_REQUIREMENTS, ONBOARDING, context_verified=True)
+    status = compute_status(
+        store, ONBOARDING_REQUIREMENTS, ONBOARDING,
+        required_materials=(), context_verified=True,
+    )
     text = render.render_status(status, "tsunami:onboarding")
 
     assert text.splitlines()[-1] == f"ONBOARDED on {tree[:12]}"
@@ -108,7 +129,10 @@ def test_a_requirement_whose_check_failed_reads_as_a_fail_with_its_claim_id(tmp_
         [], "sess-1",
     )
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING, context_verified=True)
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        required_materials=(), context_verified=True,
+    )
     lines = render.render_status(status, "ch04:step").splitlines()
     row = next(line for line in lines if "gpu/executed" in line)
 
@@ -120,7 +144,10 @@ def test_a_requirement_whose_check_failed_reads_as_a_fail_with_its_claim_id(tmp_
 def test_a_requirement_no_check_has_run_for_still_reads_as_missing(tmp_path):
     store = LedgerStore(tmp_path / "region")
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING, context_verified=True)
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        required_materials=(), context_verified=True,
+    )
     row = next(
         line for line in render.render_status(status, "ch04:step").splitlines()
         if "gpu/executed" in line
@@ -144,3 +171,21 @@ def test_a_claim_read_is_not_reported_as_a_claim_filed():
     row = TimelineRow(ts=line.ts, source="both", who="claim", request=line, verdict="fail")
 
     assert render._outcome(row) == "-> read claim c-0007 fail"
+
+
+def test_an_advisory_reading_prints_the_sentence_that_says_so(tmp_path):
+    # Nothing could confirm the executables, so acceptance is withheld
+    # and the reading says why. The sentence is printed here, with the
+    # rows, so a reader is never shown the rows without it.
+    tree, frozen = "a" * 64, "b" * 64
+    store = LedgerStore(tmp_path / "region")
+    _all_passing_claims(store, tree, frozen)
+
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        required_materials=(), context_verified=False,
+    )
+    text = render.render_status(status, "ch04:step")
+
+    assert text.splitlines()[0] == status["note"]
+    assert "ACCEPTED" not in text

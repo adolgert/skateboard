@@ -14,8 +14,8 @@ import pytest
 import yaml
 
 from equivalent.components import original_check
-from equivalent.gateway.backend_client import BuildResponse, TimeResponse
-from equivalent.tree import attempt_id_for_strategy
+from equivalent.components.answers import BuildResponse, TimeResponse
+from equivalent.components.workspaces import attempt_id_for_strategy
 from equivalent.strategy.schema import Language, load_strategy
 from equivalent.tests.fakes import in_tree_manifest, write_tree
 

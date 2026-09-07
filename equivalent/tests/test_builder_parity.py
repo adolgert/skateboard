@@ -3,18 +3,21 @@
 The builder service refuses to install the `equivalent` package and the
 gateway image installs nothing of the services, so neither side can
 import the other's contract: services/builder/contract.py says what the
-builder accepts and answers, and equivalent/gateway/backend_client.py
-says what the gateway sends and reads. Only a test can hold the two up
-against each other, and this is it -- the same job
-test_layout_parity.py does for the code directory's layout.
+builder accepts and answers, equivalent/gateway/backend_client.py says
+what the gateway sends, and equivalent/components/answers.py says what a
+check reads back. Only a test can hold them up against each other, and
+this is it -- the same job test_layout_parity.py does for the code
+directory's layout.
 
-Three things have to hold, and each fails differently in production. A
+Four things have to hold, and each fails differently in production. A
 request body the builder's model rejects is a 422 that reads to a session
-as its own mistake. A response field the gateway reads and the builder
-never writes is a default read as a measurement: zero kernels, no
-compiles, nothing skipped. And a fake whose methods have drifted from the
-client's leaves every component test passing against a builder that no
-longer exists.
+as its own mistake. A response field a check reads and the builder never
+writes is a default read as a measurement: zero kernels, no compiles,
+nothing skipped. A fake whose methods have drifted from the client's
+leaves every component test passing against a builder that no longer
+exists. And a check is typed against a protocol rather than the client,
+so a protocol that has drifted from the client would say a check may ask
+for something no builder answers.
 """
 from __future__ import annotations
 
@@ -25,6 +28,7 @@ from dataclasses import MISSING, fields as dataclass_fields
 import httpx
 import pytest
 
+from equivalent.components import answers
 from equivalent.gateway import backend_client as gateway
 from equivalent.tests.fakes import BUILDER_ENDPOINTS, FakeBuilder
 from services.builder import contract
@@ -61,15 +65,15 @@ CALLS = {
 # Which builder response each gateway response is the reading half of.
 # The two sides of a pair are deliberately spelled with the same name.
 PAIRS = [
-    (gateway.BuildResponse, contract.BuildResponse),
-    (gateway.RunResponse, contract.RunResponse),
-    (gateway.CaptureResponse, contract.CaptureResponse),
-    (gateway.SanitizeResponse, contract.SanitizeResponse),
-    (gateway.PropertiesResponse, contract.PropertiesResponse),
-    (gateway.MutateResponse, contract.MutateResponse),
-    (gateway.TimeResponse, contract.TimeResponse),
-    (gateway.ArtifactsResponse, contract.ArtifactsResponse),
-    (gateway.HealthResponse, contract.HealthResponse),
+    (answers.BuildResponse, contract.BuildResponse),
+    (answers.RunResponse, contract.RunResponse),
+    (answers.CaptureResponse, contract.CaptureResponse),
+    (answers.SanitizeResponse, contract.SanitizeResponse),
+    (answers.PropertiesResponse, contract.PropertiesResponse),
+    (answers.MutateResponse, contract.MutateResponse),
+    (answers.TimeResponse, contract.TimeResponse),
+    (answers.ArtifactsResponse, contract.ArtifactsResponse),
+    (answers.HealthResponse, contract.HealthResponse),
 ]
 PAIR_IDS = [read.__name__ for read, _ in PAIRS]
 
@@ -109,6 +113,23 @@ def test_the_client_sends_no_key_the_builder_would_ignore(endpoint):
     _, body = _sent(CALLS[endpoint])
 
     assert set(body) <= set(request_model.model_fields)
+
+
+@pytest.mark.parametrize("protocol,client", [
+    (answers.Builder, gateway.BuilderClient),
+    (answers.Oracle, gateway.OracleClient),
+], ids=["Builder", "Oracle"])
+def test_what_a_check_may_ask_a_backend_is_what_the_client_offers(protocol, client):
+    # A check is handed something shaped like the protocol, and what it
+    # really gets is this client or a fake of it. A protocol method the
+    # client does not have is a call no backend would answer.
+    for name, declared in inspect.getmembers(protocol, inspect.isfunction):
+        if name.startswith("_"):
+            continue
+        offered = getattr(client, name, None)
+        assert offered is not None, f"{client.__name__} has no {name}"
+        assert (list(inspect.signature(declared).parameters)
+                == list(inspect.signature(offered).parameters)), name
 
 
 @pytest.mark.parametrize("read,written", PAIRS, ids=PAIR_IDS)

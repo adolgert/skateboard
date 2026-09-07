@@ -31,19 +31,18 @@ pending rows make the run incomplete and prevent a passing adequacy claim.
 from __future__ import annotations
 
 import base64
-import hashlib
-import json
 
 from equivalent.capture import npy
-from equivalent.ledger.subjects import Subject
+from equivalent.ledger.subjects import policy_subject
 
-from . import build_replay, harness_capture
+from equivalent.ledger.vocabulary import CAPTURE_SET_KEY, FAIL, PASS, POLICY_KEY
+from . import backend, build_replay, harness_capture
 from .context import CheckContext, CheckResult, capture_set_materials
 from .errors import ComponentError, after_the_manifest_check_passed
 # The mutants are scored on the dataset the agent can see, within the
 # bands a port's own region outputs are judged by: a self-check is about
 # the harness and holds nothing back.
-from .names import REPLAY_ROLE, VARIABLE_BANDS, VISIBLE
+from .names import REPLAY_ROLE, VARIABLE_BANDS, VISIBLE, bands
 
 # What the builder calls a mutant it noticed, one it could not, and one
 # whose answer changed inside every band.
@@ -82,17 +81,20 @@ def wire_cases(cases: dict) -> dict:
 
 
 def bands_of(policy_bytes: bytes) -> dict:
-    """The band per output variable, from the tolerance file the tree carries."""
+    """The band per output variable, from the tolerance file the tree carries.
+
+    A passing manifest claim says this file reads as a policy, so a file
+    that does not is a fault on the harness's side rather than a verdict
+    about the code.
+    """
     try:
-        bands = json.loads(policy_bytes)[VARIABLE_BANDS]
-        if not isinstance(bands, dict):
-            raise TypeError(f"'{VARIABLE_BANDS}' is not a mapping")
-    except (ValueError, KeyError, TypeError) as exc:
+        per_variable, _ = bands(policy_bytes)
+    except ValueError as exc:
         raise ComponentError(
             f"the tree's tolerance policy names no band per output variable under "
             f"'{VARIABLE_BANDS}', although a passing manifest claim says it does: {exc}"
         ) from exc
-    return bands
+    return per_variable
 
 
 def _named(rows, status: str) -> list:
@@ -160,26 +162,24 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
             f"there are no answers to score a mutant against"
         )
     cases = ctx.sets.load(sets[VISIBLE])
-    bands = bands_of(policy_bytes)
+    per_variable = bands_of(policy_bytes)
     fortran = build_replay.fortran_of(ctx.baseline_strategy)
     replay = manifest.build.targets[REPLAY_ROLE]
 
-    try:
-        resp = ctx.builder.mutate(
-            ctx.provenance.attempt_id(),
-            manifest.build.makefile,
-            {"target": replay.target, "executable": replay.executable},
-            list(manifest.interface.files),
-            wire_cases(cases),
-            bands,
-            fortran.compiler,
-            list(fortran.flags),
-            list(ctx.baseline_strategy.link_flags),
-            list(manifest.source.patterns),
-            limit=None if limit is None else int(limit),
-        )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/mutate call failed: {exc}") from exc
+    resp = backend.mutate(
+        ctx.builder,
+        ctx.provenance.attempt_id(),
+        manifest.build.makefile,
+        {"target": replay.target, "executable": replay.executable},
+        manifest.interface.files,
+        wire_cases(cases),
+        per_variable,
+        fortran.compiler,
+        fortran.flags,
+        ctx.baseline_strategy.link_flags,
+        manifest.source.patterns,
+        limit=None if limit is None else int(limit),
+    )
     if not resp.ok:
         # The builder refused to run at all -- an unbuilt tree, a file
         # that is not in it. That is the harness's own footing, not a
@@ -207,12 +207,12 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         {field: row.get(field) for field in NAMED_FIELDS}
         for row in rows if row.get("status") in INCOMPLETE_STATUSES
     ]
-    policy_sha256 = hashlib.sha256(policy_bytes).hexdigest()
+    policy = policy_subject(policy_bytes)
     detail = {
         "manifest_sha256": manifest.sha256,
-        "policy_sha256": policy_sha256,
+        POLICY_KEY: policy.sha256,
         "files": list(manifest.interface.files),
-        "datasets": {VISIBLE: {"cases": len(cases), "capture_set": sets[VISIBLE]}},
+        "datasets": {VISIBLE: {"cases": len(cases), CAPTURE_SET_KEY: sets[VISIBLE]}},
         "generated": resp.generated,
         "scored": resp.scored,
         "counts": counts,
@@ -233,13 +233,10 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     # The two things this verdict rests on: the answers the mutants were
     # scored against, and the bands that decided whether a changed answer
     # counted.
-    materials = (
-        *capture_set_materials(detail),
-        Subject(kind="policy", sha256=policy_sha256),
-    )
+    materials = (*capture_set_materials(detail), policy)
     if problems:
         return CheckResult(
-            verdict="fail", detail={**detail, "problems": problems},
+            verdict=FAIL, detail={**detail, "problems": problems},
             reasons=tuple(problems), materials=materials,
         )
-    return CheckResult(verdict="pass", detail=detail, materials=materials)
+    return CheckResult(verdict=PASS, detail=detail, materials=materials)

@@ -77,15 +77,6 @@ def test_a_reader_skips_a_torn_final_line_instead_of_crashing(tmp_path):
     assert [c.id for c in store.all_claims()] == ["c-0001"]
 
 
-def test_exists_pass_unaffected_by_later_fail_on_a_different_subject(tmp_path):
-    store = LedgerStore(tmp_path / "region")
-    tree1, tree2 = _tree(1), _tree(2)
-    store.record_claim([tree1], "build/replay", _pred("pass"), [], "sess-1")
-    store.record_claim([tree2], "build/replay", _pred("fail"), [], "sess-1")
-    assert store.exists_pass("build/replay", tree1, required_materials=()) is True
-    assert store.exists_pass("build/replay", tree2, required_materials=()) is False
-
-
 def test_find_duplicate_matches_only_when_type_tree_and_config_all_equal(tmp_path):
     store = LedgerStore(tmp_path / "region")
     tree = _tree(1)
@@ -248,3 +239,18 @@ def test_an_unregistered_predicate_type_leaves_earlier_claims_untouched(tmp_path
     with pytest.raises(KeyError):
         store.record_claim([_tree(1)], "not/a/predicate", _pred(), [], "sess-1")
     assert store.claims_path.read_bytes() == before
+
+
+def test_a_claim_appended_after_a_read_is_seen_by_the_next_read(tmp_path):
+    # The parsed file is kept and reused, because one status reading walks
+    # it several times over. A ledger the gateway is still appending to
+    # must not be served from that copy, or a person would be shown a run
+    # that had already moved on.
+    store = LedgerStore(tmp_path / "region")
+    store.record_claim([_tree(1)], "build/replay", _pred(), [], "sess-1")
+    assert [c.id for c in store.all_claims()] == ["c-0001"]
+
+    beside = LedgerStore(tmp_path / "region")
+    beside.record_claim([_tree(1)], "gpu/executed", _pred(), [], "sess-1")
+
+    assert [c.id for c in store.all_claims()] == ["c-0001", "c-0002"]

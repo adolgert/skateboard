@@ -10,39 +10,45 @@ that passed on a comparison that did not really happen -- a missing file
 read as nothing to check, a band nobody chose -- would be the whole of
 what went wrong.
 
-What it compares against is the capture set the deployment's own
-`time_baseline` run stored: the reference is a run of this deployment's
-baseline, not a file checked in beside the code, because a real timing
-size writes megabytes per run. That claim is filed against the baseline
-tree, so the precondition table names it against that subject and the
-gateway refuses the request, naming `time_baseline`, when it is not
-there.
+What it compares against is the capture set the deployment's own baseline
+timing run stored: the reference is a run of this deployment's baseline,
+not a file checked in beside the code, because a real timing size writes
+megabytes per run. That claim is filed against the baseline tree, so the
+precondition table names it against that subject and the gateway refuses
+the request when it is not there.
 
 The comparison is the harness's one comparator (equivalent/capture/
 compare.py, which the oracle also uses), under the code's own tolerance
-policy, read from the promoted manifest. Which band that is, and how two
-runs' files are compared under it, is program_outputs' -- the port's own
-timing claim compares the same files the same way, and two comparators
-would let a port pass one and fail the other.
+policy, read from the promoted manifest. Which band that is, how two
+runs' files are compared under it, and what counts as a measurement at
+all are program_outputs' -- the port's own timing claim runs the same
+program the same way, and two readings of one answer would let a port
+pass one and fail the other.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 from equivalent.ledger.subjects import Subject
+from equivalent.ledger.vocabulary import (
+    EXECUTABLE_IDENTITY_KEY,
+    FAIL,
+    PASS,
+    POLICY_KEY,
+    PROGRAM_SET_KEY,
+)
 
 from .context import CheckContext, CheckResult
 from .errors import ComponentError
-from .names import PROGRAM_SET_KEY
 from .program_outputs import (
     comparison_reasons,
     compare_outputs,
-    timing_target,
+    time_program,
     tolerance_policy,
 )
 
 # The claim that leaves a reference behind.
 BASELINE_PREDICATE = "timing/baseline"
-# The action that files it, named in the error when there is none.
-BASELINE_ACTION = "time_baseline"
 
 # How many times the program is run here. One: this is a comparison, and
 # how long the program takes is what `time_port` is for.
@@ -61,8 +67,7 @@ def reference_set(ctx: CheckContext) -> str:
     if not detail.get(PROGRAM_SET_KEY):
         raise ComponentError(
             f"the passing {BASELINE_PREDICATE} claim stored no program outputs, so there "
-            f"is nothing to compare this port's program against; the baseline run of "
-            f"{BASELINE_ACTION} left none"
+            f"is nothing to compare this port's program against"
         )
     return detail[PROGRAM_SET_KEY]
 
@@ -77,44 +82,27 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     gone, or when the builder could not be reached.
     """
     manifest = ctx.provenance.manifest()
-    target, _ = timing_target(ctx, manifest)
-    timing = manifest.timing
-    bands, policy_sha256 = tolerance_policy(manifest)
+    per_file, policy = tolerance_policy(manifest)
     program_set = reference_set(ctx)
-    rests_on = {"policy_sha256": policy_sha256, PROGRAM_SET_KEY: program_set}
-    materials = (
-        Subject(kind="policy", sha256=policy_sha256),
-        Subject(kind="capture_set", sha256=program_set),
-    )
+    rests_on = {POLICY_KEY: policy.sha256, PROGRAM_SET_KEY: program_set}
+    materials = (policy, Subject(kind="capture_set", sha256=program_set))
 
-    try:
-        resp = ctx.builder.time(
-            ctx.provenance.attempt_id(), target.executable, list(timing.args),
-            dict(timing.env), list(timing.outputs), REPEATS, timing.budget_s,
-        )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/time call failed: {exc}") from exc
-    if not resp.ok:
-        # An exceeded budget and a declared file the program never wrote
-        # both arrive this way, and the builder's own words say which.
-        return CheckResult(
-            verdict="fail",
-            detail={**rests_on, "log_tail": resp.log_tail},
-            reasons=("the program did not finish inside its budget, or did not write "
-                     "every file the manifest declares",),
-            materials=materials,
-        )
+    resp, refusal = time_program(
+        ctx, ctx.provenance.attempt_id(), manifest, REPEATS, rests_on,
+    )
+    if refusal is not None:
+        return replace(refusal, materials=materials)
 
     runs = resp.outputs
-    last_run = runs[-1] if runs else {}
-    per_var = compare_outputs(ctx.sets, program_set, manifest, last_run, bands)
+    per_var = compare_outputs(ctx.sets, program_set, manifest, runs[-1] if runs else {}, per_file)
 
     detail = {
         **rests_on, "per_var": per_var, "runs_s": resp.runs_s,
-        "executable_identity": resp.executable_identity,
+        EXECUTABLE_IDENTITY_KEY: resp.executable_identity,
     }
-    if all(entry["pass"] for entry in per_var.values()):
-        return CheckResult(verdict="pass", detail=detail, materials=materials)
+    if all(entry[PASS] for entry in per_var.values()):
+        return CheckResult(verdict=PASS, detail=detail, materials=materials)
     return CheckResult(
-        verdict="fail", detail=detail, reasons=tuple(comparison_reasons(per_var)), materials=materials,
+        verdict=FAIL, detail=detail, reasons=tuple(comparison_reasons(per_var)),
+        materials=materials,
     )

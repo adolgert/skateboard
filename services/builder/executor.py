@@ -212,14 +212,14 @@ class DockerJobExecutor:
         for key, value in sorted(job_env.items()):
             create.extend(["--env", f"{key}={value}"])
         if profile_gpu or audit_exec:
-            # The profiler remains root while profile-run drops only the submitted
+            # The profiler remains root while profile_run drops only the submitted
             # child to the job uid.  Its report lives in root-only /run/evidence.
             create.extend(["--cap-add", "SETUID", "--cap-add", "SETGID"])
             if profile_gpu:
-                job_cmd = ["python3", "-I", "/opt/sandbox/profile-run.py", "--", *job_cmd]
+                job_cmd = ["python3", "-I", "/opt/sandbox/profile_run.py", "--", *job_cmd]
             else:
                 create.extend(["--cap-add", "SYS_PTRACE"])
-                job_cmd = ["python3", "-I", "/opt/sandbox/audit-run.py", "--", *job_cmd]
+                job_cmd = ["python3", "-I", "/opt/sandbox/audit_run.py", "--", *job_cmd]
         else:
             create.extend(["--user", "65532:65532"])
         if gpu or profile_gpu:

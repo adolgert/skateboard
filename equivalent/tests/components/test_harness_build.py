@@ -10,7 +10,7 @@ from functools import partial
 from itertools import count
 
 from equivalent.components import harness_build
-from equivalent.tree import attempt_id_for_strategy
+from equivalent.components.workspaces import attempt_id_for_strategy
 from equivalent.tests.components.conftest import (
     BASELINE_STRATEGY,
     ONBOARDING_STRATEGY,

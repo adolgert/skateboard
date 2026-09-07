@@ -1,9 +1,17 @@
 """Which build a later claim has to have been reached on top of."""
 from equivalent.ledger.acceptance import ACCEPTANCE_REQUIREMENTS, PORTING
-from equivalent.ledger.evidence import NO_CURRENT_BUILD, required_materials_by_predicate
+from equivalent.ledger.evidence import (
+    BUILD_PREDICATE,
+    FOUNDATION_PREDICATES,
+    NO_CURRENT_BUILD,
+    binary_materials,
+    required_materials_by_predicate,
+)
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
+from equivalent.ledger.table import ACTION_TABLE
+from equivalent.tests.fakes import built
 
 
 def test_dependent_predicates_require_the_current_build_binary_cohort(tmp_path):
@@ -42,3 +50,50 @@ def test_missing_build_uses_a_sentinel_that_no_legacy_claim_can_satisfy(tmp_path
     )
 
     assert NO_CURRENT_BUILD in contexts["gpu/executed"]
+
+
+def test_the_cohort_is_read_out_of_what_a_passing_build_really_answered():
+    # The cohort every later claim is judged against is scraped out of a
+    # build claim's detail, and what a build claim carries is the
+    # builder's own answer: one entry per target role, each naming the
+    # executable it produced. Reading that shape wrongly would leave an
+    # empty cohort, which quietly retires every claim resting on the
+    # build.
+    answer = built({
+        "flags": ["-O2"],
+        "targets": [{"role": "replay", "target": "replay", "executable": "replay"}],
+    })
+
+    cohort = binary_materials({"targets": answer.targets})
+
+    assert [subject.sha256 for subject in cohort] == [answer.targets["replay"]["sha256"]]
+
+
+def _emitted_without_a_build() -> set:
+    """Predicates from action rows that rest on nothing a build produced.
+
+    A row qualifies when everything it requires already qualifies and
+    none of it is a build, so the build actions themselves qualify (they
+    rest on the analyzer or the manifest) while the first action after a
+    build does not.
+    """
+    builds = set(BUILD_PREDICATE.values())
+    found: set = set()
+    changed = True
+    while changed:
+        changed = False
+        for row in ACTION_TABLE:
+            if not row.emits or set(row.emits) <= found:
+                continue
+            needed = {predicate for predicate, _ in row.requires}
+            if needed <= found - builds:
+                found |= set(row.emits)
+                changed = True
+    return found
+
+
+def test_the_foundation_list_is_what_the_action_table_says_rests_on_no_build():
+    # Written out where it is read rather than derived, so a reader can
+    # see which claims are exempt; held to the table here so the two
+    # cannot drift apart.
+    assert FOUNDATION_PREDICATES == _emitted_without_a_build()
