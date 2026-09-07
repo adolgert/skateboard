@@ -24,22 +24,20 @@ that compares the region's.
 """
 from __future__ import annotations
 
-from equivalent.ledger.capture_sets import PROGRAM_SET, program_arrays, store_program_set
-from equivalent.ledger.store import LedgerStore
-from equivalent.strategy.schema import Strategy
-from equivalent.tree import Tree, attempt_id_for_strategy
+from equivalent.ledger.capture_sets import PROGRAM_SET, pack_program_set, program_arrays
+from equivalent.tree import attempt_id_for_strategy
 
+from .context import CheckContext, CheckResult, capture_set_materials, failed
 from .errors import ComponentError, after_the_manifest_check_passed
+from .names import TIMING_ROLE
 
-# The manifest role of the program a timing run measures.
-TIMING_ROLE = "timing"
 # How many times the program is run. Two is what the question needs: one
 # run to measure and a second to disagree with it.
 REPEATS = 2
 
 
-def _fail(problems: list, detail=None) -> dict:
-    return {"verdict": "fail", "detail": {**(detail or {}), "problems": problems}}
+def _fail(problems: list, detail=None) -> CheckResult:
+    return failed({**(detail or {}), "problems": problems}, problems)
 
 
 def _drifted(first: dict, second: dict, declared) -> list:
@@ -54,17 +52,16 @@ def _drifted(first: dict, second: dict, declared) -> list:
     return problems
 
 
-def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
-          baseline_strategy: Strategy, builder) -> dict:
-    """Run the timing program twice and store what its last run wrote.
+def check(ctx: CheckContext, config: dict) -> CheckResult:
+    """Run the timing program twice and pack what its last run wrote.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}: the two runs'
-    wall-clock seconds, whether the GPU was to itself, the files the
-    program declared, and the capture set the ledger now holds them
-    under. Raises ComponentError if the builder could not be reached.
+    The detail holds the two runs' wall-clock seconds, whether the GPU was
+    to itself, the files the program declared, and the capture set the
+    ledger will hold them under. Raises ComponentError if the builder
+    could not be reached.
     """
     with after_the_manifest_check_passed():
-        manifest = Tree(repo_dir, ref).manifest()
+        manifest = ctx.tree.manifest()
     described = {"manifest_sha256": manifest.sha256}
 
     target = manifest.build.targets.get(TIMING_ROLE)
@@ -76,9 +73,11 @@ def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
         )
 
     timing = manifest.timing
-    attempt_id = attempt_id_for_strategy(region_id, tree_sha, baseline_strategy.name)
+    attempt_id = attempt_id_for_strategy(
+        ctx.region_id, ctx.tree.sha, ctx.baseline_strategy.name,
+    )
     try:
-        resp = builder.time(
+        resp = ctx.builder.time(
             attempt_id, target.executable, list(timing.args), dict(timing.env),
             list(timing.outputs), REPEATS, timing.budget_s,
         )
@@ -88,13 +87,14 @@ def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
     if not resp.get("ok"):
         # An exceeded budget and a declared file the program never wrote
         # both arrive this way, and the builder's own words say which.
-        return {
-            "verdict": "fail",
-            "detail": {
+        return failed(
+            {
                 **described, "runs_s": resp.get("runs_s", []),
                 "log_tail": resp.get("log_tail", ""),
             },
-        }
+            ["the timing run did not finish inside its budget, or did not write every "
+             "file the manifest declares"],
+        )
 
     runs = resp.get("outputs", [])
     measured = {
@@ -117,11 +117,12 @@ def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
     if problems:
         return _fail(problems, measured)
 
-    subject = store_program_set(store, arrays)
-    return {
-        "verdict": "pass",
-        "detail": {
-            **measured,
-            "datasets": {PROGRAM_SET: {"cases": 1, "capture_set": subject.sha256}},
-        },
+    packed = pack_program_set(arrays)
+    detail = {
+        **measured,
+        "datasets": {PROGRAM_SET: {"cases": 1, "capture_set": packed.sha256}},
     }
+    return CheckResult(
+        verdict="pass", detail=detail,
+        materials=capture_set_materials(detail), stores=(packed,),
+    )

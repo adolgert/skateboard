@@ -92,42 +92,56 @@ class ActionRow:
     # without knowing the table; every one of them needs an entry in
     # CONFIG_KEY_SPECS above to say what it is.
     config_keys: tuple = ()
+    # Which remote backends this action reaches. A gateway can be brought
+    # up with the ledger and the analyzer working before the builder or
+    # the oracle are reachable, and an action that needs one which isn't
+    # configured answers that it isn't rather than crashing. It is written
+    # here so the answer is one sentence written once, rather than a
+    # raise inside every branch of a dispatch.
+    needs: tuple = ()
 
 
 ACTION_TABLE = (
     # Porting: one region of a code that has already been brought in.
     ActionRow("sese_check", ("sese/verified",), (), True, "analyzer:check_sese", PORTING),
     ActionRow("build_replay", ("build/replay",), (("sese/verified", "tree"),), True,
-              "builder:/v1/build", PORTING),
+              "builder:/v1/build", PORTING, needs=("builder",)),
     ActionRow("run_replay", ("gpu/executed",), (("build/replay", "tree"),), True,
-              "builder:/v1/run", PORTING),
+              "builder:/v1/run", PORTING, needs=("builder",)),
     ActionRow(
         "sanitize", ("sanitize/memcheck", "sanitize/racecheck", "sanitize/initcheck"),
         (("gpu/executed", "tree"),), True, "builder:/v1/sanitize", PORTING,
+        needs=("builder",),
     ),
     ActionRow(
+        # The outputs this compares are the ones the run claim recorded,
+        # so that claim is a precondition and not only the sanitizers'.
         "regression_visible", ("regression/visible",),
         (("sanitize/memcheck", "tree"), ("sanitize/racecheck", "tree"),
-         ("sanitize/initcheck", "tree")), True,
-        "oracle:/v1/compare", PORTING,
+         ("sanitize/initcheck", "tree"), ("gpu/executed", "tree")), True,
+        "oracle:/v1/compare", PORTING, needs=("oracle",),
     ),
     ActionRow(
         "property_check", ("regression/property",),
         (("regression/visible", "tree"),), True, "builder:/v1/properties", PORTING,
-        config_keys=("seed", "max_examples"),
+        config_keys=("seed", "max_examples"), needs=("builder",),
     ),
     ActionRow(
         "regression_holdout", ("regression/holdout",),
         (("regression/visible", "tree"),), True, "oracle:/v1/compare", PORTING,
+        needs=("builder", "oracle"),
     ),
     ActionRow(
+        # The baseline's own timing left the program outputs this compares
+        # against, and that claim is filed against the baseline tree.
         "program_regression", ("program/regression",),
-        (("regression/holdout", "tree"),), True, "builder:/v1/time", PORTING,
+        (("regression/holdout", "tree"), ("timing/baseline", "baseline_tree")), True,
+        "builder:/v1/time", PORTING, needs=("builder",),
     ),
     ActionRow("time_port", ("timing/port",), (("program/regression", "tree"),), False,
-              "builder:/v1/time", PORTING, config_keys=("repeats",)),
+              "builder:/v1/time", PORTING, config_keys=("repeats",), needs=("builder",)),
     ActionRow("time_baseline", ("timing/baseline",), (), False, "builder:/v1/time", PORTING,
-              config_keys=("repeats",)),
+              config_keys=("repeats",), needs=("builder",)),
     ActionRow(
         "accept", (), tuple((r.predicate_type, r.subject_kind) for r in ACCEPTANCE_REQUIREMENTS),
         True, None, PORTING,
@@ -137,25 +151,32 @@ ACTION_TABLE = (
     # becomes the next step's precondition.
     ActionRow("manifest_check", ("manifest/valid",), (), True, "gateway:manifest_check", ONBOARDING),
     ActionRow("harness_build", ("harness/builds",), (("manifest/valid", "tree"),), True,
-              "builder:/v1/build", ONBOARDING),
+              "builder:/v1/build", ONBOARDING, needs=("builder",)),
     ActionRow("harness_capture", ("harness/captured",), (("harness/builds", "tree"),), True,
-              "builder:/v1/capture", ONBOARDING),
+              "builder:/v1/capture", ONBOARDING, needs=("builder",)),
     ActionRow("harness_replay", ("harness/replays",), (("harness/captured", "tree"),), True,
-              "builder:/v1/run", ONBOARDING),
-    ActionRow("harness_determinism", ("harness/deterministic",), (("harness/replays", "tree"),),
-              True, "builder:/v1/capture", ONBOARDING),
+              "builder:/v1/run", ONBOARDING, needs=("builder",)),
+    # The three rows below replay, mutate, or search against the sets the
+    # capture claim named, so each of them names that claim too rather
+    # than resting on the replay claim's own precondition.
+    ActionRow("harness_determinism", ("harness/deterministic",),
+              (("harness/replays", "tree"), ("harness/captured", "tree")),
+              True, "builder:/v1/capture", ONBOARDING, needs=("builder",)),
     ActionRow("harness_timing", ("harness/times",), (("harness/builds", "tree"),), True,
-              "builder:/v1/time", ONBOARDING),
+              "builder:/v1/time", ONBOARDING, needs=("builder",)),
     ActionRow(
         "harness_original", ("harness/original",),
         (("harness/builds", "tree"), ("harness/times", "tree")), True,
-        "builder:/v1/build+/v1/time", ONBOARDING,
+        "builder:/v1/build+/v1/time", ONBOARDING, needs=("builder",),
     ),
-    ActionRow("harness_self_check", ("harness/self_check",), (("harness/replays", "tree"),),
-              True, "builder:/v1/mutate", ONBOARDING, config_keys=("limit",)),
-    ActionRow("harness_property", ("harness/properties",), (("harness/replays", "tree"),),
+    ActionRow("harness_self_check", ("harness/self_check",),
+              (("harness/replays", "tree"), ("harness/captured", "tree")),
+              True, "builder:/v1/mutate", ONBOARDING, config_keys=("limit",),
+              needs=("builder",)),
+    ActionRow("harness_property", ("harness/properties",),
+              (("harness/replays", "tree"), ("harness/captured", "tree")),
               True, "builder:/v1/properties", ONBOARDING,
-              config_keys=("seed", "max_examples")),
+              config_keys=("seed", "max_examples"), needs=("builder",)),
     ActionRow(
         "onboarded", (), tuple((r.predicate_type, r.subject_kind) for r in ONBOARDING_REQUIREMENTS),
         True, None, ONBOARDING,
@@ -186,3 +207,35 @@ def requires_for(row: ActionRow, manifest=None) -> tuple:
 def config_params(row: ActionRow) -> dict:
     """The type and wording of every config key this row accepts."""
     return {key: dict(CONFIG_KEY_SPECS[key]) for key in row.config_keys}
+
+
+def check_config(row: ActionRow, config: dict) -> str | None:
+    """What is wrong with this request's settings, or None if nothing is.
+
+    Names and values are both checked, and both before the config is
+    hashed. An unvalidated key would hash into duplicate detection and
+    let an identical request look new; a "repeats" of "lots" would hash
+    the same way and then fail deep inside a check, where the caller
+    reads a traceback instead of which setting it got wrong.
+    """
+    unknown_keys = sorted(set(config) - set(row.config_keys))
+    if unknown_keys:
+        return (
+            f"'{row.name}' does not accept config key(s) {unknown_keys}; "
+            f"allowed: {sorted(row.config_keys)}"
+        )
+    for key in sorted(config):
+        value = config[key]
+        spec = CONFIG_KEY_SPECS[key]
+        if spec["type"] == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
+            return f"config key '{key}' of '{row.name}' must be an integer; got {value!r}"
+        minimum, maximum = spec.get("minimum"), spec.get("maximum")
+        if minimum is not None and value < minimum:
+            return (
+                f"config key '{key}' of '{row.name}' must be at least {minimum}; got {value!r}"
+            )
+        if maximum is not None and value > maximum:
+            return (
+                f"config key '{key}' of '{row.name}' must be at most {maximum}; got {value!r}"
+            )
+    return None

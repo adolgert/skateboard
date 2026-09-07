@@ -16,8 +16,9 @@ from __future__ import annotations
 
 from equivalent.manifest.schema import Manifest, source_files
 from equivalent.strategy.schema import Strategy
-from equivalent.tree import Tree, attempt_id_for
+from equivalent.tree import attempt_id_for
 
+from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError
 
 # The targets the builder is asked for, in the order it asks. `replay` is
@@ -72,7 +73,7 @@ def _outside_tree(compiles) -> list:
 
 
 def build_verdict(builder, attempt_id: str, tree: list[dict], strategy: Strategy,
-                  manifest: Manifest) -> dict:
+                  manifest: Manifest) -> CheckResult:
     """One tree, one strategy: build it and say whether that build counts.
 
     Three statements have to hold, and each is a verdict about the code
@@ -81,8 +82,6 @@ def build_verdict(builder, attempt_id: str, tree: list[dict], strategy: Strategy
     source. This is the whole of what a build claim means, so both the
     porting check below and onboarding's two-strategy check call it
     rather than each deciding for itself.
-
-    Returns {"verdict": "pass" | "fail", "detail": {...}}.
     """
     resp = build_tree(builder, attempt_id, tree, strategy, manifest)
 
@@ -95,51 +94,44 @@ def build_verdict(builder, attempt_id: str, tree: list[dict], strategy: Strategy
     }
 
     if not resp.get("ok"):
-        return {
-            "verdict": "fail",
-            "detail": {
+        missing = resp.get("missing_targets") or []
+        return failed(
+            {
                 **common, "stage": resp.get("stage"),
                 "missing_targets": resp.get("missing_targets"),
                 "log_tail": resp.get("log_tail", ""),
             },
-        }
+            [f"the build did not finish at stage {resp.get('stage')!r}",
+             *(f"the build produced no '{target}'" for target in missing)],
+        )
 
     if not resp.get("flags_reached_every_compile"):
-        return {
-            "verdict": "fail",
-            "detail": {
-                **common,
-                "compiles_without_flags": _without_flags(compiles),
-                "hint": "the makefile compiled without the strategy's flags; it must pass "
-                        "FFLAGS through to every compile rather than setting its own",
-            },
-        }
+        hint = ("the makefile compiled without the strategy's flags; it must pass "
+                "FFLAGS through to every compile rather than setting its own")
+        return failed(
+            {**common, "compiles_without_flags": _without_flags(compiles), "hint": hint},
+            [hint],
+        )
 
     if not resp.get("compiled_only_tree_source"):
-        return {
-            "verdict": "fail",
-            "detail": {
-                **common,
-                "files_outside_tree": _outside_tree(compiles),
-                "hint": "the build compiled a file that is not this code's own source; "
-                        "every compiled file must be in the submitted tree and match the "
-                        "manifest's source patterns",
-            },
-        }
+        hint = ("the build compiled a file that is not this code's own source; "
+                "every compiled file must be in the submitted tree and match the "
+                "manifest's source patterns")
+        return failed(
+            {**common, "files_outside_tree": _outside_tree(compiles), "hint": hint},
+            [hint],
+        )
 
-    return {
-        "verdict": "pass",
-        "detail": {
+    return CheckResult(
+        verdict="pass",
+        detail={
             **common, "minfo_excerpt": resp.get("minfo_excerpt", ""),
             "log_tail": resp.get("log_tail", ""),
         },
-    }
+    )
 
 
-def check(
-    repo_dir, ref: str, region_id: str, tree_sha: str,
-    strategy: Strategy, manifest: Manifest, builder,
-) -> dict:
+def check(ctx: CheckContext, config: dict) -> CheckResult:
     """Build the region's current tree with the strategy's own flags.
 
     The flags come from the strategy file and the build recipe from the
@@ -147,18 +139,16 @@ def check(
     builder echoes back every compiler command line it saw, and that is
     what goes into the claim's detail.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}. Raises
-    ComponentError if the builder call itself couldn't be completed (not a
-    verdict about the code).
+    Raises ComponentError if the builder call itself couldn't be completed
+    (not a verdict about the code).
     """
-    source_tree = Tree(repo_dir, ref)
-    if not source_files(manifest, sorted(source_tree.files)):
+    if not source_files(ctx.manifest, sorted(ctx.tree.files)):
         raise ComponentError(
-            f"no file in tree {tree_sha} at ref {ref} matches the source patterns "
-            f"of code '{manifest.name}'"
+            f"no file in tree {ctx.tree.sha} at ref {ctx.tree.ref} matches the source "
+            f"patterns of code '{ctx.manifest.name}'"
         )
 
     return build_verdict(
-        builder, attempt_id_for(region_id, tree_sha), source_tree.payload(),
-        strategy, manifest,
+        ctx.builder, attempt_id_for(ctx.region_id, ctx.tree.sha), ctx.tree.payload(),
+        ctx.strategy, ctx.manifest,
     )

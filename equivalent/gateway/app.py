@@ -32,31 +32,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from equivalent.components import (
-    build_replay,
-    harness_build,
-    harness_capture,
-    harness_determinism,
-    harness_property,
-    harness_replay,
-    harness_self_check,
-    harness_timing,
-    manifest_check,
-    original_check,
-    program_regression,
-    property_check,
-    regression,
-    run_replay,
-    sanitize,
-    sese_check,
-    timing,
-)
+from equivalent.components import build_replay, harness_build
+from equivalent.components.context import CheckContext, CheckResult
 from equivalent.components.errors import ComponentError
-from equivalent.gateway.datasets import load_visible_cases
 from equivalent.ledger.acceptance import (
     ACCEPTANCE_REQUIREMENTS,
     CONDITIONAL_REQUIREMENTS,
-    ONBOARDING,
     ONBOARDING_REQUIREMENTS,
     PORTING,
     requirements_for,
@@ -68,6 +49,7 @@ from equivalent.ledger.evidence import (
     current_build_claim,
     required_materials_by_predicate,
 )
+from equivalent.ledger.capture_sets import SetReader
 from equivalent.ledger.predicates import agent_receipt
 from equivalent.ledger.records import Predicate, RequestLogLine
 from equivalent.ledger.status import compute_status, requirement_status
@@ -75,7 +57,7 @@ from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject, hash_bytes
 from equivalent.ledger.table import (
     ACTION_TABLE,
-    CONFIG_KEY_SPECS,
+    check_config,
     config_params,
     requires_for,
     rows_for,
@@ -90,21 +72,37 @@ from equivalent.region.evidence import evidence_materials_for
 from equivalent.strategy.schema import load_strategy
 from equivalent.tree import Tree
 
+from .dispatch import HANDLERS
 from .submit import ConcurrentSubmissionError
 from .submit import submit as do_submit
 
 ROWS_BY_NAME = {row.name: row for row in ACTION_TABLE}
 PRODUCERS = {predicate_type: row.name for row in ACTION_TABLE for predicate_type in row.emits}
-# Which subject a predicate type's own claim is recorded against. Current
-# acceptance predicates are scoped to the candidate tree. Reused from the
-# two phases' own requirement lists rather than a
-# third hand-written copy. Falls back to "tree" for anything not listed
-# there: timing/baseline (nondeterministic, so it never reaches the
-# duplicate check that uses this).
+# Which subject a predicate type's own claim is recorded against. Read
+# from what the rows and the two phases' requirement lists already say,
+# rather than a third hand-written copy: a baseline timing is about the
+# baseline tree, and everything else about the candidate. Falls back to
+# "tree" for a predicate nothing requires yet.
 SUBJECT_KIND_OF = {
-    req.predicate_type: req.subject_kind
-    for req in (*ACCEPTANCE_REQUIREMENTS, *CONDITIONAL_REQUIREMENTS, *ONBOARDING_REQUIREMENTS)
+    **{
+        predicate_type: subject_kind
+        for row in ACTION_TABLE for predicate_type, subject_kind in row.requires
+    },
+    **{
+        req.predicate_type: req.subject_kind
+        for req in (*ACCEPTANCE_REQUIREMENTS, *CONDITIONAL_REQUIREMENTS, *ONBOARDING_REQUIREMENTS)
+    },
 }
+
+def _reasons(result) -> dict:
+    """Why a fail is a fail, in words, beside the claim.
+
+    Only when there are any: a pass has nothing to say here, and neither
+    has an answer that is a claim already filed rather than a check just
+    run.
+    """
+    return {"reasons": list(result.reasons)} if result.reasons else {}
+
 
 def _claim_response(claim) -> dict:
     """One claim as a /run response body, filtered by the receipt policy.
@@ -114,21 +112,6 @@ def _claim_response(claim) -> dict:
     The full detail stays in claims.jsonl for the CLI.
     """
     return {"claim_id": claim.id, **agent_receipt(claim.predicateType, claim.predicate)}
-
-
-def _capture_set_materials(detail: dict) -> list:
-    """The capture sets an onboarding claim rests on, as materials.
-
-    Each of the four harness checks that reads or writes a dataset names
-    it the same way in its detail, so this reads all four. A verdict
-    reached against one set of captured arrays must not read as a verdict
-    against another, which is what putting them in materials says.
-    """
-    return [
-        Subject(kind="capture_set", sha256=entry["capture_set"])
-        for _, entry in sorted(detail.get("datasets", {}).items())
-        if entry.get("capture_set")
-    ]
 
 
 def _build_entries(phase: str, detail: dict) -> list[tuple[str, dict]]:
@@ -380,29 +363,20 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                     return False
         return True
 
-    def _restore_build(
-        cfg, store, ref, tree_sha, strategy, baseline_strategy, expected_detail,
-        executor_identity,
-    ) -> tuple[Subject, ...]:
+    def _restore_build(cfg, ctx, expected_detail, executor_identity) -> tuple[Subject, ...]:
         """Rebuild a lost workspace, accepting it only when bytes reproduce."""
-        if cfg.phase == PORTING:
-            rebuilt = build_replay.check(
-                cfg.repo_dir, ref, cfg.region_id, tree_sha, strategy, cfg.manifest, builder,
-            )
-        else:
-            rebuilt = harness_build.check(
-                cfg.repo_dir, ref, cfg.region_id, tree_sha, strategy, baseline_strategy, builder,
-            )
-        if rebuilt.get("verdict") != "pass":
+        rebuild = build_replay.check if cfg.phase == PORTING else harness_build.check
+        rebuilt = rebuild(ctx, {})
+        if rebuilt.verdict != "pass":
             raise ComponentError("the cached build was lost and rebuilding it did not pass")
         expected = binary_materials(expected_detail)
-        actual = binary_materials(rebuilt["detail"])
+        actual = binary_materials(rebuilt.detail)
         if actual != expected:
             raise ComponentError(
                 "the cached build was lost and rebuilding produced different executable bytes; "
                 "run the build action again before continuing"
             )
-        if not _artifacts_match_build(cfg, rebuilt["detail"], executor_identity):
+        if not _artifacts_match_build(cfg, rebuilt.detail, executor_identity):
             raise ComponentError("the builder did not retain the executables it just rebuilt")
         return expected
 
@@ -419,14 +393,6 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase, strategy,
             required_materials=required_materials, ref=ref,
         )
-
-    def _visible_cases(cfg: RegionConfig) -> dict:
-        if cfg.visible_dataset_dir is None:
-            raise ComponentError(f"no visible dataset configured for region {cfg.region_id}")
-        # Read the same bytes whose digest was placed in the request's
-        # evidence context; retaining an old in-memory copy after the files
-        # changed would make the material describe different inputs.
-        return load_visible_cases(cfg.visible_dataset_dir, cfg.manifest)
 
     @app.get("/table")
     def get_table(region: str | None = None, authorization: str | None = Header(default=None)):
@@ -587,28 +553,24 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         x_tool_call_id: str | None = Header(default=None),
     ):
         # Authenticate and resolve before locking, so caller input cannot
-        # create locks or reveal configured region ids.
+        # create locks or reveal configured region ids, and so the region
+        # is looked up once for the whole request.
         _auth(authorization)
-        _region(req.region)
+        cfg = _region(req.region)
         with run_locks[req.region]:
             # The ledger-backed lock also covers gateways in other worker
             # processes that share this region and builder workspace.
             with _store(req.region).execution_lock():
-                return _post_run(
-                    req, authorization, x_session_id, x_model_id, x_tool_call_id,
-                )
+                return _post_run(cfg, req, x_session_id, x_model_id, x_tool_call_id)
 
-    def _post_run(
-        req: RunRequest,
-        authorization: str | None,
-        x_session_id: str,
-        x_model_id: str,
-        x_tool_call_id: str | None,
-    ):
-        _auth(authorization)
-        cfg = _region(req.region)
-        store = _store(req.region)
+    def _validated_row(cfg: RegionConfig, req: RunRequest):
+        """The row this request names, or the caller's mistake as a 400.
 
+        None of these are refusals: a refusal says the region is not ready
+        for an action it has, and each of these says the request was never
+        one this endpoint could carry out. Nothing is written to the
+        request log for one, because there is no action to log.
+        """
         row = ROWS_BY_NAME.get(req.action)
         if row is None:
             raise HTTPException(status_code=400, detail=f"unknown action: {req.action}")
@@ -619,53 +581,54 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                        f"'{req.region}' is in phase '{cfg.phase}'",
             )
         if row.component is None:
-            raise HTTPException(status_code=400, detail=f"'{req.action}' has no component; see GET /status")
-        unknown_keys = sorted(set(req.config) - set(row.config_keys))
-        if unknown_keys:
-            # Rejected like a malformed request (no log line), not refused:
-            # an unvalidated config key would hash into duplicate detection
-            # and let an identical request look new.
             raise HTTPException(
-                status_code=400,
-                detail=f"'{req.action}' does not accept config key(s) {unknown_keys}; "
-                       f"allowed: {sorted(row.config_keys)}",
+                status_code=400, detail=f"'{req.action}' has no component; see GET /status",
             )
-        for key in sorted(req.config):
-            # Values are checked as well as names: a "repeats" of "lots"
-            # would hash into duplicate detection and then fail deep in a
-            # component, where the caller reads a traceback instead of
-            # which key it got wrong.
-            value = req.config[key]
-            if CONFIG_KEY_SPECS[key]["type"] == "integer" and (
-                isinstance(value, bool) or not isinstance(value, int)
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"config key '{key}' of '{req.action}' must be an integer; "
-                           f"got {value!r}",
-                )
-            minimum = CONFIG_KEY_SPECS[key].get("minimum")
-            maximum = CONFIG_KEY_SPECS[key].get("maximum")
-            if minimum is not None and value < minimum:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"config key '{key}' of '{req.action}' must be at least "
-                           f"{minimum}; got {value!r}",
-                )
-            if maximum is not None and value > maximum:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"config key '{key}' of '{req.action}' must be at most "
-                           f"{maximum}; got {value!r}",
-                )
+        problem = check_config(row, req.config)
+        if problem is not None:
+            raise HTTPException(status_code=400, detail=problem)
+        return row
+
+    def _absent_backends(row) -> list:
+        """Which of the backends this action reaches this gateway has not got."""
+        configured = {"builder": builder, "oracle": oracle}
+        return [name for name in row.needs if configured[name] is None]
+
+    def _context(cfg: RegionConfig, store, ref, strategy, baseline_strategy, claims):
+        """Everything the action's check is allowed to see."""
+        return CheckContext(
+            region_id=cfg.region_id,
+            phase=cfg.phase,
+            tree=Tree(cfg.repo_dir, ref),
+            baseline=Tree.baseline(cfg.repo_dir),
+            strategy=strategy,
+            baseline_strategy=baseline_strategy,
+            manifest=cfg.manifest,
+            spec_path=cfg.spec_path,
+            original_reference_path=cfg.original_reference_path,
+            visible_dataset=cfg.visible_dataset_dir,
+            builder=builder,
+            oracle=oracle,
+            claims=claims,
+            sets=SetReader(store.capture_sets_dir),
+        )
+
+    def _post_run(
+        cfg: RegionConfig,
+        req: RunRequest,
+        x_session_id: str,
+        x_model_id: str,
+        x_tool_call_id: str | None,
+    ):
+        store = _store(req.region)
+        row = _validated_row(cfg, req)
 
         strategy = load_strategy(cfg.strategy_path)
         baseline_strategy = load_strategy(cfg.baseline_strategy_path)
         evidence_materials, executor_identity = _current_materials(
             cfg, strategy, baseline_strategy,
         )
-        store.activate_context(evidence_materials)
-        # Resolve once.  Every tree read and component dispatch below uses this
+        # Resolve once.  Every tree read and check dispatch below uses this
         # immutable commit even if a concurrent submit advances the branch.
         ref = current_commit(cfg.repo_dir, cfg.region_id)
         tree_sha, frozen_sha = _current(
@@ -674,11 +637,15 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         subjects_by_kind = {
             "tree": Subject(kind="tree", sha256=tree_sha),
             "frozen": Subject(kind="frozen", sha256=frozen_sha),
+            # A baseline timing is a claim about the pristine baseline, so
+            # it is filed against that tree rather than the candidate.
+            "baseline_tree": Subject(kind="tree", sha256=Tree.baseline(cfg.repo_dir).sha),
         }
         cfg_hash = config_hash(req.config)
         dependent_action = any(
             predicate_type not in FOUNDATION_PREDICATES for predicate_type in row.emits
         )
+        build_predicate = BUILD_PREDICATE[cfg.phase]
         build_claim = _build_claim(
             cfg, store, subjects_by_kind["tree"], evidence_materials,
         )
@@ -703,87 +670,116 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 detail="the current passing build claim names no executable; "
                        "run the build action again before continuing",
             )
-        missing = []
-        if dependent_action and build_claim is None:
-            # Only a requirement the session can act on belongs in a
-            # refusal, the same rule the row requirements below follow.
-            build_row = requirement_status(
-                store, BUILD_PREDICATE[cfg.phase], subjects_by_kind["tree"],
-                PRODUCERS[BUILD_PREDICATE[cfg.phase]],
-                required_materials=evidence_materials,
-            )
-            if build_row["status"] == "missing":
-                missing.append(build_row)
-        elif dependent_action and not _artifacts_match_build(
+
+        if dependent_action and build_claim is not None and not _artifacts_match_build(
             cfg, build_claim.predicate.detail, executor_identity,
         ):
             try:
                 build_materials = _restore_build(
-                    cfg, store, ref, tree_sha, strategy, baseline_strategy,
+                    cfg,
+                    _context(cfg, store, ref, strategy, baseline_strategy, {}),
                     build_claim.predicate.detail, executor_identity,
                 )
             except ComponentError as exc:
                 log("error")
                 return {"error": str(exc)}
-
         dependent_materials = (*evidence_materials, *build_materials)
-        missing.extend(
-            item for predicate_type, subject_kind in row.requires
-            if (item := requirement_status(
-                store, predicate_type, subjects_by_kind[subject_kind], PRODUCERS.get(predicate_type),
-                required_materials=(
-                    evidence_materials
-                    if predicate_type in FOUNDATION_PREDICATES else dependent_materials
-                ),
-            ))["status"] == "missing"
-        )
+
+        def materials_for(predicate_type):
+            """The context a claim of this type has to have been reached under."""
+            return (
+                evidence_materials
+                if predicate_type in FOUNDATION_PREDICATES else dependent_materials
+            )
+
+        def missing_requirements() -> list:
+            """What this action needs and does not have, in words a session can act on.
+
+            The build the action rests on is not on the row -- every
+            dependent action rests on it -- so it is asked for here, and
+            only when a session could do something about it.
+            """
+            rows = []
+            if dependent_action and build_claim is None:
+                build_row = requirement_status(
+                    store, build_predicate, subjects_by_kind["tree"],
+                    PRODUCERS[build_predicate], required_materials=evidence_materials,
+                )
+                if build_row["status"] == "missing":
+                    rows.append(build_row)
+            rows.extend(
+                item for predicate_type, subject_kind in row.requires
+                if (item := requirement_status(
+                    store, predicate_type, subjects_by_kind[subject_kind],
+                    PRODUCERS.get(predicate_type),
+                    required_materials=materials_for(predicate_type),
+                ))["status"] == "missing"
+            )
+            return rows
+
+        missing = missing_requirements()
         if missing:
             log("refused", missing=missing)
             return {"refused": True, "action": req.action, "tree": tree_sha, "missing": missing}
 
-        if row.deterministic:
-            # All of a multi-emit row's claims are written together in one
-            # dispatch (see sanitize), so an existing claim for any one
-            # of them means all of them exist -- checking just the first
-            # would also do, but checking every one is no more expensive
-            # and doesn't rely on that invariant holding forever.
+        def claims_already_filed() -> list:
+            """This exact request's claims, if every one of them is already there.
+
+            All of a multi-emit row's claims are written together in one
+            dispatch (see sanitize), so an existing claim for any one of
+            them means all of them exist -- checking just the first would
+            also do, but checking every one is no more expensive and
+            doesn't rely on that invariant holding forever.
+            """
+            if not row.deterministic:
+                return []
             existing = [
                 store.find_duplicate(
                     emitted, subjects_by_kind[SUBJECT_KIND_OF.get(emitted, "tree")], cfg_hash,
-                    required_materials=(
-                        evidence_materials
-                        if emitted in FOUNDATION_PREDICATES else dependent_materials
-                    ),
+                    required_materials=materials_for(emitted),
                 )
                 for emitted in row.emits
             ]
-            if (
-                existing and all(existing)
-                and row.name in ("build_replay", "harness_build")
-                and not _artifacts_match_build(
-                    cfg, existing[0].predicate.detail, executor_identity,
-                )
+            if not (existing and all(existing)):
+                return []
+            if build_predicate in row.emits and not _artifacts_match_build(
+                cfg, existing[0].predicate.detail, executor_identity,
             ):
-                # A restart removed the workspace. Fall through to the build
-                # dispatch instead of returning a claim whose executable no
-                # longer exists.
-                existing = []
-            if existing and all(existing):
-                duplicate = existing[0] if len(existing) == 1 else None
-                if duplicate is not None:
-                    log("duplicate", claim_id=duplicate.id)
-                    return _claim_response(duplicate)
-                log("duplicate")
-                return _claims_response(existing)
+                # A restart removed the workspace. Build again rather than
+                # answer with a claim whose executable no longer exists.
+                return []
+            return existing
 
-        def record(predicate_type: str, subject: Subject, tool: str, result: dict, materials=()):
+        existing = claims_already_filed()
+        if existing:
+            duplicate = existing[0] if len(existing) == 1 else None
+            if duplicate is not None:
+                log("duplicate", claim_id=duplicate.id)
+                return _claim_response(duplicate)
+            log("duplicate")
+            return _claims_response(existing)
+
+        # Every claim the action rests on, read once under the context the
+        # refusal above just checked them in. The check reads what it needs
+        # from these and never asks the ledger anything itself.
+        claims = {
+            predicate_type: store.latest(
+                predicate_type, subjects_by_kind[subject_kind],
+                required_materials=materials_for(predicate_type),
+            )
+            for predicate_type, subject_kind in row.requires
+        }
+        if build_claim is not None:
+            claims.setdefault(build_predicate, build_claim)
+
+        def record(predicate_type: str, result: CheckResult, tool: str):
             # Every claim names the strategy and the code's manifest in
             # its materials, so no call site lists them (or can forget
-            # them). `strategy` is loaded below, before any dispatch
-            # branch calls this; the manifest came with the region.
-            measured_binaries = binary_materials(result["detail"])
+            # them); what else a verdict rests on is what the check itself
+            # declared.
+            measured_binaries = binary_materials(result.detail)
             if (
-                result["verdict"] == "pass"
+                result.verdict == "pass"
                 and predicate_type not in FOUNDATION_PREDICATES
                 and predicate_type != "harness/original"
                 and measured_binaries
@@ -797,310 +793,58 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 *evidence_materials,
                 *(build_materials if predicate_type not in FOUNDATION_PREDICATES else ()),
                 *measured_binaries,
-                *materials,
+                *result.materials,
             )))
             return store.record_claim(
-                [subject], predicate_type,
-                Predicate(tool=tool, version="0.1", configHash=cfg_hash, verdict=result["verdict"], detail=result["detail"]),
+                [subjects_by_kind[result.subject_kind]], predicate_type,
+                Predicate(tool=tool, version="0.1", configHash=cfg_hash,
+                          verdict=result.verdict, detail=result.detail),
                 claim_materials, x_session_id,
             )
 
+        handler = HANDLERS[row.name]
         try:
-            if req.action == "sese_check":
-                result = sese_check.check(cfg.repo_dir, ref, cfg.spec_path, strategy)
-                claim = record("sese/verified", subjects_by_kind["tree"], "sese_check", result)
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "build_replay":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                result = build_replay.check(
-                    cfg.repo_dir, ref, cfg.region_id, tree_sha, strategy, cfg.manifest, builder,
-                )
-                if result["verdict"] == "pass" and not _artifacts_match_build(
-                    cfg, result["detail"], executor_identity,
-                ):
-                    raise ComponentError(
-                        "the builder did not retain the executables from the passing build"
-                    )
-                claim = record("build/replay", subjects_by_kind["tree"], "builder", result)
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "run_replay":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                result = run_replay.check(
-                    cfg.region_id, tree_sha, strategy, cfg.manifest, _visible_cases(cfg), builder,
-                )
-                claim = record("gpu/executed", subjects_by_kind["tree"], "builder", result)
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "sanitize":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                results = sanitize.check(
-                    cfg.region_id, tree_sha, strategy, cfg.manifest, _visible_cases(cfg), builder,
-                )
-                claims = [
-                    record(f"sanitize/{tool}", subjects_by_kind["tree"], "compute-sanitizer", result)
-                    for tool, result in results.items()
-                ]
-                log("claim", claim_id=claims[0].id if len(claims) == 1 else None)
-                return _claims_response(claims)
-
-            if req.action == "regression_visible":
-                if oracle is None:
-                    raise ComponentError("oracle not configured")
-                result = regression.check_visible(store, subjects_by_kind["tree"], oracle)
-                # The tolerance policy shaped this verdict, so it is a
-                # formal material, not just a note in detail.
-                policy = Subject(kind="policy", sha256=result["detail"]["policy_sha256"])
-                claim = record("regression/visible", subjects_by_kind["tree"], "oracle", result, materials=[policy])
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "property_check":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                # A seed the request names is the same search again, and
-                # the config hash carries it, so a repeat at that seed
-                # comes back as the claim already filed. A request that
-                # names none has one drawn in the component and written
-                # into the claim, which is how a person reads back the
-                # search that failed and asks for it again.
-                result = property_check.check(
-                    cfg.region_id, tree_sha, cfg.manifest, _visible_cases(cfg), builder,
-                    seed=req.config.get("seed"),
-                    max_examples=req.config.get(
-                        "max_examples", property_check.DEFAULT_MAX_EXAMPLES,
-                    ),
-                )
-                claim = record("regression/property", subjects_by_kind["tree"], "builder", result)
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "regression_holdout":
-                if builder is None or oracle is None:
-                    raise ComponentError("builder or oracle not configured")
-                result = regression.check_holdout(
-                    cfg.region_id, tree_sha, strategy, cfg.manifest, oracle, builder,
-                )
-                policy = Subject(kind="policy", sha256=result["detail"]["policy_sha256"])
-                claim = record("regression/holdout", subjects_by_kind["tree"], "oracle", result, materials=[policy])
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "program_regression":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                result = program_regression.check(
-                    store, Subject(kind="tree", sha256=Tree.baseline(cfg.repo_dir).sha),
-                    cfg.region_id, tree_sha, cfg.manifest, builder,
-                )
-                # The two things this verdict rests on, as formal
-                # materials: the bands it was judged within, and the
-                # baseline run it was judged against.
-                claim = record(
-                    "program/regression", subjects_by_kind["tree"], "builder", result,
-                    materials=[
-                        Subject(kind="policy", sha256=result["detail"]["policy_sha256"]),
-                        Subject(kind="capture_set", sha256=result["detail"]["program_set"]),
-                    ],
-                )
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "time_port":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                result = timing.check_port(
-                    store, subjects_by_kind["tree"], cfg.region_id, tree_sha, cfg.manifest,
-                    builder, repeats=int(req.config.get("repeats", 5)),
-                )
-                claim = record("timing/port", subjects_by_kind["tree"], "builder", result)
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "time_baseline":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                base_tree = Tree.baseline(cfg.repo_dir).sha
-                # The floor a speedup is measured against is a strategy
-                # file of the region's own choosing, loaded here so the
-                # claim says which one it was.
-                result = timing.check_baseline(
-                    store, cfg.repo_dir, cfg.region_id, base_tree, cfg.manifest,
-                    load_strategy(cfg.baseline_strategy_path), builder,
-                    repeats=int(req.config.get("repeats", 5)),
-                )
-                # The program set this run stored is what a port's own
-                # program run is compared against, so it is a formal
-                # material rather than a note in the detail.
-                program_set = result["detail"].get("program_set")
-                claim = record(
-                    "timing/baseline", Subject(kind="tree", sha256=base_tree), "builder", result,
-                    materials=(
-                        [Subject(kind="capture_set", sha256=program_set)] if program_set else []
-                    ),
-                )
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            # The onboarding actions.
-            if req.action == "manifest_check":
-                # No builder: the manifest is read on this side, where the
-                # gateway already has the tree and the loader that knows
-                # what a manifest has to say.
-                result = manifest_check.check(cfg.repo_dir, ref)
-                claim = record("manifest/valid", subjects_by_kind["tree"], "manifest_check", result)
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "harness_build":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                result = harness_build.check(
-                    cfg.repo_dir, ref, cfg.region_id, tree_sha, strategy,
-                    load_strategy(cfg.baseline_strategy_path), builder,
-                )
-                if result["verdict"] == "pass" and not _artifacts_match_build(
-                    cfg, result["detail"], executor_identity,
-                ):
-                    raise ComponentError(
-                        "the builder did not retain the executables from the passing build"
-                    )
-                claim = record("harness/builds", subjects_by_kind["tree"], "builder", result)
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "harness_capture":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                result = harness_capture.check(
-                    store, cfg.repo_dir, ref, cfg.region_id, tree_sha,
-                    load_strategy(cfg.baseline_strategy_path), builder,
-                )
-                # The sets this check stored are what every later claim
-                # about this tree compares against, so they are formal
-                # materials rather than a note in the detail.
-                claim = record(
-                    "harness/captured", subjects_by_kind["tree"], "builder", result,
-                    materials=_capture_set_materials(result["detail"]),
-                )
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "harness_replay":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                result = harness_replay.check(
-                    store, subjects_by_kind["tree"], cfg.repo_dir, ref, cfg.region_id, tree_sha,
-                    load_strategy(cfg.baseline_strategy_path), builder,
-                )
-                claim = record(
-                    "harness/replays", subjects_by_kind["tree"], "builder", result,
-                    materials=_capture_set_materials(result["detail"]),
-                )
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "harness_determinism":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                result = harness_determinism.check(
-                    store, subjects_by_kind["tree"], cfg.repo_dir, ref, cfg.region_id, tree_sha,
-                    load_strategy(cfg.baseline_strategy_path), builder,
-                )
-                claim = record(
-                    "harness/deterministic", subjects_by_kind["tree"], "builder", result,
-                    materials=_capture_set_materials(result["detail"]),
-                )
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "harness_timing":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                result = harness_timing.check(
-                    store, cfg.repo_dir, ref, cfg.region_id, tree_sha,
-                    load_strategy(cfg.baseline_strategy_path), builder,
-                )
-                claim = record(
-                    "harness/times", subjects_by_kind["tree"], "builder", result,
-                    materials=_capture_set_materials(result["detail"]),
-                )
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "harness_original":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                result = original_check.check(
-                    store, subjects_by_kind["tree"], cfg.repo_dir, ref, cfg.region_id,
-                    tree_sha, baseline_strategy, builder, cfg.original_reference_path,
-                )
-                reference_sha = result["detail"].get("reference_sha256")
-                claim = record(
-                    "harness/original", subjects_by_kind["tree"], "builder", result,
-                    materials=(
-                        [Subject(kind="reference", sha256=reference_sha)]
-                        if reference_sha else []
-                    ),
-                )
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "harness_self_check":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                # `limit` scores only the first mutants. It is for a
-                # session finding its feet on a large region; the claim
-                # says how many there were, so a limited run cannot be
-                # mistaken for a whole one.
-                result = harness_self_check.check(
-                    store, subjects_by_kind["tree"], cfg.repo_dir, ref, cfg.region_id,
-                    tree_sha, load_strategy(cfg.baseline_strategy_path), builder,
-                    limit=req.config.get("limit"),
-                )
-                # The two things this verdict rests on: the answers the
-                # mutants were scored against, and the bands that decided
-                # whether a changed answer counted.
-                claim = record(
-                    "harness/self_check", subjects_by_kind["tree"], "builder", result,
-                    materials=[
-                        *_capture_set_materials(result["detail"]),
-                        Subject(kind="policy", sha256=result["detail"]["policy_sha256"]),
-                    ],
-                )
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
-
-            if req.action == "harness_property":
-                if builder is None:
-                    raise ComponentError("builder not configured")
-                # As in the porting check, a seed the request names is the
-                # same search again and the config hash carries it; a
-                # request that names none has one drawn and written into
-                # the claim.
-                result = harness_property.check(
-                    store, subjects_by_kind["tree"], cfg.repo_dir, ref, cfg.region_id,
-                    tree_sha, load_strategy(cfg.baseline_strategy_path), builder,
-                    seed=req.config.get("seed"),
-                    max_examples=req.config.get(
-                        "max_examples", property_check.DEFAULT_MAX_EXAMPLES,
-                    ),
-                )
-                claim = record("harness/properties", subjects_by_kind["tree"], "builder", result)
-                log("claim", claim_id=claim.id)
-                return _claim_response(claim)
+            # Asked here rather than earlier: a session whose evidence is
+            # not ready should be told what is missing, which is something
+            # a gateway with no backend can still answer.
+            absent = _absent_backends(row)
+            if absent:
+                raise ComponentError(f"{' or '.join(absent)} not configured")
+            answer = handler.check(
+                _context(cfg, store, ref, strategy, baseline_strategy, claims), req.config,
+            )
+            results = (
+                {row.emits[0]: answer} if isinstance(answer, CheckResult) else answer
+            )
+            if build_predicate in row.emits:
+                for result in results.values():
+                    if result.verdict == "pass" and not _artifacts_match_build(
+                        cfg, result.detail, executor_identity,
+                    ):
+                        raise ComponentError(
+                            "the builder did not retain the executables from the passing build"
+                        )
+            # What the checks packed is filed before any claim names it, so
+            # a claim never points at a set the ledger does not hold.
+            for result in results.values():
+                for packed in result.stores:
+                    store.keep(packed)
+            claims_filed = [
+                (record(predicate_type, result, handler.tool), result)
+                for predicate_type, result in results.items()
+            ]
         except ComponentError as exc:
             log("error")
             return {"error": str(exc)}
 
-        log("error")
-        return {"error": f"component '{row.component}' for action '{req.action}' is not implemented yet"}
+        if len(claims_filed) == 1:
+            claim, result = claims_filed[0]
+            log("claim", claim_id=claim.id)
+            return {**_claim_response(claim), **_reasons(result)}
+        log("claim")
+        return {"claims": [
+            {"predicateType": claim.predicateType, **_claim_response(claim), **_reasons(result)}
+            for claim, result in claims_filed
+        ]}
 
     return app

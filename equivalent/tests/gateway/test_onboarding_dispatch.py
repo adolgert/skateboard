@@ -11,12 +11,12 @@ from fastapi.testclient import TestClient
 
 from equivalent.cli import render
 from equivalent.gateway.app import create_app
-from equivalent.region.config import RegionConfig
 from equivalent.tree import init_baseline_repo
 from equivalent.ledger.table import rows_for
 from equivalent.ledger.acceptance import ONBOARDING
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
+from equivalent.tests.gateway.conftest import ONBOARDING_STRATEGY_PATH, region_config
 from equivalent.tests.fakes import write_program, write_tree
 from equivalent.tests.components.test_original_check import ReferenceBuilder, reference
 
@@ -36,15 +36,9 @@ def _client(tmp_path, *, oracle=None):
     # The agent's working copy is that tree, which is what it edits.
     working = write_tree(tmp_path / "working")
     program = write_program(tmp_path, minimal=True)
-    cfg = RegionConfig(
-        region_id=REGION,
-        code="tsunami",
-        phase=ONBOARDING,
-        repo_dir=repo_dir,
-        spec_path=None,
-        ledger_dir=tmp_path / "ledger",
-        strategy_path=STRATEGY_DIR / "onboarding.yaml",
-        baseline_strategy_path=STRATEGY_DIR / "cpu_reference.yaml",
+    cfg = region_config(
+        tmp_path, region_id=REGION, phase=ONBOARDING, repo_dir=repo_dir,
+        spec_path=None, strategy_path=ONBOARDING_STRATEGY_PATH,
         working_copy_dir=working,
         manifest=load_manifest(program / "manifest.yaml"),
         original_reference_path=reference(tmp_path),
@@ -161,6 +155,27 @@ def test_every_onboarding_check_passing_leaves_the_region_onboarded(tmp_path):
     # And what a person reading that status sees is the word for a code
     # that is ready to be reviewed and promoted.
     assert "ONBOARDED" in render.render_status(body, REGION)
+
+
+def test_what_the_original_comparison_kept_is_in_the_ledger_beside_its_claim(tmp_path):
+    # The claim says two programs agreed; a person reading it later has to
+    # be able to look at what they agreed on. The check hands those bytes
+    # back with its verdict and the gateway files them, so nothing is in
+    # the artifacts directory that no recorded verdict rests on.
+    client, cfg, store, _ = _client(tmp_path)
+
+    claims = _onboard(client)
+
+    claim = store.get_claim(claims["harness_original"]["claim_id"])
+    named = {
+        sha
+        for run in claim.predicate.detail["runs"]
+        for output in run["outputs"]
+        for sha in (*output["original_artifacts"], *output["candidate_artifacts"])
+    }
+    assert named
+    for sha in named:
+        assert (store.region_dir / "artifacts" / sha).is_file()
 
 
 def test_a_check_that_reads_a_capture_set_names_it_in_the_claims_materials(tmp_path):

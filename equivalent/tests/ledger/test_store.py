@@ -50,7 +50,7 @@ def test_latest_returns_most_recent_claim_for_same_subject_and_config(tmp_path):
     store.append_claim(_claim_at(store, tree, "timing/port", _pred("pass"), ts="2026-01-01T00:00:00Z"))
     newest = _claim_at(store, tree, "timing/port", _pred("fail"), ts="2026-01-02T00:00:00Z")
     store.append_claim(newest)
-    got = store.latest("timing/port", tree)
+    got = store.latest("timing/port", tree, required_materials=())
     assert got.id == newest.id
     assert got.predicate.verdict == "fail"
 
@@ -64,7 +64,7 @@ def test_latest_prefers_the_later_appended_claim_on_a_timestamp_tie(tmp_path):
     store.append_claim(_claim_at(store, tree, "build/replay", _pred("pass"), ts=ts))
     later = _claim_at(store, tree, "build/replay", _pred("fail"), ts=ts)
     store.append_claim(later)
-    assert store.latest("build/replay", tree).id == later.id
+    assert store.latest("build/replay", tree, required_materials=()).id == later.id
 
 
 def test_a_reader_skips_a_torn_final_line_instead_of_crashing(tmp_path):
@@ -82,8 +82,8 @@ def test_exists_pass_unaffected_by_later_fail_on_a_different_subject(tmp_path):
     tree1, tree2 = _tree(1), _tree(2)
     store.record_claim([tree1], "build/replay", _pred("pass"), [], "sess-1")
     store.record_claim([tree2], "build/replay", _pred("fail"), [], "sess-1")
-    assert store.exists_pass("build/replay", tree1) is True
-    assert store.exists_pass("build/replay", tree2) is False
+    assert store.exists_pass("build/replay", tree1, required_materials=()) is True
+    assert store.exists_pass("build/replay", tree2, required_materials=()) is False
 
 
 def test_find_duplicate_matches_only_when_type_tree_and_config_all_equal(tmp_path):
@@ -91,10 +91,10 @@ def test_find_duplicate_matches_only_when_type_tree_and_config_all_equal(tmp_pat
     tree = _tree(1)
     claim = store.record_claim([tree], "build/replay", _pred(config="cfg-A"), [], "sess-1")
 
-    assert store.find_duplicate("build/replay", tree, "cfg-A").id == claim.id
-    assert store.find_duplicate("build/replay", tree, "cfg-B") is None
-    assert store.find_duplicate("build/replay", _tree(2), "cfg-A") is None
-    assert store.find_duplicate("gpu/executed", tree, "cfg-A") is None
+    assert store.find_duplicate("build/replay", tree, "cfg-A", required_materials=()).id == claim.id
+    assert store.find_duplicate("build/replay", tree, "cfg-B", required_materials=()) is None
+    assert store.find_duplicate("build/replay", _tree(2), "cfg-A", required_materials=()) is None
+    assert store.find_duplicate("gpu/executed", tree, "cfg-A", required_materials=()) is None
 
 
 def test_duplicate_and_latest_require_current_materials(tmp_path):
@@ -117,15 +117,16 @@ def test_duplicate_and_latest_require_current_materials(tmp_path):
     ) is None
 
 
-def test_component_reads_inherit_the_request_evidence_context(tmp_path):
+def test_reading_a_claim_without_saying_which_context_is_a_mistake(tmp_path):
+    # A claim is current evidence only relative to the materials it had to
+    # be reached against, so a reader that does not say which those are is
+    # asking a question with no answer.
     store = LedgerStore(tmp_path / "region")
     tree = _tree(1)
-    old_strategy = Subject(kind="strategy", sha256="a" * 64)
-    new_strategy = Subject(kind="strategy", sha256="b" * 64)
-    store.record_claim([tree], "build/replay", _pred(), [old_strategy], "sess-1")
+    store.record_claim([tree], "build/replay", _pred(), [], "sess-1")
 
-    store.activate_context([new_strategy])
-    assert store.latest("build/replay", tree) is None
+    with pytest.raises(TypeError):
+        store.latest("build/replay", tree)
 
 
 def test_sequential_appends_do_not_interleave_partial_lines(tmp_path):

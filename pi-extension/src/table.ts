@@ -30,6 +30,7 @@ export interface ActionRow {
 
 const SUBJECT_PHRASE: Record<string, string> = {
   tree: "the submitted tree",
+  baseline_tree: "the pristine baseline",
   frozen: "this region",
   capture_set: "the capture set",
   strategy: "the strategy",

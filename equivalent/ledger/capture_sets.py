@@ -7,6 +7,12 @@ capture reader already reads -- one directory per case, one NPY file per
 variable -- so a person reviewing a ledger opens files rather than
 unpacking an archive.
 
+A set is packed here and kept by the store: a check writes the arrays
+into a directory of its own and hands back its hash, and only a verdict
+the gateway is about to record moves that directory into the ledger. A
+set that failed its own check is therefore never there for a later
+comparison to find.
+
 Trust role: a capture set is what every later comparison is made
 against. Two things have to hold. The bytes that come back must be the
 bytes that went in, or a replay would be judged against arrays nobody
@@ -24,15 +30,16 @@ import base64
 import json
 import shutil
 import tempfile
+import weakref
 from pathlib import Path
 
 from equivalent.capture import npy
+from equivalent.ledger.packed import PackedSet
 from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject, hash_files
+from equivalent.ledger.subjects import hash_files
 
-# Where capture sets live inside a region's artifacts directory. One
-# subdirectory per set, named by the set's own hash.
-CAPTURE_SETS = "capture_sets"
+# The subject kind a stored set's hash names.
+CAPTURE_SET = "capture_set"
 
 # What a timing run's own outputs are stored as: one dataset holding one
 # case, whose variables are the files the program wrote. The baseline
@@ -41,15 +48,31 @@ CAPTURE_SETS = "capture_sets"
 PROGRAM_SET = "program"
 
 
-def capture_sets_dir(store: LedgerStore) -> Path:
-    directory = store.region_dir / "artifacts" / CAPTURE_SETS
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
+class SetReader:
+    """Read-only access to the capture sets one region's ledger holds.
 
+    A check is given one of these rather than the store, because reading
+    the arrays a verdict is measured against is all a check has any
+    business doing with the ledger: it cannot file a claim through this,
+    and it cannot leave a set behind through it either.
+    """
 
-def capture_set_dir(store: LedgerStore, sha256: str) -> Path:
-    """Where one capture set's cases sit. It may not exist yet."""
-    return capture_sets_dir(store) / sha256
+    def __init__(self, directory):
+        self.directory = Path(directory)
+
+    def path(self, sha256: str) -> Path:
+        """Where one set's cases sit. It may not exist."""
+        return self.directory / sha256
+
+    def load(self, sha256: str) -> dict:
+        """The cases of one stored set, in the shape `pack_capture_set` took."""
+        directory = self.path(sha256)
+        if not directory.is_dir():
+            raise FileNotFoundError(
+                f"{self.directory} holds no capture set {sha256}; a claim naming "
+                f"it was filed against a ledger that no longer has it"
+            )
+        return npy.load_dataset(directory)
 
 
 def write_dataset(directory: Path, cases: dict, *, inputs: bool = True, outputs: bool = True) -> None:
@@ -81,8 +104,8 @@ def _files_under(directory: Path) -> list[dict]:
     ]
 
 
-def store_capture_set(store: LedgerStore, name: str, cases: dict) -> Subject:
-    """Write one dataset of cases into the region's artifacts and name it.
+def pack_capture_set(name: str, cases: dict) -> PackedSet:
+    """Write one dataset of cases somewhere of its own and name it by its content.
 
     `cases` is {case: {"inputs": {variable: array}, "outputs": {...}}},
     which is what the capture reader hands back for a dataset directory.
@@ -91,30 +114,24 @@ def store_capture_set(store: LedgerStore, name: str, cases: dict) -> Subject:
     datasets holding the same arrays are one artifact rather than two
     copies that a later comparison would have to know are the same.
 
-    Storing a set that is already there writes nothing and returns the
-    same subject.
+    Nothing is filed here. The directory belongs to the returned value and
+    goes away with it unless a store keeps it, so a check can pack a set,
+    compare it with one already stored, and hand back only what should
+    survive.
     """
-    staging = Path(tempfile.mkdtemp(dir=capture_sets_dir(store), prefix=".staging-"))
-    try:
-        write_dataset(staging, cases)
-        subject = Subject(kind="capture_set", sha256=hash_files(_files_under(staging)))
-        destination = capture_set_dir(store, subject.sha256)
-        if not destination.exists():
-            staging.rename(destination)
-        return subject
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
+    staging = Path(tempfile.mkdtemp(prefix="equivalent-set-"))
+    write_dataset(staging, cases)
+    packed = PackedSet(
+        kind=CAPTURE_SET, name=name,
+        sha256=hash_files(_files_under(staging)), directory=staging,
+    )
+    weakref.finalize(packed, shutil.rmtree, staging, True)
+    return packed
 
 
 def load_capture_set(store: LedgerStore, sha256: str) -> dict:
-    """The cases of one stored set, in the shape `store_capture_set` took."""
-    directory = capture_set_dir(store, sha256)
-    if not directory.is_dir():
-        raise FileNotFoundError(
-            f"region {store.region_dir} holds no capture set {sha256}; a claim naming "
-            f"it was filed against a ledger that no longer has it"
-        )
-    return npy.load_dataset(directory)
+    """The cases of one stored set, in the shape `pack_capture_set` took."""
+    return SetReader(store.capture_sets_dir).load(sha256)
 
 
 def program_variable(path: str) -> str:
@@ -150,8 +167,8 @@ def program_arrays(written: dict, declared) -> tuple[dict, dict]:
     return arrays, problems
 
 
-def store_program_set(store: LedgerStore, arrays: dict) -> Subject:
-    """Store what one timing run wrote as the set a later run is compared against."""
-    return store_capture_set(
-        store, PROGRAM_SET, {PROGRAM_SET: {"inputs": {}, "outputs": arrays}},
+def pack_program_set(arrays: dict) -> PackedSet:
+    """What one timing run wrote, as the set a later run is compared against."""
+    return pack_capture_set(
+        PROGRAM_SET, {PROGRAM_SET: {"inputs": {}, "outputs": arrays}},
     )

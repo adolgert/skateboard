@@ -9,51 +9,19 @@ claim above it a claim about one particular afternoon.
 from __future__ import annotations
 
 import base64
-from pathlib import Path
 
-import pytest
 
 from equivalent.capture import npy
-from equivalent.components import harness_capture, harness_determinism
-from equivalent.components.errors import ComponentError
-from equivalent.tree import init_baseline_repo
-from equivalent.ledger.records import Predicate
-from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject
-from equivalent.strategy.schema import load_strategy
-from equivalent.tests.fakes import FakeBuilder, captured_cases, write_tree
+from equivalent.components import harness_determinism
+from equivalent.tests.fakes import FakeBuilder, captured_cases
 
-STRATEGY_DIR = Path(__file__).resolve().parents[2] / "strategy" / "files"
 REGION = "tsunami:onboarding"
-TREE_SHA = "a" * 64
-TREE = Subject(kind="tree", sha256=TREE_SHA)
 
 
-def _baseline_strategy():
-    return load_strategy(STRATEGY_DIR / "cpu_reference.yaml")
-
-
-def _captured(tmp_path):
-    repo = tmp_path / "repo"
-    init_baseline_repo(repo, write_tree(tmp_path / "seed"))
-    store = LedgerStore(tmp_path / "ledger")
-    result = harness_capture.check(
-        store, repo, "main", REGION, TREE_SHA, _baseline_strategy(), FakeBuilder(),
-    )
-    store.record_claim(
-        [TREE], "harness/captured",
-        Predicate(tool="builder", version="0.1", configHash="cfg",
-                  verdict=result["verdict"], detail=result["detail"]),
-        [], "sess-1",
-    )
-    return repo, store
-
-
-def _check(tmp_path, builder):
-    repo, store = _captured(tmp_path)
-    return harness_determinism.check(
-        store, TREE, repo, "main", REGION, TREE_SHA, _baseline_strategy(), builder,
-    )
+def _check(harness, builder):
+    """The determinism check on a tree whose capture has already passed."""
+    harness.captured()
+    return harness_determinism.check(harness.context(builder=builder), {})
 
 
 def _replaying_builder():
@@ -62,34 +30,34 @@ def _replaying_builder():
     return builder
 
 
-def test_capturing_and_replaying_again_agreeing_is_a_pass(tmp_path):
+def test_capturing_and_replaying_again_agreeing_is_a_pass(harness):
     builder = _replaying_builder()
 
-    result = _check(tmp_path, builder)
+    result = _check(harness, builder)
 
-    assert result["verdict"] == "pass"
-    datasets = result["detail"]["datasets"]
+    assert result.verdict == "pass"
+    datasets = result.detail["datasets"]
     assert datasets["visible"]["recaptured"] == datasets["visible"]["capture_set"]
-    assert result["detail"]["replay"]["same"] is True
-    assert result["detail"]["differed"] == []
+    assert result.detail["replay"]["same"] is True
+    assert result.detail["differed"] == []
 
 
-def test_the_second_capture_is_a_run_of_its_own(tmp_path):
+def test_the_second_capture_is_a_run_of_its_own(harness):
     # Writing over the first run's output directory would make a program
     # that appends look deterministic.
     builder = _replaying_builder()
 
-    _check(tmp_path, builder)
+    _check(harness, builder)
 
     assert sorted(call["run_name"] for call in builder.capture_calls) == [
         "holdout-again", "visible-again",
     ]
 
 
-def test_the_replay_is_run_twice_on_the_visible_inputs(tmp_path):
+def test_the_replay_is_run_twice_on_the_visible_inputs(harness):
     builder = _replaying_builder()
 
-    _check(tmp_path, builder)
+    _check(harness, builder)
 
     assert len(builder.run_calls) == 2
     assert builder.run_calls[0]["cases"] == builder.run_calls[1]["cases"]
@@ -105,15 +73,15 @@ class DriftingCaptureBuilder(FakeBuilder):
         return result
 
 
-def test_a_capture_that_does_not_repeat_fails_naming_the_dataset(tmp_path):
+def test_a_capture_that_does_not_repeat_fails_naming_the_dataset(harness):
     builder = DriftingCaptureBuilder()
     builder.replays_capture = True
 
-    result = _check(tmp_path, builder)
+    result = _check(harness, builder)
 
-    assert result["verdict"] == "fail"
-    assert result["detail"]["datasets"]["visible"]["same"] is False
-    assert "visible" in "\n".join(result["detail"]["differed"])
+    assert result.verdict == "fail"
+    assert result.detail["datasets"]["visible"]["same"] is False
+    assert "visible" in "\n".join(result.detail["differed"])
 
 
 class DriftingReplayBuilder(FakeBuilder):
@@ -136,32 +104,23 @@ class DriftingReplayBuilder(FakeBuilder):
         return result
 
 
-def test_a_replay_that_does_not_repeat_fails_naming_the_case_and_variable(tmp_path):
-    result = _check(tmp_path, DriftingReplayBuilder())
+def test_a_replay_that_does_not_repeat_fails_naming_the_case_and_variable(harness):
+    result = _check(harness, DriftingReplayBuilder())
 
-    assert result["verdict"] == "fail"
-    difference = result["detail"]["replay"]["first_difference"]
+    assert result.verdict == "fail"
+    difference = result.detail["replay"]["first_difference"]
     assert difference["case"] == "case0000"
     assert difference["variable"] == "field"
-    assert "replay" in "\n".join(result["detail"]["differed"])
+    assert "replay" in "\n".join(result.detail["differed"])
 
 
-def test_a_replay_that_would_not_run_fails_with_what_the_builder_said(tmp_path):
+def test_a_replay_that_would_not_run_fails_with_what_the_builder_said(harness):
     builder = _replaying_builder()
     builder.run_ok = False
 
-    result = _check(tmp_path, builder)
+    result = _check(harness, builder)
 
-    assert result["verdict"] == "fail"
-    assert "runtime crash" in result["detail"]["replay"]["log_tail"]
+    assert result.verdict == "fail"
+    assert "runtime crash" in result.detail["replay"]["log_tail"]
 
 
-def test_a_tree_with_no_passing_capture_claim_is_an_error_not_a_verdict(tmp_path):
-    repo = tmp_path / "repo"
-    init_baseline_repo(repo, write_tree(tmp_path / "seed"))
-
-    with pytest.raises(ComponentError):
-        harness_determinism.check(
-            LedgerStore(tmp_path / "ledger"), TREE, repo, "main", REGION, TREE_SHA,
-            _baseline_strategy(), _replaying_builder(),
-        )

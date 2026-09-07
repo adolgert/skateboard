@@ -10,7 +10,7 @@ regression/visible claims describe a run of the wrong data. So each case
 is read against the code's own manifest: the dataset must hold exactly
 the input variables the region declares, each of the declared element
 type and rank. A dataset that has drifted from the manifest stops the
-gateway here, naming the variable, rather than reaching the builder and
+check here, naming the variable, rather than reaching the builder and
 failing as a puzzling comparison further along.
 """
 from __future__ import annotations

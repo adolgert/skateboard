@@ -27,17 +27,12 @@ import base64
 import numpy as np
 
 from equivalent.capture import npy
-from equivalent.ledger.capture_sets import load_capture_set
-from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject
-from equivalent.strategy.schema import Strategy
-from equivalent.tree import Tree, attempt_id_for_strategy
+from equivalent.tree import attempt_id_for_strategy
 
 from . import harness_capture
+from .context import CheckContext, CheckResult, capture_set_materials
 from .errors import ComponentError, after_the_manifest_check_passed
-
-# The manifest role of the driver that replays one case.
-REPLAY_ROLE = "replay"
+from .names import REPLAY_ROLE
 
 
 def wire_inputs(cases: dict) -> dict:
@@ -87,29 +82,30 @@ def _first_difference(cases: dict, outputs: dict) -> dict | None:
     return None
 
 
-def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str, tree_sha: str,
-          baseline_strategy: Strategy, builder) -> dict:
+def check(ctx: CheckContext, config: dict) -> CheckResult:
     """Run every captured case through the replay driver and compare.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}, where the detail
-    names, per dataset, how many cases were compared, the capture set they
-    came from, and -- when they disagree -- the first case and variable
-    that did, with how far apart they were. Raises ComponentError if the
-    tree has no passing capture claim or the builder could not be reached.
+    The detail names, per dataset, how many cases were compared, the
+    capture set they came from, and -- when they disagree -- the first
+    case and variable that did, with how far apart they were. Raises
+    ComponentError if the builder could not be reached.
     """
     with after_the_manifest_check_passed():
-        manifest = Tree(repo_dir, ref).manifest()
-    sets = harness_capture.captured_sets(store, tree)
+        manifest = ctx.tree.manifest()
+    sets = harness_capture.captured_sets(ctx)
     replay = manifest.build.targets[REPLAY_ROLE]
-    attempt_id = attempt_id_for_strategy(region_id, tree_sha, baseline_strategy.name)
+    attempt_id = attempt_id_for_strategy(
+        ctx.region_id, ctx.tree.sha, ctx.baseline_strategy.name,
+    )
 
     per_dataset = {}
-    failed = []
+    disagreed = []
+    reasons = []
     executable_identity = None
     for name in sorted(sets):
-        cases = load_capture_set(store, sets[name])
+        cases = ctx.sets.load(sets[name])
         try:
-            resp = builder.run(
+            resp = ctx.builder.run(
                 attempt_id, replay.executable, wire_inputs(cases),
                 notify=None, mandatory=False,
             )
@@ -120,20 +116,28 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
         executable_identity = executable_identity or resp.get("executable_identity")
         if not resp.get("ok"):
             entry["log_tail"] = resp.get("log_tail", "")
-            failed.append(name)
+            disagreed.append(name)
+            reasons.append(f"the replay of dataset '{name}' would not run")
         else:
             first = _first_difference(cases, resp.get("outputs", {}))
             if first is not None:
                 entry["first_difference"] = first
-                failed.append(name)
+                disagreed.append(name)
+                reasons.append(
+                    f"dataset '{name}', case '{first['case']}', variable "
+                    f"'{first['variable']}': {first['reason']}"
+                )
         per_dataset[name] = entry
 
-    return {
-        "verdict": "fail" if failed else "pass",
-        "detail": {
-            "manifest_sha256": manifest.sha256,
-            "executable_identity": executable_identity,
-            "datasets": per_dataset,
-            "datasets_that_disagreed": failed,
-        },
+    detail = {
+        "manifest_sha256": manifest.sha256,
+        "executable_identity": executable_identity,
+        "datasets": per_dataset,
+        "datasets_that_disagreed": disagreed,
     }
+    materials = capture_set_materials(detail)
+    if disagreed:
+        return CheckResult(
+            verdict="fail", detail=detail, reasons=tuple(reasons), materials=materials,
+        )
+    return CheckResult(verdict="pass", detail=detail, materials=materials)

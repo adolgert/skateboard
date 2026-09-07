@@ -28,22 +28,29 @@ from __future__ import annotations
 import base64
 import hashlib
 import math
+from dataclasses import replace
 
-from equivalent.ledger.capture_sets import program_arrays, store_program_set
-from equivalent.ledger.store import LedgerStore
+from equivalent.ledger.capture_sets import pack_program_set, program_arrays
 from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import Manifest
-from equivalent.strategy.schema import Strategy
-from equivalent.tree import Tree, attempt_id_for
+from equivalent.tree import attempt_id_for
 
 from .build_replay import build_verdict
+from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError
+from .names import PROGRAM_SET_KEY, TIMING_ROLE
 
-# The manifest role of the program a timing run measures.
-TIMING_ROLE = "timing"
-# What the baseline claim's detail calls the set it stored, and what it
-# says instead when there was nothing to store.
-PROGRAM_SET_KEY = "program_set"
+# The claims a port's timing rests on: what the binary was built with, and
+# the program comparison that says the port is still the same code at this
+# size.
+BUILD_PREDICATE = "build/replay"
+PROGRAM_PREDICATE = "program/regression"
+# Which of the request's subjects a baseline timing is filed against.
+BASELINE_SUBJECT = "baseline_tree"
+# How many timed runs a request that says nothing asks for.
+DEFAULT_REPEATS = 5
+# What the baseline claim's detail says instead when there was nothing
+# to store.
 PROGRAM_SET_ABSENT = "program_set_absent"
 
 
@@ -77,7 +84,7 @@ def _collected(runs: list) -> dict:
 
 
 def _time(builder, attempt_id: str, manifest: Manifest, repeats: int,
-          extra_detail: dict | None = None) -> tuple[dict, dict]:
+          extra_detail: dict | None = None) -> tuple[CheckResult, dict]:
     """The result to file, and the builder's own answer it was made from.
 
     The answer is handed back too because the baseline does one more thing
@@ -96,16 +103,19 @@ def _time(builder, attempt_id: str, manifest: Manifest, repeats: int,
     except Exception as exc:
         raise ComponentError(f"builder /v1/time call failed: {exc}") from exc
     if not resp.get("ok"):
-        return {"verdict": "fail", "detail": {"log_tail": resp.get("log_tail", "")}}, resp
+        return failed(
+            {"log_tail": resp.get("log_tail", "")},
+            ["the timed program did not finish inside its budget, or did not write every "
+             "file the manifest declares"],
+        ), resp
     durations = resp.get("runs_s", [])
     runs = resp.get("outputs", [])
     if (not isinstance(durations, list) or len(durations) != repeats
             or any(type(t) not in (int, float) or not math.isfinite(t) or t <= 0 for t in durations)
             or not isinstance(runs, list) or len(runs) != repeats
             or any(not isinstance(run, dict) or set(timing.outputs) - run.keys() for run in runs)):
-        return {"verdict": "fail", "detail": {
-            "problems": ["timing requires every requested repetition, positive finite durations, and every declared output"],
-        }}, resp
+        problems = ["timing requires every requested repetition, positive finite durations, and every declared output"]
+        return failed({"problems": problems}, problems), resp
     detail = {
         "runs_s": resp["runs_s"],
         "gpu_exclusive": resp.get("gpu_exclusive"),
@@ -118,90 +128,110 @@ def _time(builder, attempt_id: str, manifest: Manifest, repeats: int,
         "executable_identity": resp.get("executable_identity"),
     }
     detail.update(extra_detail or {})
-    return {"verdict": "pass", "detail": detail}, resp
+    return CheckResult(verdict="pass", detail=detail), resp
 
 
-def check_port(store: LedgerStore, tree: Subject, region_id: str, tree_sha: str,
-               manifest: Manifest, builder, repeats: int = 5) -> dict:
+def check_port(ctx: CheckContext, config: dict) -> CheckResult:
     """Time the port and record the flags it was actually built with.
 
-    The flags come from the tree's own build/replay claim -- the builder's
-    record of what it passed to the compiler -- not recomputed from the
-    strategy, so the timing claim describes the binary that really exists.
-    Same read-back pattern as regression_visible using gpu/executed's
-    outputs.
+    The flags come from the tree's own build claim -- the builder's record
+    of what it passed to the compiler -- not recomputed from the strategy,
+    so the timing claim describes the binary that really exists. Same
+    read-back pattern as regression_visible using gpu/executed's outputs.
     """
-    build_claim = store.latest("build/replay", tree)
-    if build_claim is None or build_claim.predicate.verdict != "pass":
-        raise ComponentError("no passing build/replay claim for this tree")
-    flags = build_claim.predicate.detail.get("flags")
-    program_claim = store.latest("program/regression", tree)
-    if program_claim is None or program_claim.predicate.verdict != "pass":
-        raise ComponentError("no passing program/regression claim for this tree")
-    program_set = program_claim.predicate.detail.get("program_set")
+    from . import program_regression
+
+    flags = ctx.claims[BUILD_PREDICATE].predicate.detail.get("flags")
+    program_claim = ctx.claims[PROGRAM_PREDICATE]
+    program_set = program_claim.predicate.detail.get(PROGRAM_SET_KEY)
     if not program_set:
-        raise ComponentError("program/regression claim has no baseline output reference")
-    result, response = _time(
-        builder, attempt_id_for(region_id, tree_sha), manifest, repeats,
-        extra_detail={"flags": flags},
-    )
-    if result["verdict"] == "pass":
-        from . import program_regression
-        bands, policy_sha = program_regression.tolerance_policy(manifest)
-        comparisons = [program_regression.compare_outputs(store, program_set, manifest, run, bands)
-                       for run in response["outputs"]]
-        result["detail"].update(
-            program_set=program_set, policy_sha256=policy_sha,
-            compared_repetitions=len(comparisons), per_run=comparisons,
+        raise ComponentError(
+            f"the passing {PROGRAM_PREDICATE} claim names no baseline output reference"
         )
-        if not all(per_var and all(v["pass"] for v in per_var.values()) for per_var in comparisons):
-            result["verdict"] = "fail"
-    return result
+    result, response = _time(
+        ctx.builder, attempt_id_for(ctx.region_id, ctx.tree.sha), ctx.manifest,
+        int(config.get("repeats", DEFAULT_REPEATS)), extra_detail={"flags": flags},
+    )
+    if result.verdict != "pass":
+        return result
+
+    bands, policy_sha = program_regression.tolerance_policy(ctx.manifest)
+    comparisons = [
+        program_regression.compare_outputs(ctx.sets, program_set, ctx.manifest, run, bands)
+        for run in response["outputs"]
+    ]
+    detail = {
+        **result.detail, PROGRAM_SET_KEY: program_set, "policy_sha256": policy_sha,
+        "compared_repetitions": len(comparisons), "per_run": comparisons,
+    }
+    reasons = [
+        reason for per_var in comparisons for reason in program_regression.comparison_reasons(per_var)
+    ]
+    if all(per_var and all(v["pass"] for v in per_var.values()) for per_var in comparisons):
+        return CheckResult(verdict="pass", detail=detail)
+    return failed(detail, reasons or [
+        "a timed repetition wrote nothing the baseline program's outputs could be "
+        "compared with"
+    ])
 
 
-def check_baseline(
-    store: LedgerStore, repo_dir, region_id: str, baseline_tree_sha: str,
-    manifest: Manifest, baseline_strategy: Strategy, builder, repeats: int = 5,
-) -> dict:
+def check_baseline(ctx: CheckContext, config: dict) -> CheckResult:
     """Build and time the pristine baseline, and keep what its program wrote.
 
-    The files the last run wrote are stored as a capture set of one case
+    The files the last run wrote are packed as a capture set of one case
     named by the files themselves -- `h.npy` becomes the variable `h` --
     and the claim's detail names the set. That set is the reference
     program_regression compares a port's own program run against, so this
     claim is not only a measurement: it is where the reference comes from.
     A code whose manifest declares no timing outputs leaves none, and the
     detail says so rather than being silent about it.
+
+    The claim is filed against the baseline tree, not whatever tree
+    happens to be current for the region.
     """
-    attempt_id = attempt_id_for(f"{region_id}-baseline", baseline_tree_sha)
+    baseline_strategy = ctx.baseline_strategy
+    attempt_id = attempt_id_for(f"{ctx.region_id}-baseline", ctx.baseline.sha)
     build_result = build_verdict(
-        builder, attempt_id, Tree.baseline(repo_dir).payload(), baseline_strategy, manifest,
+        ctx.builder, attempt_id, ctx.baseline.payload(), baseline_strategy, ctx.manifest,
     )
-    if build_result["verdict"] != "pass":
-        return {
-            "verdict": "fail",
-            "detail": {
+    if build_result.verdict != "pass":
+        return CheckResult(
+            verdict="fail",
+            detail={
                 "stage": "build", "strategy": baseline_strategy.name,
-                "build": build_result["detail"],
+                "build": build_result.detail,
             },
-        }
+            reasons=build_result.reasons,
+            subject_kind=BASELINE_SUBJECT,
+        )
     result, resp = _time(
-        builder, attempt_id, manifest, repeats,
+        ctx.builder, attempt_id, ctx.manifest, int(config.get("repeats", DEFAULT_REPEATS)),
         extra_detail={"strategy": baseline_strategy.name,
-                      "flags": build_result["detail"].get("flags"),
-                      "build": build_result["detail"]},
+                      "flags": build_result.detail.get("flags"),
+                      "build": build_result.detail},
     )
-    if result["verdict"] != "pass":
-        return result
-    stored, kept = _stored_program(store, manifest, resp)
-    result["detail"].update(stored)
-    if not kept:
-        result["verdict"] = "fail"
-    return result
+    if result.verdict != "pass":
+        return replace(result, subject_kind=BASELINE_SUBJECT)
+    stored, packed, problems = _packed_program(ctx.manifest, resp)
+    detail = {**result.detail, **stored}
+    # The program set this run stores is what a port's own program run is
+    # compared against, so it is a formal material rather than a note in
+    # the detail.
+    materials = (
+        (Subject(kind="capture_set", sha256=packed.sha256),) if packed is not None else ()
+    )
+    return CheckResult(
+        verdict="fail" if problems else "pass",
+        detail=detail,
+        reasons=tuple(problems),
+        materials=materials,
+        stores=() if packed is None else (packed,),
+        subject_kind=BASELINE_SUBJECT,
+    )
 
 
-def _stored_program(store: LedgerStore, manifest: Manifest, resp: dict) -> tuple[dict, bool]:
-    """What this run leaves as a reference, and whether the run is still a pass.
+def _packed_program(manifest: Manifest, resp: dict) -> tuple[dict, object, list]:
+    """What this run leaves as a reference, the set itself, and what is wrong.
 
     A code that declares no timing outputs leaves no reference and is
     still a measurement. A code whose declared outputs are not arrays is
@@ -217,9 +247,11 @@ def _stored_program(store: LedgerStore, manifest: Manifest, resp: dict) -> tuple
             PROGRAM_SET_ABSENT: "the manifest declares no timing outputs, so this run "
                                 "left nothing a port's own program run could be "
                                 "compared against",
-        }, True
+        }, None, []
     runs = resp.get("outputs", [])
     arrays, unreadable = program_arrays(runs[-1] if runs else {}, declared)
     if unreadable:
-        return {PROGRAM_SET_KEY: None, "problems": sorted(unreadable.values())}, False
-    return {PROGRAM_SET_KEY: store_program_set(store, arrays).sha256}, True
+        problems = sorted(unreadable.values())
+        return {PROGRAM_SET_KEY: None, "problems": problems}, None, problems
+    packed = pack_program_set(arrays)
+    return {PROGRAM_SET_KEY: packed.sha256}, packed, []

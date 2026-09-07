@@ -29,6 +29,7 @@ import random
 from equivalent.manifest.schema import Manifest
 from equivalent.tree import attempt_id_for
 
+from .context import CheckContext, CheckResult
 from .errors import ComponentError
 
 # How many examples each property draws when a request does not say. Large
@@ -56,7 +57,7 @@ def properties_module(manifest: Manifest) -> str:
 
 
 def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
-               *, seed=None, max_examples: int = DEFAULT_MAX_EXAMPLES) -> dict:
+               *, seed=None, max_examples: int = DEFAULT_MAX_EXAMPLES) -> CheckResult:
     """One property run and the verdict it becomes, wherever it was asked for.
 
     The same call and the same detail serve both the check a port faces
@@ -65,8 +66,7 @@ def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
     the caller's to name. A seed of None is drawn here and written into
     the detail, because a search nobody can repeat is not evidence.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}. Raises
-    ComponentError if the builder could not be reached.
+    Raises ComponentError if the builder could not be reached.
     """
     if isinstance(max_examples, bool):
         raise ComponentError("property max_examples must be a positive integer")
@@ -165,28 +165,40 @@ def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
         detail["executable_identity"] = resp["executable_identity"]
     if problems:
         detail["problems"] = problems
-    return {"verdict": "pass" if not problems and successful else "fail", "detail": detail}
+        return CheckResult(verdict="fail", detail=detail, reasons=tuple(problems))
+    if not successful:
+        return CheckResult(
+            verdict="fail", detail=detail,
+            reasons=("the property run did not pass every test it collected",),
+        )
+    return CheckResult(verdict="pass", detail=detail)
 
 
-def check(region_id: str, tree_sha: str, manifest: Manifest, visible_cases: dict, builder,
-          *, seed=None, max_examples: int = DEFAULT_MAX_EXAMPLES) -> dict:
+def check(ctx: CheckContext, config: dict) -> CheckResult:
     """Run the code's properties on the submitted tree, and say what happened.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}. Raises
-    ComponentError when there is nothing to run -- a code that declares no
-    properties module, or a region with no visible dataset to draw a
-    corpus from -- because neither is a statement about whether this port
-    is correct.
+    A seed the request names is the same search again, and the gateway's
+    config hash carries it, so a repeat at that seed comes back as the
+    claim already filed. A request that names none has one drawn in the
+    run and written into the claim.
+
+    Raises ComponentError when there is nothing to run -- a code that
+    declares no properties module, or a region with no visible dataset to
+    draw a corpus from -- because neither is a statement about whether
+    this port is correct.
     """
+    manifest = ctx.manifest
     if manifest.properties is None:
         raise ComponentError(
             f"code '{manifest.name}' declares no properties module, so there are no "
             f"invariants to run against this port"
         )
+    visible_cases = ctx.visible_cases
     if not visible_cases:
         raise ComponentError("no visible dataset configured for this region")
 
     return run_module(
-        builder, attempt_id_for(region_id, tree_sha), manifest, visible_cases,
-        seed=seed, max_examples=max_examples,
+        ctx.builder, attempt_id_for(ctx.region_id, ctx.tree.sha), manifest, visible_cases,
+        seed=config.get("seed"),
+        max_examples=config.get("max_examples", DEFAULT_MAX_EXAMPLES),
     )

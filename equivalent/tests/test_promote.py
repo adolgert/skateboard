@@ -14,7 +14,7 @@ import yaml
 from equivalent.capture import npy
 from equivalent.cli.main import main
 from equivalent.ledger.acceptance import requirements_for
-from equivalent.ledger.capture_sets import store_capture_set
+
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
@@ -24,6 +24,7 @@ from equivalent.region.evidence import evidence_materials_for
 from equivalent.tree import Tree, baseline_commit, init_baseline_repo
 from equivalent.tests.fakes import (
     fixture_arrays,
+    keep_capture_set,
     in_tree_manifest,
     stepped,
     timing_array,
@@ -120,9 +121,9 @@ def _deployment(tmp_path, *, manifest_text=None, omit: str = "", phase: str = "o
 
     store = LedgerStore(tmp_path / "ledger" / baseline_commit(repo) / REGION_SLUG)
     tree = Subject(kind="tree", sha256=Tree.baseline(repo).sha)
-    visible = store_capture_set(store, "visible", _cases(0)).sha256
-    holdout = store_capture_set(store, "holdout", _cases(50)).sha256
-    program = store_capture_set(store, "program", _program_case()).sha256
+    visible = keep_capture_set(store, "visible", _cases(0))
+    holdout = keep_capture_set(store, "holdout", _cases(50))
+    program = keep_capture_set(store, "program", _program_case())
     _write_claims(store, tree, {
         CAPTURED: {"datasets": {
             "visible": {"cases": 1, "capture_set": visible},

@@ -14,10 +14,7 @@ import pytest
 import yaml
 
 from equivalent.components import original_check
-from equivalent.tree import init_baseline_repo
 from equivalent.tree import attempt_id_for_strategy
-from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject
 from equivalent.strategy.schema import Language, load_strategy
 from equivalent.tests.fakes import in_tree_manifest, write_tree
 
@@ -52,7 +49,8 @@ class FixtureRunner:
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="requires a host gfortran compiler")
 @pytest.mark.parametrize("wrong", [False, True], ids=["unchanged-program", "wrong-grid-spacing"])
-def test_actual_fortran_original_and_onboarded_program(tmp_path, wrong):
+def test_actual_fortran_original_and_onboarded_program(harness, wrong):
+    tmp_path = harness.tmp_path
     original = tmp_path / "original"
     original.mkdir()
     source = FIXTURE.read_bytes()
@@ -72,13 +70,15 @@ def test_actual_fortran_original_and_onboarded_program(tmp_path, wrong):
                        languages={"fortran": Language("gfortran", ("-O0", "-fcheck=all"))})
     builder = FixtureRunner(tmp_path / "jobs")
     candidate = source.replace(b"/dy**2", b"/dx**2") if wrong else source
-    attempt = attempt_id_for_strategy("heat:onboard", "a" * 64, strategy.name)
+    harness.repo(write_tree(tmp_path / "seed", in_tree_manifest()))
+    attempt = attempt_id_for_strategy("heat:onboard", harness.tree.sha, strategy.name)
     builder.build(attempt, [{"path": "heat.f90", "b64": base64.b64encode(candidate).decode()}],
                   "Makefile", [{"executable": "whole_program"}], "gfortran", ["-O0", "-fcheck=all"], [], ["*.f90"])
-    repo = tmp_path / "repo"
-    init_baseline_repo(repo, write_tree(tmp_path / "seed", in_tree_manifest()))
-    result = original_check.check(LedgerStore(tmp_path / "ledger"), Subject("tree", "a" * 64),
-                                  repo, "main", "heat:onboard", "a" * 64, strategy, builder, contract)
-    assert result["verdict"] == ("fail" if wrong else "pass")
-    assert len(result["detail"]["runs"]) == 2
-    assert all(run["pass"] is (not wrong) for run in result["detail"]["runs"])
+    result = original_check.check(
+        harness.context(region_id="heat:onboard", baseline_strategy=strategy, builder=builder,
+                        original_reference_path=contract),
+        {},
+    )
+    assert result.verdict == ("fail" if wrong else "pass")
+    assert len(result.detail["runs"]) == 2
+    assert all(run["pass"] is (not wrong) for run in result.detail["runs"])

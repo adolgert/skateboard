@@ -143,7 +143,6 @@ def _open_region(parser: argparse.ArgumentParser, args):
     _, cfg = _named_region(parser, args.config, args.region_id)
     store = LedgerStore(cfg.ledger_dir)
     materials = evidence_materials_for(cfg)
-    store.activate_context(materials)
     tree_sha, frozen_sha = current_tree_and_frozen(
         cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase,
         load_strategy(cfg.strategy_path),

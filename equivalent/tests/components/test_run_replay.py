@@ -1,5 +1,4 @@
 import base64
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -12,101 +11,102 @@ from equivalent.capture import npy
 from equivalent.components import run_replay
 from equivalent.components.errors import ComponentError
 from equivalent.manifest.schema import load_manifest
-from equivalent.strategy.schema import load_strategy
-from equivalent.tests.fakes import FakeBuilder, fixture_case, write_program
-
-STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
-CASES = {"case0000": fixture_case()}
+from equivalent.tests.components.conftest import PORT_STRATEGY, strategy as strategy_named
+from equivalent.tests.fakes import fixture_case, write_program
 
 
 @pytest.fixture
-def manifest(tmp_path):
-    """The fixture code's own description of what its region reads and writes."""
-    return load_manifest(write_program(tmp_path) / "manifest.yaml")
+def region(harness):
+    """A porting region of the fixture code, with its visible case on disk."""
+    code = write_program(harness.tmp_path)
+    harness.repo()
+    harness.manifest = load_manifest(code / "manifest.yaml")
+    harness.visible = code / "datasets" / "visible"
+    return harness
 
 
-def test_pass_with_kernels_launched(manifest):
-    strategy = load_strategy(STRATEGY_PATH)
-    builder = FakeBuilder()
+def _check(region, *, visible=True):
+    return run_replay.check(
+        region.context(
+            region_id="ch04:step", phase="porting",
+            strategy=strategy_named(PORT_STRATEGY), manifest=region.manifest,
+            visible_dataset=region.visible if visible else None,
+        ),
+        {},
+    )
 
-    result = run_replay.check("ch04:step", "tree123", strategy, manifest, CASES, builder)
 
-    assert result["verdict"] == "pass"
-    assert result["detail"]["kernels_launched"] == 4
-    assert "case0000" in result["detail"]["outputs"]
+def test_pass_with_kernels_launched(region):
+    result = _check(region)
+
+    assert result.verdict == "pass"
+    assert result.detail["kernels_launched"] == 4
+    assert "case0000" in result.detail["outputs"]
 
 
-def test_fail_when_no_kernels_launched_even_though_the_run_succeeded(manifest):
-    strategy = load_strategy(STRATEGY_PATH)
-    builder = FakeBuilder()
+def test_fail_when_no_kernels_launched_even_though_the_run_succeeded(region):
+    builder = region.builder
     builder.run_kernels = 0
 
-    result = run_replay.check("ch04:step", "tree123", strategy, manifest, CASES, builder)
+    result = _check(region)
 
-    assert result["verdict"] == "fail"
-    assert result["detail"]["kernels_launched"] == 0
+    assert result.verdict == "fail"
+    assert result.detail["kernels_launched"] == 0
 
 
-def test_fail_when_the_builder_run_itself_fails(manifest):
-    strategy = load_strategy(STRATEGY_PATH)
-    builder = FakeBuilder()
+def test_fail_when_the_builder_run_itself_fails(region):
+    builder = region.builder
     builder.run_ok = False
 
-    result = run_replay.check("ch04:step", "tree123", strategy, manifest, CASES, builder)
+    result = _check(region)
 
-    assert result["verdict"] == "fail"
+    assert result.verdict == "fail"
 
 
-def test_raises_component_error_with_no_visible_dataset(manifest):
-    strategy = load_strategy(STRATEGY_PATH)
-    builder = FakeBuilder()
-
+def test_raises_component_error_with_no_visible_dataset(region):
     with pytest.raises(ComponentError):
-        run_replay.check("ch04:step", "tree123", strategy, manifest, {}, builder)
+        _check(region, visible=False)
 
 
-def test_fail_when_the_replay_wrote_no_output_for_a_declared_variable(manifest):
+def test_fail_when_the_replay_wrote_no_output_for_a_declared_variable(region):
     # The builder returns whatever files the driver wrote and knows no
     # better; a driver that dropped a variable has to be caught here.
-    strategy = load_strategy(STRATEGY_PATH)
-    builder = FakeBuilder()
-    absent = manifest.interface.outputs[0].name
+    builder = region.builder
+    absent = region.manifest.interface.outputs[0].name
     builder.run_outputs = {k: v for k, v in fixture_case().items() if k != absent}
 
-    result = run_replay.check("ch04:step", "tree123", strategy, manifest, CASES, builder)
+    result = _check(region)
 
-    assert result["verdict"] == "fail"
-    assert absent in str(result["detail"]["outputs_rejected"])
+    assert result.verdict == "fail"
+    assert absent in str(result.detail["outputs_rejected"])
 
 
-def test_fail_when_an_output_came_back_as_the_wrong_element_type(manifest):
-    strategy = load_strategy(STRATEGY_PATH)
-    builder = FakeBuilder()
-    wrong = manifest.interface.outputs[0]
+def test_fail_when_an_output_came_back_as_the_wrong_element_type(region):
+    builder = region.builder
+    wrong = region.manifest.interface.outputs[0]
     builder.run_outputs = {
         **fixture_case(),
         wrong.name: base64.b64encode(npy.encode(np.zeros(4, dtype="<i4"))).decode(),
     }
 
-    result = run_replay.check("ch04:step", "tree123", strategy, manifest, CASES, builder)
+    result = _check(region)
 
-    assert result["verdict"] == "fail"
-    assert wrong.name in str(result["detail"]["outputs_rejected"])
+    assert result.verdict == "fail"
+    assert wrong.name in str(result.detail["outputs_rejected"])
 
 
-def test_an_output_nobody_declared_does_not_fail_the_run(manifest):
+def test_an_output_nobody_declared_does_not_fail_the_run(region):
     # The oracle reports these; a driver leaving a scratch array beside its
     # outputs is not a reason to say the region did not run.
-    strategy = load_strategy(STRATEGY_PATH)
-    builder = FakeBuilder()
+    builder = region.builder
     builder.run_outputs = {
         **fixture_case(),
         "scratch": base64.b64encode(npy.encode(np.zeros(2, dtype="<f4"))).decode(),
     }
 
-    result = run_replay.check("ch04:step", "tree123", strategy, manifest, CASES, builder)
+    result = _check(region)
 
-    assert result["verdict"] == "pass"
+    assert result.verdict == "pass"
 
 
 # Two real lines the NVIDIA runtime prints under NVCOMPILER_ACC_NOTIFY=1:
@@ -146,13 +146,12 @@ def test_nothing_is_counted_for_a_strategy_that_asks_for_no_notify_output():
     assert kernel_launches(ACC_LINE, None) == (0, [])
 
 
-def test_the_lines_that_matched_are_recorded_in_the_claim(manifest):
+def test_the_lines_that_matched_are_recorded_in_the_claim(region):
     # The claim says which source lines launched kernels, not just how
     # many launches there were, so a reviewer can check the count against
     # the region's own code.
-    strategy = load_strategy(STRATEGY_PATH)
-    builder = FakeBuilder()
+    builder = region.builder
 
-    result = run_replay.check("ch04:step", "tree123", strategy, manifest, CASES, builder)
+    result = _check(region)
 
-    assert result["detail"]["launches"] == builder.run_launches
+    assert result.detail["launches"] == builder.run_launches

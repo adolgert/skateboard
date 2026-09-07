@@ -1,6 +1,5 @@
 import json
 
-import pytest
 
 from equivalent.ledger.acceptance import (
     ACCEPTANCE_REQUIREMENTS,

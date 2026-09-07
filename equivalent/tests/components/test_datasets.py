@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from equivalent.capture import npy
-from equivalent.gateway.datasets import load_visible_cases
+from equivalent.components.datasets import load_visible_cases
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.fakes import VISIBLE_CASE, fixture_arrays, write_program
 

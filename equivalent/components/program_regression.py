@@ -14,10 +14,9 @@ What it compares against is the capture set the deployment's own
 `time_baseline` run stored: the reference is a run of this deployment's
 baseline, not a file checked in beside the code, because a real timing
 size writes megabytes per run. That claim is filed against the baseline
-tree, and the precondition table can only require a claim on the subject
-the action is about -- the port's tree -- so the requirement that the
-baseline has been timed is checked here, in the component, and reported
-as an error telling the session to run `time_baseline` first.
+tree, so the precondition table names it against that subject and the
+gateway refuses the request, naming `time_baseline`, when it is not
+there.
 
 The comparison is the harness's one comparator (equivalent/capture/
 compare.py, which the oracle also uses), under the code's own tolerance
@@ -37,28 +36,23 @@ from equivalent.capture import compare
 from equivalent.tree import attempt_id_for
 from equivalent.ledger.capture_sets import (
     PROGRAM_SET,
-    load_capture_set,
     program_arrays,
     program_variable,
 )
-from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import Manifest
 
+from .context import CheckContext, CheckResult
 from .errors import ComponentError
+# The band consulted here is the one per file the timing run writes. The
+# region's own bands live beside it under `variables` and are not these:
+# they band one call of the region, where a whole-program run accumulates
+# the difference between two compilations over every step it takes.
+from .names import FILE_BANDS, PROGRAM_SET_KEY
 from .timing import timing_target
 
-# Where the tolerance policy keeps a band per file the timing run writes,
-# keyed by the path the manifest declares. The region's own bands live
-# beside it under `variables` and are not these: they band one call of
-# the region, where a whole-program run accumulates the difference
-# between two compilations over every step it takes.
-FILE_BANDS = "files"
-
-# The claim that leaves a reference behind, and what its detail calls the
-# set it stored.
+# The claim that leaves a reference behind.
 BASELINE_PREDICATE = "timing/baseline"
-PROGRAM_SET_KEY = "program_set"
 # The action that files it, named in the error when there is none.
 BASELINE_ACTION = "time_baseline"
 
@@ -88,22 +82,27 @@ def tolerance_policy(manifest: Manifest) -> tuple[dict, str]:
     return bands, hashlib.sha256(data).hexdigest()
 
 
-def reference_set(store: LedgerStore, baseline_tree: Subject) -> str:
-    """The program capture set the latest passing baseline timing left behind."""
-    claim = store.latest(BASELINE_PREDICATE, baseline_tree)
-    if (claim is None or claim.predicate.verdict != "pass"
-            or not claim.predicate.detail.get(PROGRAM_SET_KEY)):
+def reference_set(ctx: CheckContext) -> str:
+    """The program capture set the passing baseline timing left behind.
+
+    The claim itself is a precondition of this action, so it is here; what
+    it may still not have is a set, which is what a code that declares no
+    timing outputs leaves. There is then nothing to compare against, and
+    saying so is not a verdict about the port.
+    """
+    detail = ctx.claims[BASELINE_PREDICATE].predicate.detail
+    if not detail.get(PROGRAM_SET_KEY):
         raise ComponentError(
-            f"the baseline tree {baseline_tree.sha256} has no passing "
-            f"{BASELINE_PREDICATE} claim that stored the program's outputs, so there is "
-            f"nothing to compare this port's program against; run {BASELINE_ACTION} first"
+            f"the passing {BASELINE_PREDICATE} claim stored no program outputs, so there "
+            f"is nothing to compare this port's program against; the baseline run of "
+            f"{BASELINE_ACTION} left none"
         )
-    return claim.predicate.detail[PROGRAM_SET_KEY]
+    return detail[PROGRAM_SET_KEY]
 
 
-def _reference_outputs(store: LedgerStore, sha256: str) -> dict:
+def _reference_outputs(sets, sha256: str) -> dict:
     try:
-        return load_capture_set(store, sha256)[PROGRAM_SET]["outputs"]
+        return sets.load(sha256)[PROGRAM_SET]["outputs"]
     except (FileNotFoundError, KeyError) as exc:
         raise ComponentError(
             f"the program capture set {sha256} a baseline timing claim names is not in "
@@ -131,9 +130,9 @@ def _compare_one(path: str, name: str, reference, written: dict, bands: dict) ->
     return compare.compare_variable(reference, written[name], band)
 
 
-def compare_outputs(store, program_set, manifest, encoded_outputs, bands):
+def compare_outputs(sets, program_set, manifest, encoded_outputs, bands):
     """Compare one measured repetition with the reviewed baseline outputs."""
-    reference = _reference_outputs(store, program_set)
+    reference = _reference_outputs(sets, program_set)
     written, unreadable = program_arrays(
         encoded_outputs, [path for path in manifest.timing.outputs if path in encoded_outputs],
     )
@@ -149,26 +148,37 @@ def compare_outputs(store, program_set, manifest, encoded_outputs, bands):
     return per_var
 
 
-def check(store: LedgerStore, baseline_tree: Subject, region_id: str, tree_sha: str,
-          manifest: Manifest, builder) -> dict:
+def comparison_reasons(per_var: dict) -> list:
+    """Why a comparison failed, one line per output that did not match."""
+    return [
+        f"the timing run's '{name}': {entry.get('error', 'is not the baseline program\'s')}"
+        for name, entry in sorted(per_var.items()) if not entry["pass"]
+    ]
+
+
+def check(ctx: CheckContext, config: dict) -> CheckResult:
     """Run the port's own program and compare its files with the baseline's.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}: the per-output
-    comparison, what the run cost, and the two things the verdict rests on
-    -- the tolerance policy and the baseline's program capture set --
-    which the caller files as the claim's materials. Raises ComponentError
-    when the baseline has not been timed, when the set it named is gone,
-    or when the builder could not be reached.
+    The detail holds the per-output comparison, what the run cost, and the
+    two things the verdict rests on -- the tolerance policy and the
+    baseline's program capture set -- which come back as the claim's
+    materials. Raises ComponentError when the set the baseline named is
+    gone, or when the builder could not be reached.
     """
+    manifest = ctx.manifest
     target = timing_target(manifest)
     timing = manifest.timing
     bands, policy_sha256 = tolerance_policy(manifest)
-    program_set = reference_set(store, baseline_tree)
+    program_set = reference_set(ctx)
     rests_on = {"policy_sha256": policy_sha256, PROGRAM_SET_KEY: program_set}
+    materials = (
+        Subject(kind="policy", sha256=policy_sha256),
+        Subject(kind="capture_set", sha256=program_set),
+    )
 
     try:
-        resp = builder.time(
-            attempt_id_for(region_id, tree_sha), target.executable, list(timing.args),
+        resp = ctx.builder.time(
+            attempt_id_for(ctx.region_id, ctx.tree.sha), target.executable, list(timing.args),
             dict(timing.env), list(timing.outputs), REPEATS, timing.budget_s,
         )
     except Exception as exc:
@@ -176,19 +186,24 @@ def check(store: LedgerStore, baseline_tree: Subject, region_id: str, tree_sha: 
     if not resp.get("ok"):
         # An exceeded budget and a declared file the program never wrote
         # both arrive this way, and the builder's own words say which.
-        return {
-            "verdict": "fail",
-            "detail": {**rests_on, "log_tail": resp.get("log_tail", "")},
-        }
+        return CheckResult(
+            verdict="fail",
+            detail={**rests_on, "log_tail": resp.get("log_tail", "")},
+            reasons=("the program did not finish inside its budget, or did not write "
+                     "every file the manifest declares",),
+            materials=materials,
+        )
 
     runs = resp.get("outputs", [])
     last_run = runs[-1] if runs else {}
-    per_var = compare_outputs(store, program_set, manifest, last_run, bands)
+    per_var = compare_outputs(ctx.sets, program_set, manifest, last_run, bands)
 
-    return {
-        "verdict": "pass" if all(entry["pass"] for entry in per_var.values()) else "fail",
-        "detail": {
-            **rests_on, "per_var": per_var, "runs_s": resp.get("runs_s", []),
-            "executable_identity": resp.get("executable_identity"),
-        },
+    detail = {
+        **rests_on, "per_var": per_var, "runs_s": resp.get("runs_s", []),
+        "executable_identity": resp.get("executable_identity"),
     }
+    if all(entry["pass"] for entry in per_var.values()):
+        return CheckResult(verdict="pass", detail=detail, materials=materials)
+    return CheckResult(
+        verdict="fail", detail=detail, reasons=tuple(comparison_reasons(per_var)), materials=materials,
+    )

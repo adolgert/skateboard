@@ -11,77 +11,39 @@ person to read.
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 
 import pytest
 
-from equivalent.components import harness_capture, harness_self_check
+from equivalent.components import harness_self_check
 from equivalent.components.errors import ComponentError
-from equivalent.tree import init_baseline_repo
 from equivalent.tree import attempt_id_for_strategy
-from equivalent.ledger.records import Predicate
-from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject
-from equivalent.strategy.schema import load_strategy
-from equivalent.tests.fakes import (
-    TOLERANCES_IN_TREE,
-    FakeBuilder,
-    mutant_row,
-    write_tree,
-)
+from equivalent.tests.fakes import TOLERANCES_IN_TREE, FakeBuilder, mutant_row
 
-STRATEGY_DIR = Path(__file__).resolve().parents[2] / "strategy" / "files"
 REGION = "tsunami:onboarding"
-TREE_SHA = "a" * 64
-TREE = Subject(kind="tree", sha256=TREE_SHA)
 
 
-def _baseline_strategy():
-    return load_strategy(STRATEGY_DIR / "cpu_reference.yaml")
+def _check(harness, builder, **config):
+    """The self-check on a tree whose capture has already passed."""
+    harness.captured()
+    return harness_self_check.check(harness.context(region_id=REGION, builder=builder), config)
 
 
-def _captured(tmp_path):
-    """A region whose tree has captured, so there is a visible set to score against."""
-    repo = tmp_path / "repo"
-    seed = write_tree(tmp_path / "seed")
-    init_baseline_repo(repo, seed)
-    store = LedgerStore(tmp_path / "ledger")
-    result = harness_capture.check(
-        store, repo, "main", REGION, TREE_SHA, _baseline_strategy(), FakeBuilder(),
-    )
-    assert result["verdict"] == "pass"
-    store.record_claim(
-        [TREE], "harness/captured",
-        Predicate(tool="builder", version="0.1", configHash="cfg",
-                  verdict=result["verdict"], detail=result["detail"]),
-        [], "sess-1",
-    )
-    return repo, store, seed
+def test_a_harness_that_kills_a_mutant_and_hides_none_passes(harness):
+    builder = harness.builder
+
+    result = _check(harness, builder)
+
+    assert result.verdict == "pass"
+    assert result.detail["counts"]["KILLED"] == 1
+    assert result.detail["gap"] == []
 
 
-def _check(tmp_path, builder, **kwargs):
-    repo, store, _ = _captured(tmp_path)
-    return harness_self_check.check(
-        store, TREE, repo, "main", REGION, TREE_SHA, _baseline_strategy(), builder, **kwargs,
-    )
+def test_a_pass_lists_the_survivors_for_the_person_to_read(harness):
+    builder = harness.builder
 
+    result = _check(harness, builder)
 
-def test_a_harness_that_kills_a_mutant_and_hides_none_passes(tmp_path):
-    builder = FakeBuilder()
-
-    result = _check(tmp_path, builder)
-
-    assert result["verdict"] == "pass"
-    assert result["detail"]["counts"]["KILLED"] == 1
-    assert result["detail"]["gap"] == []
-
-
-def test_a_pass_lists_the_survivors_for_the_person_to_read(tmp_path):
-    builder = FakeBuilder()
-
-    result = _check(tmp_path, builder)
-
-    survivors = result["detail"]["survivors"]
+    survivors = result.detail["survivors"]
     assert [row["id"] for row in survivors] == ["m-0002"]
     # Enough to open the file at that line and decide which kind of
     # survivor it is; nothing here can tell them apart.
@@ -90,55 +52,55 @@ def test_a_pass_lists_the_survivors_for_the_person_to_read(tmp_path):
     assert survivors[0]["mutated"].strip()
 
 
-def test_a_mutant_the_bands_let_through_fails_and_is_named(tmp_path):
-    builder = FakeBuilder()
+def test_a_mutant_the_bands_let_through_fails_and_is_named(harness):
+    builder = harness.builder
     builder.mutate_results = [
         mutant_row("m-0001", "KILLED"),
         mutant_row("m-0007", "GAP", line=19, op="CRP", note="case 'case0000': changed within the band: h"),
     ]
 
-    result = _check(tmp_path, builder)
+    result = _check(harness, builder)
 
-    assert result["verdict"] == "fail"
-    gap = result["detail"]["gap"]
+    assert result.verdict == "fail"
+    gap = result.detail["gap"]
     assert [row["id"] for row in gap] == ["m-0007"]
     assert gap[0]["line"] == 19
     assert gap[0]["op"] == "CRP"
     assert gap[0]["mutated"].strip()
-    assert any("tolerance" in problem for problem in result["detail"]["problems"])
+    assert any("tolerance" in problem for problem in result.detail["problems"])
 
 
-def test_a_harness_that_kills_nothing_fails(tmp_path):
+def test_a_harness_that_kills_nothing_fails(harness):
     # Every mutant survives: the region's answers can be changed and no
     # comparison this harness makes would say so.
-    builder = FakeBuilder()
+    builder = harness.builder
     builder.mutate_results = [
         mutant_row("m-0001", "EQUIVALENT"),
         mutant_row("m-0002", "EQUIVALENT"),
     ]
 
-    result = _check(tmp_path, builder)
+    result = _check(harness, builder)
 
-    assert result["verdict"] == "fail"
-    assert any("killed" in problem for problem in result["detail"]["problems"])
+    assert result.verdict == "fail"
+    assert any("killed" in problem for problem in result.detail["problems"])
 
 
-def test_a_region_no_mutant_could_be_made_of_fails(tmp_path):
-    builder = FakeBuilder()
+def test_a_region_no_mutant_could_be_made_of_fails(harness):
+    builder = harness.builder
     builder.mutate_results = []
     builder.generated = 0
 
-    result = _check(tmp_path, builder)
+    result = _check(harness, builder)
 
-    assert result["verdict"] == "fail"
-    assert result["detail"]["generated"] == 0
-    assert any("no mutant" in problem for problem in result["detail"]["problems"])
+    assert result.verdict == "fail"
+    assert result.detail["generated"] == 0
+    assert any("no mutant" in problem for problem in result.detail["problems"])
 
 
-def test_the_builder_is_asked_for_the_regions_files_under_the_baseline_strategy(tmp_path):
-    builder = FakeBuilder()
+def test_the_builder_is_asked_for_the_regions_files_under_the_baseline_strategy(harness):
+    builder = harness.builder
 
-    _check(tmp_path, builder)
+    _check(harness, builder)
 
     call = builder.mutate_calls[0]
     assert call["files"] == ["src/mod_kernel.f90"]
@@ -148,7 +110,7 @@ def test_the_builder_is_asked_for_the_regions_files_under_the_baseline_strategy(
     # so the mutants are built the way the baseline is built.
     assert call["compiler"] == "nvfortran"
     assert call["flags"] == ["-O2", "-stdpar=multicore"]
-    assert call["attempt_id"] == attempt_id_for_strategy(REGION, TREE_SHA, "cpu_reference")
+    assert call["attempt_id"] == attempt_id_for_strategy(REGION, harness.tree.sha, "cpu_reference")
     # The visible capture set, in and out: the inputs to replay and the
     # answers to score against.
     assert sorted(call["cases"]) == ["case0000", "case0001"]
@@ -157,63 +119,58 @@ def test_the_builder_is_asked_for_the_regions_files_under_the_baseline_strategy(
     assert sorted(call["bands"]) == ["field", "flux"]
 
 
-def test_a_limit_the_caller_names_reaches_the_builder(tmp_path):
-    builder = FakeBuilder()
+def test_a_limit_the_caller_names_reaches_the_builder(harness):
+    builder = harness.builder
     builder.generated = 90
 
-    result = _check(tmp_path, builder, limit=2)
+    result = _check(harness, builder, limit=2)
 
     assert builder.mutate_calls[0]["limit"] == 2
     # And the claim says how many there were, not only how many were run.
-    assert result["detail"]["generated"] == 90
-    assert result["detail"]["scored"] == 2
-    assert result["verdict"] == "fail"
-    assert any("not all generated mutants" in p for p in result["detail"]["problems"])
+    assert result.detail["generated"] == 90
+    assert result.detail["scored"] == 2
+    assert result.verdict == "fail"
+    assert any("not all generated mutants" in p for p in result.detail["problems"])
 
 
 @pytest.mark.parametrize("status", ["SKIPPED", "PENDING", "RUNTIME_FAIL"])
-def test_an_incomplete_mutant_prevents_an_adequacy_pass(tmp_path, status):
-    builder = FakeBuilder()
+def test_an_incomplete_mutant_prevents_an_adequacy_pass(harness, status):
+    builder = harness.builder
     builder.mutate_results = [
         mutant_row("m-0001", "KILLED"),
         mutant_row("m-0002", status),
     ]
 
-    result = _check(tmp_path, builder)
+    result = _check(harness, builder)
 
-    assert result["verdict"] == "fail"
-    assert result["detail"]["incomplete"][0]["id"] == "m-0002"
+    assert result.verdict == "fail"
+    assert result.detail["incomplete"][0]["id"] == "m-0002"
 
 
-def test_malformed_or_inconsistent_mutation_counts_fail_closed(tmp_path):
+def test_malformed_or_inconsistent_mutation_counts_fail_closed(harness):
     class Inconsistent(FakeBuilder):
         def mutate(self, *args, **kwargs):
             response = super().mutate(*args, **kwargs)
             response["scored"] = 99
             return response
 
-    result = _check(tmp_path, Inconsistent())
+    result = _check(harness, Inconsistent())
 
-    assert result["verdict"] == "fail"
-    assert any("inconsistent" in p for p in result["detail"]["problems"])
+    assert result.verdict == "fail"
+    assert any("inconsistent" in p for p in result.detail["problems"])
 
 
-def test_the_verdict_names_the_capture_set_and_the_policy_it_rests_on(tmp_path):
-    repo, store, seed = _captured(tmp_path)
-    builder = FakeBuilder()
+def test_the_verdict_names_the_capture_set_and_the_policy_it_rests_on(harness):
+    result = _check(harness, harness.builder)
 
-    result = harness_self_check.check(
-        store, TREE, repo, "main", REGION, TREE_SHA, _baseline_strategy(), builder,
-    )
-
-    policy = (seed / TOLERANCES_IN_TREE).read_bytes()
-    assert result["detail"]["policy_sha256"] == hashlib.sha256(policy).hexdigest()
-    visible = result["detail"]["datasets"]["visible"]
+    policy = (harness.tmp_path / "seed" / TOLERANCES_IN_TREE).read_bytes()
+    assert result.detail["policy_sha256"] == hashlib.sha256(policy).hexdigest()
+    visible = result.detail["datasets"]["visible"]
     assert visible["cases"] == 2
     assert len(visible["capture_set"]) == 64
 
 
-def test_a_builder_that_could_not_run_the_mutation_is_an_error_not_a_verdict(tmp_path):
+def test_a_builder_that_could_not_run_the_mutation_is_an_error_not_a_verdict(harness):
     class Refusing(FakeBuilder):
         def mutate(self, *args, **kwargs):
             return {"ok": False, "stage": "mutate", "generated": 0, "scored": 0,
@@ -221,6 +178,6 @@ def test_a_builder_that_could_not_run_the_mutation_is_an_error_not_a_verdict(tmp
                     "log_tail": "there is no built tree for attempt 'x'"}
 
     with pytest.raises(ComponentError) as excinfo:
-        _check(tmp_path, Refusing())
+        _check(harness, Refusing())
 
     assert "no built tree" in str(excinfo.value)

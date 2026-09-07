@@ -77,6 +77,10 @@
       [
         "sanitize/initcheck",
         "tree"
+      ],
+      [
+        "gpu/executed",
+        "tree"
       ]
     ],
     "deterministic": true,
@@ -141,6 +145,10 @@
       [
         "regression/holdout",
         "tree"
+      ],
+      [
+        "timing/baseline",
+        "baseline_tree"
       ]
     ],
     "deterministic": true,

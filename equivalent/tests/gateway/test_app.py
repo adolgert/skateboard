@@ -4,12 +4,12 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from equivalent.gateway.app import create_app
-from equivalent.region.config import RegionConfig
 from equivalent.tree import init_baseline_repo
 from equivalent.ledger.acceptance import ONBOARDING, PORTING, requirements_for
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
+from equivalent.tests.gateway.conftest import region_config
 from equivalent.tests.fakes import FakeBuilder, write_program
 
 TOKEN = "test-token"
@@ -29,22 +29,14 @@ def _region(tmp_path, region_id="ch04:step", phase=PORTING):
     init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
     working = tmp_path / "working"
     working.mkdir()
-    cfg = RegionConfig(
-        region_id=region_id,
-        code="tsunami",
-        phase=phase,
-        repo_dir=repo_dir,
-        spec_path="notes/regions/ch04-step.sese.yaml",
-        ledger_dir=tmp_path / "ledger",
-        strategy_path=STRATEGY_PATH,
-        baseline_strategy_path=BASELINE_STRATEGY_PATH,
+    return region_config(
+        tmp_path, region_id=region_id, phase=phase, repo_dir=repo_dir,
         working_copy_dir=working,
         # A code that declares its own invariants: the accept row's
         # preconditions are the longest list a porting region can have,
         # which is what the table fixture below is a copy of.
         manifest=load_manifest(write_program(tmp_path, properties=True) / "manifest.yaml"),
     )
-    return cfg
 
 
 def _client(tmp_path, region_id="ch04:step"):

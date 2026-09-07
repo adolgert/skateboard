@@ -27,46 +27,29 @@ import base64
 import hashlib
 
 from equivalent.capture import npy
-from equivalent.ledger.capture_sets import store_capture_set
-from equivalent.ledger.store import LedgerStore
-from equivalent.manifest.schema import REQUIRED_DATASETS
-from equivalent.strategy.schema import Strategy
-from equivalent.tree import Tree, attempt_id_for_strategy
+from equivalent.ledger.capture_sets import pack_capture_set
+from equivalent.tree import attempt_id_for_strategy
 
+from .context import CheckContext, CheckResult, capture_set_materials, failed
 from .errors import ComponentError, after_the_manifest_check_passed
+from .names import CAPTURE_ROLE, HOLDOUT, VISIBLE
 
-# The manifest role of the program that writes a dataset.
-CAPTURE_ROLE = "capture"
 # The claim that says which capture set each declared dataset was stored
 # under. Spelled here because this is where it is written and read.
 CAPTURED_PREDICATE = "harness/captured"
-# The two datasets a port is judged by, and the pair that must not be the
-# same run. A code may declare more; nothing is held back in those. The
-# manifest is where the pair is named, so it is taken from there.
-VISIBLE, HOLDOUT = REQUIRED_DATASETS
 # What a case's two halves are called on the wire and in the manifest's
 # interface, in the words a message about one should use.
 SECTIONS = (("inputs", "input"), ("outputs", "output"))
 
 
-def captured_sets(store: LedgerStore, tree, predicate_type: str = CAPTURED_PREDICATE) -> dict:
-    """The capture set each dataset was stored under, from the tree's own claim.
+def sets_named_by(claim, where: str) -> dict:
+    """The capture set each dataset was stored under, from one capture claim.
 
-    The checks that follow this one compare against the sets this one
-    approved, and they find them the same way regression_visible finds
-    the outputs of a run: by reading the claim, not by capturing again.
-    A tree with no passing capture claim is an error, not a verdict --
-    the gateway's own precondition table is what should have stopped the
-    request before it got here.
-
-    `predicate_type` is for the other claim that stores a set the same
-    way: the timing check keeps the program's own outputs under
-    `harness/times`. One reader for both, so a set is found by the same
-    rule wherever it was written.
+    A passing claim that names no set at all is a fault on the harness's
+    side rather than a verdict about the code, so it is raised. Promotion
+    reads the same claim the same way, which is why this takes a claim
+    rather than a context.
     """
-    claim = store.latest(predicate_type, tree)
-    if claim is None or claim.predicate.verdict != "pass":
-        raise ComponentError(f"no passing {predicate_type} claim for tree {tree.sha256}")
     sets = {
         name: entry["capture_set"]
         for name, entry in claim.predicate.detail.get("datasets", {}).items()
@@ -74,9 +57,21 @@ def captured_sets(store: LedgerStore, tree, predicate_type: str = CAPTURED_PREDI
     }
     if not sets:
         raise ComponentError(
-            f"the {predicate_type} claim for tree {tree.sha256} names no capture set"
+            f"the {CAPTURED_PREDICATE} claim for {where} names no capture set"
         )
     return sets
+
+
+def captured_sets(ctx: CheckContext) -> dict:
+    """The capture set each dataset was stored under, from the tree's own claim.
+
+    The checks that follow this one compare against the sets this one
+    approved, and they find them the same way regression_visible finds
+    the outputs of a run: by reading the claim, not by capturing again.
+    The claim itself is always there -- the precondition table is what
+    puts it in the context.
+    """
+    return sets_named_by(ctx.claims[CAPTURED_PREDICATE], f"tree {ctx.tree.sha}")
 
 
 def _declared(manifest, section: str) -> dict:
@@ -136,22 +131,23 @@ def _input_fingerprint(cases: dict) -> list:
     )
 
 
-def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
-          baseline_strategy: Strategy, builder) -> dict:
-    """Capture every dataset the tree's manifest declares, and store what passes.
+def check(ctx: CheckContext, config: dict) -> CheckResult:
+    """Capture every dataset the tree's manifest declares, and pack what passes.
 
     The capture program is run in the baseline strategy's workspace: the
     reference answers a port is judged against are the ones the code
     produces when it is built the way the baseline is built.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}, where the detail
-    names, per dataset, how many cases were captured and the capture set
-    the ledger now holds them under. Raises ComponentError if the builder
-    could not be reached.
+    The detail names, per dataset, how many cases were captured and the
+    capture set the ledger will hold them under; the sets themselves come
+    back for the gateway to keep, so a failing capture leaves nothing
+    behind. Raises ComponentError if the builder could not be reached.
     """
     with after_the_manifest_check_passed():
-        manifest = Tree(repo_dir, ref).manifest()
-    attempt_id = attempt_id_for_strategy(region_id, tree_sha, baseline_strategy.name)
+        manifest = ctx.tree.manifest()
+    attempt_id = attempt_id_for_strategy(
+        ctx.region_id, ctx.tree.sha, ctx.baseline_strategy.name,
+    )
     described = {"manifest_sha256": manifest.sha256}
 
     capture = manifest.build.targets.get(CAPTURE_ROLE)
@@ -159,16 +155,11 @@ def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
         # The manifest loader does not insist on a capture target, because
         # a promoted code is never captured again -- so a code being
         # brought in learns it here.
-        return {
-            "verdict": "fail",
-            "detail": {
-                **described,
-                "problems": [
-                    f"code '{manifest.name}' declares no '{CAPTURE_ROLE}' build target, so "
-                    f"there is no program to write the datasets it declares"
-                ],
-            },
-        }
+        problems = [
+            f"code '{manifest.name}' declares no '{CAPTURE_ROLE}' build target, so "
+            f"there is no program to write the datasets it declares"
+        ]
+        return failed({**described, "problems": problems}, problems)
 
     per_dataset = {}
     captured = {}
@@ -176,7 +167,7 @@ def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
     problems = []
     for name in sorted(manifest.datasets):
         try:
-            resp = builder.capture(
+            resp = ctx.builder.capture(
                 attempt_id, capture.executable, list(manifest.datasets[name].args), name,
             )
         except Exception as exc:
@@ -206,25 +197,26 @@ def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
             )
 
     if problems:
-        # Nothing is stored: a set that failed its own check must not be
-        # in the ledger for a later comparison to find.
-        return {
-            "verdict": "fail",
-            "detail": {
+        # Nothing is packed for keeping: a set that failed its own check
+        # must not be in the ledger for a later comparison to find.
+        return failed(
+            {
                 **described, "datasets": per_dataset, "problems": problems,
                 "executable_identity": executable_identity,
             },
-        }
-
-    for name, cases in captured.items():
-        subject = store_capture_set(
-            store, name, {case: case_arrays(cases[case]) for case in cases},
+            problems,
         )
-        per_dataset[name]["capture_set"] = subject.sha256
-    return {
-        "verdict": "pass",
-        "detail": {
-            **described, "datasets": per_dataset,
-            "executable_identity": executable_identity,
-        },
+
+    packed = []
+    for name, cases in captured.items():
+        one = pack_capture_set(name, {case: case_arrays(cases[case]) for case in cases})
+        per_dataset[name]["capture_set"] = one.sha256
+        packed.append(one)
+    detail = {
+        **described, "datasets": per_dataset,
+        "executable_identity": executable_identity,
     }
+    return CheckResult(
+        verdict="pass", detail=detail,
+        materials=capture_set_materials(detail), stores=tuple(packed),
+    )

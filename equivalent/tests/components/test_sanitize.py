@@ -1,4 +1,3 @@
-from pathlib import Path
 
 import pytest
 import yaml
@@ -6,10 +5,17 @@ import yaml
 from equivalent.components import sanitize
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
-from equivalent.tests.fakes import FakeBuilder, fixture_case, write_program
+from equivalent.tests.components.conftest import (
+    PORT_STRATEGY,
+    STRATEGY_DIR,
+    write_visible_dataset,
+)
+from equivalent.tests.fakes import FakeBuilder, write_program
 
-STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
-CASES = {"case0000": fixture_case(), "case0001": fixture_case(offset=4)}
+STRATEGY_PATH = STRATEGY_DIR / f"{PORT_STRATEGY}.yaml"
+# Two cases, so a strategy that asks for the first is telling the check
+# something a strategy that asks for all of them is not.
+CASE_OFFSETS = (0, 4)
 
 
 def _manifest(tmp_path):
@@ -26,54 +32,64 @@ def _strategy_sanitizing(tmp_path, which_cases):
     return load_strategy(path)
 
 
-def test_all_tools_pass_and_the_strategy_chooses_which_cases_run(tmp_path):
-    strategy = _strategy_sanitizing(tmp_path, "first")
-    builder = FakeBuilder()
+def _check(harness, strategy, *, builder=None):
+    harness.repo()
+    return sanitize.check(
+        harness.context(
+            region_id="ch04:step", phase="porting", strategy=strategy,
+            manifest=_manifest(harness.tmp_path),
+            visible_dataset=write_visible_dataset(harness.tmp_path / "visible", CASE_OFFSETS),
+            builder=builder or harness.builder,
+        ),
+        {},
+    )
 
-    results = sanitize.check("ch04:step", "tree123", strategy, _manifest(tmp_path), CASES, builder)
 
-    assert set(results) == {"memcheck", "racecheck", "initcheck"}
-    assert all(r["verdict"] == "pass" for r in results.values())
+def test_all_tools_pass_and_the_strategy_chooses_which_cases_run(harness, tmp_path):
+    strategy = _strategy_sanitizing(harness.tmp_path, "first")
+    builder = harness.builder
+
+    results = _check(harness, strategy, builder=builder)
+
+    assert set(results) == {"sanitize/memcheck", "sanitize/racecheck", "sanitize/initcheck"}
+    assert all(r.verdict == "pass" for r in results.values())
     assert list(builder.sanitize_calls[0]["cases"]) == ["case0000"]
 
 
-def test_a_strategy_asking_for_every_case_sends_every_case(tmp_path):
-    strategy = _strategy_sanitizing(tmp_path, "all")
-    builder = FakeBuilder()
+def test_a_strategy_asking_for_every_case_sends_every_case(harness, tmp_path):
+    strategy = _strategy_sanitizing(harness.tmp_path, "all")
+    builder = harness.builder
 
-    results = sanitize.check("ch04:step", "tree123", strategy, _manifest(tmp_path), CASES, builder)
+    results = _check(harness, strategy, builder=builder)
 
-    assert all(r["verdict"] == "pass" for r in results.values())
+    assert all(r.verdict == "pass" for r in results.values())
     assert list(builder.sanitize_calls[0]["cases"]) == ["case0000", "case0001"]
 
 
-def test_one_failing_tool_does_not_fail_the_others(tmp_path):
-    strategy = _strategy_sanitizing(tmp_path, "first")
-    builder = FakeBuilder()
+def test_one_failing_tool_does_not_fail_the_others(harness, tmp_path):
+    strategy = _strategy_sanitizing(harness.tmp_path, "first")
+    builder = harness.builder
     builder.sanitize_ok = False
 
-    results = sanitize.check("ch04:step", "tree123", strategy, _manifest(tmp_path), CASES, builder)
+    results = _check(harness, strategy, builder=builder)
 
-    assert all(r["verdict"] == "fail" for r in results.values())
-    assert results["memcheck"]["detail"]["errors"] == 3
+    assert all(r.verdict == "fail" for r in results.values())
+    assert results["sanitize/memcheck"].detail["errors"] == 3
 
 
-def test_a_failed_top_level_run_with_no_tool_results_fails_every_requested_tool(tmp_path):
+def test_a_failed_top_level_run_with_no_tool_results_fails_every_requested_tool(harness, tmp_path):
     class Incomplete(FakeBuilder):
         def sanitize(self, *args, **kwargs):
             return {"ok": False, "stage": "sanitize", "per_tool": {},
                     "log_tail": "replay executable is missing"}
 
-    results = sanitize.check(
-        "ch04:step", "tree123", _strategy_sanitizing(tmp_path, "first"),
-        _manifest(tmp_path), CASES, Incomplete(),
-    )
+    results = _check(harness, _strategy_sanitizing(harness.tmp_path, "first"), builder=Incomplete())
 
-    assert all(row["verdict"] == "fail" for row in results.values())
-    assert all("missing" in row["detail"]["reason"] for row in results.values())
+    assert all(row.verdict == "fail" for row in results.values())
+    assert all("missing" in row.detail["reason"] for row in results.values())
 
 
-def test_an_unavailable_tool_is_a_failure_not_a_vacuous_pass(tmp_path):
+def test_an_unavailable_tool_is_a_failure_not_a_vacuous_pass(harness, tmp_path):
     class Unavailable(FakeBuilder):
         def sanitize(self, *args, **kwargs):
             return {
@@ -85,17 +101,14 @@ def test_an_unavailable_tool_is_a_failure_not_a_vacuous_pass(tmp_path):
                 },
             }
 
-    results = sanitize.check(
-        "ch04:step", "tree123", _strategy_sanitizing(tmp_path, "first"),
-        _manifest(tmp_path), CASES, Unavailable(),
-    )
+    results = _check(harness, _strategy_sanitizing(harness.tmp_path, "first"), builder=Unavailable())
 
-    assert results["memcheck"]["verdict"] == "fail"
-    assert "not found" in results["memcheck"]["detail"]["reason"]
-    assert results["racecheck"]["verdict"] == "pass"
+    assert results["sanitize/memcheck"].verdict == "fail"
+    assert "not found" in results["sanitize/memcheck"].detail["reason"]
+    assert results["sanitize/racecheck"].verdict == "pass"
 
 
-def test_a_malformed_tool_result_fails_closed(tmp_path):
+def test_a_malformed_tool_result_fails_closed(harness, tmp_path):
     class Malformed(FakeBuilder):
         def sanitize(self, *args, **kwargs):
             return {"ok": True, "stage": "sanitize", "per_tool": {
@@ -104,49 +117,43 @@ def test_a_malformed_tool_result_fails_closed(tmp_path):
                 "initcheck": {"ok": True, "errors": 0},
             }}
 
-    results = sanitize.check(
-        "ch04:step", "tree123", _strategy_sanitizing(tmp_path, "first"),
-        _manifest(tmp_path), CASES, Malformed(),
-    )
+    results = _check(harness, _strategy_sanitizing(harness.tmp_path, "first"), builder=Malformed())
 
-    assert results["memcheck"]["verdict"] == "fail"
+    assert results["sanitize/memcheck"].verdict == "fail"
 
 
 @pytest.mark.parametrize("errors", [None, -1, 1, True, "0"])
-def test_a_passing_tool_requires_a_zero_integer_error_count(tmp_path, errors):
+def test_a_passing_tool_requires_a_zero_integer_error_count(harness, errors):
     class BadCount(FakeBuilder):
         def sanitize(self, *args, **kwargs):
             response = super().sanitize(*args, **kwargs)
             response["per_tool"]["memcheck"]["errors"] = errors
             return response
 
-    results = sanitize.check(
-        "ch04:step", "tree123", _strategy_sanitizing(tmp_path, "first"),
-        _manifest(tmp_path), CASES, BadCount(),
-    )
+    results = _check(harness, _strategy_sanitizing(harness.tmp_path, "first"), builder=BadCount())
 
-    assert results["memcheck"]["verdict"] == "fail"
-    assert "error count" in results["memcheck"]["detail"]["reason"]
+    assert results["sanitize/memcheck"].verdict == "fail"
+    assert "error count" in results["sanitize/memcheck"].detail["reason"]
 
 
-def test_the_shipped_strategy_sanitizes_the_first_case(tmp_path):
+def test_the_shipped_strategy_sanitizes_the_first_case(harness, tmp_path):
     # What the deployment actually does today, read from the strategy file
     # rather than fixed in the component.
     strategy = load_strategy(STRATEGY_PATH)
-    builder = FakeBuilder()
+    builder = harness.builder
 
-    sanitize.check("ch04:step", "tree123", strategy, _manifest(tmp_path), CASES, builder)
+    _check(harness, strategy, builder=builder)
 
     assert list(builder.sanitize_calls[0]["cases"]) == ["case0000"]
 
 
-def test_the_replay_executable_the_manifest_names_is_what_is_sanitized(tmp_path):
+def test_the_replay_executable_the_manifest_names_is_what_is_sanitized(harness, tmp_path):
     # Not a fixed binary name: another code calls its replay driver
     # something else, and the sanitizer has to be pointed at that.
-    strategy = _strategy_sanitizing(tmp_path, "first")
-    manifest = _manifest(tmp_path)
-    builder = FakeBuilder()
+    strategy = _strategy_sanitizing(harness.tmp_path, "first")
+    manifest = _manifest(harness.tmp_path)
+    builder = harness.builder
 
-    sanitize.check("ch04:step", "tree123", strategy, manifest, CASES, builder)
+    _check(harness, strategy, builder=builder)
 
     assert builder.sanitize_calls[0]["executable"] == manifest.build.targets["replay"].executable

@@ -35,24 +35,16 @@ import hashlib
 import json
 
 from equivalent.capture import npy
-from equivalent.ledger.capture_sets import load_capture_set
-from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
-from equivalent.strategy.schema import Strategy
-from equivalent.tree import Tree, attempt_id_for_strategy
+from equivalent.tree import attempt_id_for_strategy
 
 from . import build_replay, harness_capture
+from .context import CheckContext, CheckResult, capture_set_materials
 from .errors import ComponentError, after_the_manifest_check_passed
-
-# The manifest role of the driver each mutant is replayed through.
-REPLAY_ROLE = "replay"
-# The dataset the mutants are scored against: the one the agent can see,
-# because a self-check is about the harness and holds nothing back.
-VISIBLE = "visible"
-# Where the tolerance policy keeps a band per region output variable.
-# The `files` section beside it bands a whole-program run, which is a
-# different measurement and would answer a different question.
-VARIABLE_BANDS = "variables"
+# The mutants are scored on the dataset the agent can see, within the
+# bands a port's own region outputs are judged by: a self-check is about
+# the harness and holds nothing back.
+from .names import REPLAY_ROLE, VARIABLE_BANDS, VISIBLE
 
 # What the builder calls a mutant it noticed, one it could not, and one
 # whose answer changed inside every band.
@@ -145,35 +137,37 @@ def _problems(generated: int, rows: list, counts: dict, gap: list) -> list:
     return problems
 
 
-def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str, tree_sha: str,
-          baseline_strategy: Strategy, builder, *, limit=None) -> dict:
+def check(ctx: CheckContext, config: dict) -> CheckResult:
     """Mutate the region's files, score every mutant, and judge the harness.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}: how many
-    mutants were made and scored, how many landed in each verdict, every
-    mutant in the tolerance-blind gap, the survivors, and the two things
-    the verdict rests on -- the visible capture set and the tolerance
-    policy -- which the caller files as the claim's materials. Raises
-    ComponentError if the tree has no passing capture claim, if the
-    policy cannot be read, or if the builder could not run the mutation
-    at all.
+    `limit` scores only the first mutants. It is for a session finding its
+    feet on a large region; the claim says how many there were, so a
+    limited run cannot be mistaken for a whole one.
+
+    The detail says how many mutants were made and scored, how many landed
+    in each verdict, every mutant in the tolerance-blind gap, the
+    survivors, and the two things the verdict rests on -- the visible
+    capture set and the tolerance policy -- which come back as the claim's
+    materials. Raises ComponentError if the policy cannot be read, or if
+    the builder could not run the mutation at all.
     """
+    limit = config.get("limit")
     with after_the_manifest_check_passed():
-        manifest, policy_bytes = Tree(repo_dir, ref).manifest_and_policy()
-    sets = harness_capture.captured_sets(store, tree)
+        manifest, policy_bytes = ctx.tree.manifest_and_policy()
+    sets = harness_capture.captured_sets(ctx)
     if VISIBLE not in sets:
         raise ComponentError(
-            f"the capture claim for tree {tree.sha256} names no '{VISIBLE}' dataset, so "
+            f"the capture claim for tree {ctx.tree.sha} names no '{VISIBLE}' dataset, so "
             f"there are no answers to score a mutant against"
         )
-    cases = load_capture_set(store, sets[VISIBLE])
+    cases = ctx.sets.load(sets[VISIBLE])
     bands = bands_of(policy_bytes)
-    fortran = build_replay.fortran_of(baseline_strategy)
+    fortran = build_replay.fortran_of(ctx.baseline_strategy)
     replay = manifest.build.targets[REPLAY_ROLE]
 
     try:
-        resp = builder.mutate(
-            attempt_id_for_strategy(region_id, tree_sha, baseline_strategy.name),
+        resp = ctx.builder.mutate(
+            attempt_id_for_strategy(ctx.region_id, ctx.tree.sha, ctx.baseline_strategy.name),
             manifest.build.makefile,
             {"target": replay.target, "executable": replay.executable},
             list(manifest.interface.files),
@@ -181,7 +175,7 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
             bands,
             fortran.compiler,
             list(fortran.flags),
-            list(baseline_strategy.link_flags),
+            list(ctx.baseline_strategy.link_flags),
             list(manifest.source.patterns),
             limit=None if limit is None else int(limit),
         )
@@ -229,9 +223,10 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
         {field: row.get(field) for field in NAMED_FIELDS}
         for row in rows if row.get("status") in INCOMPLETE_STATUSES
     ]
+    policy_sha256 = hashlib.sha256(policy_bytes).hexdigest()
     detail = {
         "manifest_sha256": manifest.sha256,
-        "policy_sha256": hashlib.sha256(policy_bytes).hexdigest(),
+        "policy_sha256": policy_sha256,
         "files": list(manifest.interface.files),
         "datasets": {VISIBLE: {"cases": len(cases), "capture_set": sets[VISIBLE]}},
         "generated": generated,
@@ -251,6 +246,16 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
         "build_failures": _named(rows, BUILD_FAIL),
         "kept_dirs": resp.get("kept_dirs", []),
     }
+    # The two things this verdict rests on: the answers the mutants were
+    # scored against, and the bands that decided whether a changed answer
+    # counted.
+    materials = (
+        *capture_set_materials(detail),
+        Subject(kind="policy", sha256=policy_sha256),
+    )
     if problems:
-        return {"verdict": "fail", "detail": {**detail, "problems": problems}}
-    return {"verdict": "pass", "detail": detail}
+        return CheckResult(
+            verdict="fail", detail={**detail, "problems": problems},
+            reasons=tuple(problems), materials=materials,
+        )
+    return CheckResult(verdict="pass", detail=detail, materials=materials)

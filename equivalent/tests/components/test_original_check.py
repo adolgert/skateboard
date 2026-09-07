@@ -1,6 +1,5 @@
 """Onboarding must agree with a reference it did not create itself."""
 import base64
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -8,14 +7,8 @@ import yaml
 
 from equivalent.capture import npy
 from equivalent.components import original_check
-from equivalent.tree import init_baseline_repo
-from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject
 from equivalent.reference.schema import load_reference, fingerprint_reference
-from equivalent.strategy.schema import load_strategy
-from equivalent.tests.fakes import FakeBuilder, write_tree
-
-STRATEGIES = Path(__file__).resolve().parents[2] / "strategy" / "files"
+from equivalent.tests.fakes import FakeBuilder
 
 
 def reference(tmp_path):
@@ -51,43 +44,46 @@ class ReferenceBuilder(FakeBuilder):
         return {"ok": True, "outputs": written, "runs_s": [0.1] * len(written)}
 
 
-def check(tmp_path, builder, path):
-    repo = tmp_path / "repo"
-    init_baseline_repo(repo, write_tree(tmp_path / "seed"))
-    return original_check.check(LedgerStore(tmp_path / "ledger"), Subject("tree", "a" * 64),
-                                repo, "main", "new:onboard", "a" * 64,
-                                load_strategy(STRATEGIES / "cpu_reference.yaml"), builder, path)
+def check(harness, builder, path):
+    """The original comparison, with what it kept filed as the gateway files it."""
+    harness.repo()
+    result = original_check.check(
+        harness.context(region_id="new:onboard", builder=builder, original_reference_path=path),
+        {},
+    )
+    harness.keep(result)
+    return result
 
 
-def test_independent_original_comparison_records_outputs(tmp_path):
-    result = check(tmp_path, ReferenceBuilder(), reference(tmp_path))
-    assert result["verdict"] == "pass"
-    compared = result["detail"]["runs"][0]["outputs"][0]
+def test_independent_original_comparison_records_outputs(harness):
+    result = check(harness, ReferenceBuilder(), reference(harness.tmp_path))
+    assert result.verdict == "pass"
+    compared = result.detail["runs"][0]["outputs"][0]
     assert compared["original_artifacts"] == compared["candidate_artifacts"]
-    assert result["detail"]["reference_sha256"]
+    assert result.detail["reference_sha256"]
 
 
-def test_self_consistent_but_wrong_onboarded_program_fails(tmp_path):
+def test_self_consistent_but_wrong_onboarded_program_fails(harness):
     builder = ReferenceBuilder()
     builder.wrong_candidate = True
-    result = check(tmp_path, builder, reference(tmp_path))
-    assert result["verdict"] == "fail"
-    comparison = result["detail"]["runs"][0]["outputs"][0]
+    result = check(harness, builder, reference(harness.tmp_path))
+    assert result.verdict == "fail"
+    comparison = result.detail["runs"][0]["outputs"][0]
     assert comparison["deterministic"] is True
     assert comparison["comparison_result"]["pass"] is False
 
 
 @pytest.mark.parametrize("failure", ["drift", "incomplete"])
-def test_nonrepeatable_or_incomplete_reference_fails(tmp_path, failure):
+def test_nonrepeatable_or_incomplete_reference_fails(harness, failure):
     builder = ReferenceBuilder()
     setattr(builder, failure, True)
-    assert check(tmp_path, builder, reference(tmp_path))["verdict"] == "fail"
+    assert check(harness, builder, reference(harness.tmp_path)).verdict == "fail"
 
 
-def test_no_reference_cannot_establish_onboarding(tmp_path):
-    result = check(tmp_path, ReferenceBuilder(), None)
-    assert result["verdict"] == "fail"
-    assert "original_reference" in result["detail"]["problems"][0]
+def test_no_reference_cannot_establish_onboarding(harness):
+    result = check(harness, ReferenceBuilder(), None)
+    assert result.verdict == "fail"
+    assert "original_reference" in result.detail["problems"][0]
 
 
 def test_reference_identity_covers_contract_and_source(tmp_path):

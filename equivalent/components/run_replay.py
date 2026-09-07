@@ -24,9 +24,9 @@ import base64
 
 from equivalent.capture import npy
 from equivalent.manifest.schema import Manifest
-from equivalent.strategy.schema import Strategy
 from equivalent.tree import attempt_id_for
 
+from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError
 
 
@@ -54,17 +54,19 @@ def _output_problems(manifest: Manifest, outputs: dict) -> list:
     return problems
 
 
-def check(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
-          visible_cases: dict, builder) -> dict:
+def check(ctx: CheckContext, config: dict) -> CheckResult:
+    manifest = ctx.manifest
+    visible_cases = ctx.visible_cases
     if not visible_cases:
         raise ComponentError("no visible dataset configured for this region")
 
     replay = manifest.build.targets["replay"]
-    attempt_id = attempt_id_for(region_id, tree_sha)
+    attempt_id = attempt_id_for(ctx.region_id, ctx.tree.sha)
     try:
-        resp = builder.run(
+        resp = ctx.builder.run(
             attempt_id, replay.executable, visible_cases,
-            notify=strategy.device_proof.notify, mandatory=strategy.device_proof.mandatory,
+            notify=ctx.strategy.device_proof.notify,
+            mandatory=ctx.strategy.device_proof.mandatory,
         )
     except Exception as exc:
         raise ComponentError(f"builder /v1/run call failed: {exc}") from exc
@@ -72,34 +74,28 @@ def check(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
     measured = {"executable_identity": resp.get("executable_identity")}
 
     if not resp.get("ok"):
-        return {
-            "verdict": "fail",
-            "detail": {**measured, "log_tail": resp.get("log_tail", "")},
-        }
+        return failed(
+            {**measured, "log_tail": resp.get("log_tail", "")},
+            ["the replay driver did not run to completion"],
+        )
 
     problems = _output_problems(manifest, resp.get("outputs", {}))
     if problems:
-        return {
-            "verdict": "fail",
-            "detail": {
-                **measured, "outputs_rejected": problems,
-                "hint": f"the replay driver must write every output code "
-                        f"'{manifest.name}' declares, with the declared type and rank",
-            },
-        }
+        hint = (f"the replay driver must write every output code "
+                f"'{manifest.name}' declares, with the declared type and rank")
+        return failed(
+            {**measured, "outputs_rejected": problems, "hint": hint},
+            [*problems, hint],
+        )
 
     kernels = resp.get("kernels_launched", 0)
     if kernels <= 0:
-        return {
-            "verdict": "fail",
-            "detail": {
-                **measured, "kernels_launched": 0,
-                "hint": "code compiled but no GPU kernel launched; loops must be do concurrent / omp target for nvfortran to offload them",
-            },
-        }
-    return {
-        "verdict": "pass",
-        "detail": {
+        hint = ("code compiled but no GPU kernel launched; loops must be do concurrent / "
+                "omp target for nvfortran to offload them")
+        return failed({**measured, "kernels_launched": 0, "hint": hint}, [hint])
+    return CheckResult(
+        verdict="pass",
+        detail={
             **measured, "kernels_launched": kernels,
             # Where the builder's runtime said the launches came from --
             # file, function, and line, one entry per distinct source
@@ -107,4 +103,4 @@ def check(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
             "launches": resp.get("launches", []),
             "outputs": resp["outputs"],
         },
-    }
+    )

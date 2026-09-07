@@ -4,20 +4,18 @@ equivalent/tests/fakes.py for why: no nvfortran/compute-sanitizer/GPU in
 this environment).
 """
 import base64
-import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from equivalent.capture import npy
 from equivalent.gateway.app import create_app
-from equivalent.region.config import RegionConfig
 from equivalent.tree import init_baseline_repo
-from equivalent.ledger.acceptance import PORTING
 from equivalent.ledger.capture_sets import program_variable
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
+from equivalent.tests.gateway.conftest import region_config
 from equivalent.tests.fakes import FakeBuilder, FakeOracle, timing_array, write_program
 
 TOKEN = "test-token"
@@ -61,12 +59,8 @@ def _client(tmp_path):
     # A code that declares its own invariants, so the property check is
     # part of what this port is judged by.
     program = write_program(tmp_path, properties=True)
-    cfg = RegionConfig(
-        region_id="ch04:step", code="tsunami", phase=PORTING, repo_dir=repo_dir,
-        spec_path=SPEC_PATH,
-        ledger_dir=tmp_path / "ledger", strategy_path=STRATEGY_PATH,
-        baseline_strategy_path=BASELINE_STRATEGY_PATH,
-        working_copy_dir=working,
+    cfg = region_config(
+        tmp_path, repo_dir=repo_dir, working_copy_dir=working,
         manifest=load_manifest(program / "manifest.yaml"),
         visible_dataset_dir=program / "datasets" / "visible",
     )
@@ -91,6 +85,28 @@ GATES = (
     "regression_visible", "property_check", "regression_holdout", "time_baseline",
     "program_regression", "time_port",
 )
+
+
+def test_a_check_is_never_reached_without_the_claims_its_row_requires(tmp_path):
+    # A check reads its prerequisite claims out of the context it is
+    # handed and never asks whether they are there. What makes that safe
+    # is here: the gateway refuses first, and names the action that would
+    # produce what is missing.
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in ("sese_check", "build_replay"):
+        _run(client, cfg, action)
+
+    body = _run(client, cfg, "regression_visible")
+
+    assert body["refused"] is True
+    missing = {row["predicateType"]: row for row in body["missing"]}
+    assert missing["gpu/executed"]["producing_action"] == "run_replay"
+    # And the oracle was never asked: the refusal happened before dispatch.
+    assert oracle.compare_calls == []
 
 
 def test_full_pipeline_reaches_acceptance(tmp_path):

@@ -136,31 +136,37 @@ def _missing_rows(status: dict) -> list[str]:
     return [row["predicateType"] for row in status["rows"] if row["status"] != "present"]
 
 
-def _onboarded_tree(cfg: RegionConfig, store: LedgerStore) -> tuple[str, Subject]:
-    """The region's current tree, refused unless every onboarding claim passed."""
+def _onboarded_tree(cfg: RegionConfig, store: LedgerStore) -> tuple[str, Subject, dict]:
+    """The region's current tree, refused unless every onboarding claim passed.
+
+    The evidence context each onboarding claim was read under comes back
+    too: what is promoted is read from those same claims, and reading one
+    of them under a different context would promote a set no passing
+    claim named.
+    """
     ref = current_commit(cfg.repo_dir, cfg.region_id)
     materials = evidence_materials_for(cfg)
-    store.activate_context(materials)
     tree_sha, frozen_sha = current_tree_and_frozen(
         cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase,
         load_strategy(cfg.strategy_path),
         required_materials=materials, ref=ref,
     )
     tree = Subject(kind="tree", sha256=tree_sha)
+    contexts = required_materials_by_predicate(
+        store, requirements_for(ONBOARDING), ONBOARDING, tree, materials,
+    )
     status = compute_status(
         store, requirements_for(ONBOARDING), ONBOARDING,
         tree=tree, frozen=Subject(kind="frozen", sha256=frozen_sha),
         required_materials=materials,
-        required_materials_by_predicate=required_materials_by_predicate(
-            store, requirements_for(ONBOARDING), ONBOARDING, tree, materials,
-        ),
+        required_materials_by_predicate=contexts,
     )
     if not status["accepted"]:
         raise PromoteRefused(
             f"region '{cfg.region_id}' is not {FINISHED_WORD[ONBOARDING]} on tree "
             f"{tree_sha}: it is still missing {_missing_rows(status)}"
         )
-    return ref, tree
+    return ref, tree, contexts
 
 
 def _reviewed_tree(cfg: RegionConfig, ref: str) -> dict:
@@ -225,7 +231,7 @@ def promote(config: GatewayConfig, cfg: RegionConfig, programs=None, replace: bo
             "promotion requires a reviewed executor_identity in the region configuration; "
             "qualify the deployment and pin its builder /healthz identity first"
         )
-    ref, subject = _onboarded_tree(cfg, store)
+    ref, subject, contexts = _onboarded_tree(cfg, store)
     tree = _reviewed_tree(cfg, ref)
 
     if IN_TREE_MANIFEST not in tree:
@@ -235,7 +241,11 @@ def promote(config: GatewayConfig, cfg: RegionConfig, programs=None, replace: bo
     except ValueError as exc:
         raise PromoteRefused(str(exc)) from exc
 
-    sets = promoted_sets(harness_capture.captured_sets(store, subject))
+    captured = store.latest(
+        harness_capture.CAPTURED_PREDICATE, subject,
+        required_materials=contexts[harness_capture.CAPTURED_PREDICATE],
+    )
+    sets = promoted_sets(harness_capture.sets_named_by(captured, f"tree {subject.sha256}"))
 
     code_dir = Path(config.paths.programs if programs is None else programs) / cfg.code
     destinations = [

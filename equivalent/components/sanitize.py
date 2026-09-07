@@ -15,11 +15,15 @@ every one of them.
 """
 from __future__ import annotations
 
-from equivalent.manifest.schema import Manifest
 from equivalent.strategy.schema import Strategy
 from equivalent.tree import attempt_id_for
 
+from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError
+
+# What each tool's own verdict is filed as. One builder call answers for
+# every tool the strategy asked for, and each answer is its own claim.
+PREDICATE = "sanitize/{tool}"
 
 
 def _chosen_cases(strategy: Strategy, visible_cases: dict) -> dict:
@@ -34,17 +38,19 @@ def _chosen_cases(strategy: Strategy, visible_cases: dict) -> dict:
     return {first: visible_cases[first]}
 
 
-def check(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
-          visible_cases: dict, builder) -> dict:
-    """Returns {tool_name: {"verdict": "pass"|"fail", "detail": {...}}, ...}."""
+def check(ctx: CheckContext, config: dict) -> dict:
+    """One verdict per sanitizer the strategy asked for, keyed by predicate type."""
+    visible_cases = ctx.visible_cases
     if not visible_cases:
         raise ComponentError("no visible dataset configured for this region")
 
-    attempt_id = attempt_id_for(region_id, tree_sha)
-    cases = _chosen_cases(strategy, visible_cases)
-    tools = list(strategy.sanitizers)
+    attempt_id = attempt_id_for(ctx.region_id, ctx.tree.sha)
+    cases = _chosen_cases(ctx.strategy, visible_cases)
+    tools = list(ctx.strategy.sanitizers)
     try:
-        resp = builder.sanitize(attempt_id, manifest.build.targets["replay"].executable, cases, tools)
+        resp = ctx.builder.sanitize(
+            attempt_id, ctx.manifest.build.targets["replay"].executable, cases, tools,
+        )
     except Exception as exc:
         raise ComponentError(f"builder /v1/sanitize call failed: {exc}") from exc
 
@@ -79,24 +85,22 @@ def check(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
         if "executable_identity" in resp:
             detail["executable_identity"] = resp["executable_identity"]
         if response_problem:
-            detail["reason"] = response_problem
-            results[tool] = {"verdict": "fail", "detail": detail}
+            reason = response_problem
         elif not isinstance(t, dict):
-            detail["reason"] = f"requested sanitizer '{tool}' is missing from the builder response"
+            reason = f"requested sanitizer '{tool}' is missing from the builder response"
             detail["log_tail"] = resp.get("log_tail", "")
-            results[tool] = {"verdict": "fail", "detail": detail}
         elif t.get("ok") is not True:
-            detail["reason"] = t.get("error") or f"sanitizer '{tool}' did not complete successfully"
-            results[tool] = {"verdict": "fail", "detail": detail}
+            reason = t.get("error") or f"sanitizer '{tool}' did not complete successfully"
         elif (
             isinstance(t.get("errors"), bool)
             or not isinstance(t.get("errors"), int)
             or t["errors"] != 0
         ):
-            detail["reason"] = (
-                f"sanitizer '{tool}' returned an invalid or nonzero error count"
-            )
-            results[tool] = {"verdict": "fail", "detail": detail}
+            reason = f"sanitizer '{tool}' returned an invalid or nonzero error count"
         else:
-            results[tool] = {"verdict": "pass", "detail": detail}
+            reason = None
+        if reason is None:
+            results[PREDICATE.format(tool=tool)] = CheckResult(verdict="pass", detail=detail)
+        else:
+            results[PREDICATE.format(tool=tool)] = failed({**detail, "reason": reason}, [reason])
     return results

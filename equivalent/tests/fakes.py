@@ -29,6 +29,7 @@ import numpy as np
 import yaml
 
 from equivalent.capture import npy
+from equivalent.ledger.capture_sets import pack_capture_set, pack_program_set
 from equivalent.manifest.schema import IN_TREE_MANIFEST
 
 # The region interface the fixture code declares, and the shape each
@@ -117,6 +118,20 @@ VISIBLE_CASE = "case0000"
 
 # How many cases one run of the fixture's capture program writes.
 CAPTURED_CASES = 2
+
+
+def keep_capture_set(store, name: str, cases: dict) -> str:
+    """Pack a set and file it, the way the gateway files what a check packed."""
+    packed = pack_capture_set(name, cases)
+    store.keep(packed)
+    return packed.sha256
+
+
+def keep_program_set(store, arrays: dict) -> str:
+    """The same for a timing run's own outputs."""
+    packed = pack_program_set(arrays)
+    store.keep(packed)
+    return packed.sha256
 
 
 def fixture_arrays(offset: int = 0) -> dict:

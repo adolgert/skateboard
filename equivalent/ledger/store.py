@@ -9,15 +9,20 @@ from __future__ import annotations
 import json
 import fcntl
 import re
+import shutil
 import threading
-from contextvars import ContextVar
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import predicates
+from .packed import PackedArtifact, PackedSet
 from .records import SCHEMA_VERSION, Claim, RequestLogLine
 from .subjects import Subject
+
+# Where capture sets live inside a region's artifacts directory. One
+# subdirectory per set, named by the set's own hash.
+CAPTURE_SETS = "capture_sets"
 
 CLAIM_ID_RE = re.compile(r"^c-(\d+)$")
 
@@ -32,22 +37,6 @@ class LedgerStore:
         self.region_dir.mkdir(parents=True, exist_ok=True)
         (self.region_dir / "artifacts").mkdir(exist_ok=True)
         self._lock = threading.Lock()
-        self._active_materials = ContextVar(
-            f"ledger_materials_{id(self)}", default=(),
-        )
-
-    def activate_context(self, materials) -> None:
-        """Set the evidence dependencies for component reads in this request.
-
-        Components often read a prerequisite claim from the store after the
-        gateway has checked it.  A context variable makes those reads use the
-        same current materials without sharing mutable state across FastAPI
-        worker threads.
-        """
-        self._active_materials.set(tuple(materials))
-
-    def _required_materials(self, required_materials):
-        return self._active_materials.get() if required_materials is None else required_materials
 
     @contextmanager
     def _writer_lock(self):
@@ -71,6 +60,13 @@ class LedgerStore:
                 yield
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    @property
+    def capture_sets_dir(self) -> Path:
+        """Where this region's content-addressed capture sets sit."""
+        directory = self.region_dir / "artifacts" / CAPTURE_SETS
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
 
     @property
     def claims_path(self) -> Path:
@@ -158,6 +154,28 @@ class LedgerStore:
                 tmp.replace(path)
         return path
 
+    def keep(self, packed) -> Path:
+        """File what a check packed, so a later claim can name it.
+
+        Keeping what is already there writes nothing: a set is named by
+        its own content, so the same bytes are the same set. This is the
+        only way a check's output reaches the ledger, and the gateway
+        calls it only for a verdict it is about to record.
+        """
+        if isinstance(packed, PackedArtifact):
+            return self.put_artifact(packed.sha256, packed.data)
+        if not isinstance(packed, PackedSet):
+            raise TypeError(f"a store keeps a packed set or artifact, not {type(packed).__name__}")
+        destination = self.capture_sets_dir / packed.sha256
+        if not destination.exists():
+            with self._writer_lock():
+                if not destination.exists():
+                    # The packed directory is a temporary one that may sit
+                    # on another filesystem, so this is a move rather than
+                    # a rename.
+                    shutil.move(str(packed.directory), str(destination))
+        return destination
+
     # --- queries ---
 
     def all_claims(self) -> list[Claim]:
@@ -187,9 +205,15 @@ class LedgerStore:
 
     def latest(
         self, predicate_type: str, subject: Subject, config_hash: str | None = None,
-        *, required_materials=None,
+        *, required_materials,
     ):
-        required_materials = self._required_materials(required_materials)
+        """The newest claim of this type on this subject, under this context.
+
+        The context is a required argument: a claim is only current
+        evidence relative to the materials it must have been reached
+        against, and a reader that did not say which those are would be
+        asking a question with no answer.
+        """
         matches = [
             c for c in self._read_claims()
             if c.predicateType == predicate_type
@@ -214,8 +238,7 @@ class LedgerStore:
         ]
         return sorted(matches, key=lambda c: c.ts)[-1] if matches else None
 
-    def exists_pass(self, predicate_type: str, subject: Subject, *, required_materials=None) -> bool:
-        required_materials = self._required_materials(required_materials)
+    def exists_pass(self, predicate_type: str, subject: Subject, *, required_materials) -> bool:
         return any(
             c.predicateType == predicate_type and subject in c.subject
             and c.predicate.verdict == "pass"
@@ -224,7 +247,7 @@ class LedgerStore:
         )
 
     def find_duplicate(
-        self, predicate_type: str, tree: Subject, config_hash: str, *, required_materials=None,
+        self, predicate_type: str, tree: Subject, config_hash: str, *, required_materials,
     ):
         """Most recent claim for this (predicate type, tree, config), if any.
 
@@ -232,7 +255,6 @@ class LedgerStore:
         asking "did this action already run?" passes the predicate type
         the action emits.
         """
-        required_materials = self._required_materials(required_materials)
         matches = [
             c for c in self._read_claims()
             if c.predicateType == predicate_type

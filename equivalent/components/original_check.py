@@ -11,11 +11,13 @@ import base64
 
 from equivalent.capture import npy
 from equivalent.capture.compare import compare_variable
-from equivalent.ledger.subjects import hash_bytes
+from equivalent.ledger.packed import PackedArtifact
+from equivalent.ledger.subjects import Subject, hash_bytes
 from equivalent.reference.schema import load_reference
-from equivalent.tree import Tree, attempt_id_for_strategy
+from equivalent.tree import attempt_id_for_strategy
 
 from .build_replay import fortran_of
+from .context import CheckContext, CheckResult, failed
 from .errors import ComponentError, after_the_manifest_check_passed
 
 
@@ -32,34 +34,47 @@ def _comparison(expected: bytes, actual: bytes, spec: dict) -> dict:
         return {"pass": False, "error": f"cannot compare reference arrays: {exc}"}
 
 
-def _keep(store, encoded):
+def _artifact(kept: list, encoded) -> tuple:
+    """One program output, named by its bytes and set aside to be kept.
+
+    Both programs' outputs are filed beside the claim, because the claim
+    says two runs agreed and a person reading it later has to be able to
+    look at what they agreed on. Nothing is written here: what is kept is
+    handed back with the verdict, so a comparison that could not be made
+    leaves no artifacts claiming it was.
+    """
     data = base64.b64decode(encoded, validate=True)
     sha = hash_bytes(data)
-    store.put_artifact(sha, data)
+    kept.append(PackedArtifact(sha256=sha, data=data))
     return data, sha
 
 
-def check(store, tree, repo_dir, ref, region_id, tree_sha, baseline_strategy,
-          builder, original_reference_path) -> dict:
-    if original_reference_path is None:
-        return {"verdict": "fail", "detail": {"problems": [
+def check(ctx: CheckContext, config: dict) -> CheckResult:
+    if ctx.original_reference_path is None:
+        problems = [
             "No reviewed original_reference is configured. Preserve the original program "
             "and comparison contract outside the agent working copy before onboarding."
-        ]}}
+        ]
+        return failed({"problems": problems}, problems)
     try:
-        original = load_reference(original_reference_path)
+        original = load_reference(ctx.original_reference_path)
     except (ValueError, OSError) as exc:
         raise ComponentError(f"cannot read reviewed original reference: {exc}") from exc
     with after_the_manifest_check_passed():
-        manifest = Tree(repo_dir, ref).manifest()
+        manifest = ctx.tree.manifest()
     candidate = manifest.build.targets.get("timing")
     if candidate is None:
-        return {"verdict": "fail", "detail": {"problems": ["candidate declares no timing target"]}}
+        problems = ["candidate declares no timing target"]
+        return failed({"problems": problems}, problems)
+    baseline_strategy = ctx.baseline_strategy
+    builder = ctx.builder
     compiler = fortran_of(baseline_strategy)
     reference_attempt = attempt_id_for_strategy(
-        region_id + "-original", original.sha256, baseline_strategy.name,
+        ctx.region_id + "-original", original.sha256, baseline_strategy.name,
     )
-    candidate_attempt = attempt_id_for_strategy(region_id, tree_sha, baseline_strategy.name)
+    candidate_attempt = attempt_id_for_strategy(
+        ctx.region_id, ctx.tree.sha, baseline_strategy.name,
+    )
     payload = [{"path": f["path"], "b64": base64.b64encode(f["content"]).decode("ascii")}
                for f in original.files]
     try:
@@ -73,10 +88,17 @@ def check(store, tree, repo_dir, ref, region_id, tree_sha, baseline_strategy,
         raise ComponentError(f"original reference build failed: {exc}") from exc
     detail = {"reference_sha256": original.sha256, "provenance": original.provenance,
               "reference_build": build, "runs": [], "problems": []}
+    # The reviewed original is what this verdict is a comparison against,
+    # so it is a formal material rather than a note in the detail.
+    materials = (Subject(kind="reference", sha256=original.sha256),)
     if (build.get("ok") is not True or build.get("flags_reached_every_compile") is not True
             or build.get("compiled_only_tree_source") is not True):
         detail["problems"].append("original reference did not build under the reviewed baseline strategy")
-        return {"verdict": "fail", "detail": detail}
+        return CheckResult(
+            verdict="fail", detail=detail, reasons=tuple(detail["problems"]),
+            materials=materials,
+        )
+    kept = []
     for run in original.runs:
         original_outputs = sorted({o["original"] for o in run["outputs"]})
         candidate_outputs = sorted({o["candidate"] for o in run["outputs"]})
@@ -102,8 +124,8 @@ def check(store, tree, repo_dir, ref, region_id, tree_sha, baseline_strategy,
                       "comparison": output["comparison"], "pass": False}
             report["outputs"].append(result)
             try:
-                reference_files = [_keep(store, r[output["original"]]) for r in expected["outputs"]]
-                candidate_files = [_keep(store, r[output["candidate"]]) for r in actual["outputs"]]
+                reference_files = [_artifact(kept, r[output["original"]]) for r in expected["outputs"]]
+                candidate_files = [_artifact(kept, r[output["candidate"]]) for r in actual["outputs"]]
                 result["original_artifacts"] = [f[1] for f in reference_files]
                 result["candidate_artifacts"] = [f[1] for f in candidate_files]
                 result["deterministic"] = (reference_files[0][0] == reference_files[1][0]
@@ -114,4 +136,17 @@ def check(store, tree, repo_dir, ref, region_id, tree_sha, baseline_strategy,
                 result["error"] = f"missing or malformed program output: {exc}"
         report["pass"] = all(o["pass"] for o in report["outputs"])
     passed = not detail["problems"] and all(run["pass"] for run in detail["runs"])
-    return {"verdict": "pass" if passed else "fail", "detail": detail}
+    if passed:
+        return CheckResult(
+            verdict="pass", detail=detail, materials=materials, stores=tuple(kept),
+        )
+    return CheckResult(
+        verdict="fail", detail=detail,
+        reasons=tuple([
+            *detail["problems"],
+            *(f"{run['name']}: the two programs did not agree on every output"
+              for run in detail["runs"] if not run["pass"]),
+        ]),
+        materials=materials,
+        stores=tuple(kept),
+    )

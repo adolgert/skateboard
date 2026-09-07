@@ -5,17 +5,17 @@ from fastapi.testclient import TestClient
 
 from equivalent.gateway.app import config_hash, create_app
 from equivalent.region.evidence import evidence_materials_for
-from equivalent.region.config import RegionConfig
 from equivalent.region.current import current_tree_and_frozen
 from equivalent.tree import init_baseline_repo
 from equivalent.ledger.table import ACTION_TABLE, CONFIG_KEY_SPECS
-from equivalent.ledger.acceptance import PHASES, PORTING
+from equivalent.ledger.acceptance import PHASES
 from equivalent.ledger.predicates import PREDICATE_TYPES
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
+from equivalent.tests.gateway.conftest import region_config
 from equivalent.tests.fakes import write_program
 
 TOKEN = "test-token"
@@ -38,12 +38,8 @@ def _region(tmp_path, with_makefile=False):
     init_baseline_repo(repo_dir, _seed(tmp_path / "seed", with_makefile))
     working = tmp_path / "working"
     working.mkdir()
-    return RegionConfig(
-        region_id="ch04:step", code="tsunami", phase=PORTING, repo_dir=repo_dir,
-        spec_path=SPEC_PATH,
-        ledger_dir=tmp_path / "ledger",
-        strategy_path=STRATEGY_PATH, baseline_strategy_path=BASELINE_STRATEGY_PATH,
-        working_copy_dir=working,
+    return region_config(
+        tmp_path, repo_dir=repo_dir, working_copy_dir=working,
         manifest=load_manifest(write_program(tmp_path) / "manifest.yaml"),
     )
 
@@ -240,7 +236,7 @@ def test_every_row_references_real_predicate_types_and_agrees_with_the_registry_
             assert predicate_type in PREDICATE_TYPES
         for predicate_type, subject_kind in row.requires:
             assert predicate_type in PREDICATE_TYPES
-            assert subject_kind in ("tree", "frozen")
+            assert subject_kind in ("tree", "frozen", "baseline_tree")
         if row.component is None:
             # The one row per phase that names the whole requirement list
             # has nothing to dispatch to.
@@ -267,6 +263,8 @@ def test_every_row_references_real_predicate_types_and_agrees_with_the_registry_
         ("sanitize/memcheck", "tree"),
         ("sanitize/racecheck", "tree"),
         ("sanitize/initcheck", "tree"),
+        # The outputs this compares are the ones the run claim recorded.
+        ("gpu/executed", "tree"),
     }
 
 
