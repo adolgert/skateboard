@@ -13,13 +13,15 @@ before running.
 
 ## What gets installed
 
-Four containers, on four networks, all defined in `deploy/docker-compose.yml`:
+Four main services, on four networks, all defined in
+`deploy/docker-compose.yml`. `up.sh` keeps the gateway, builder, and oracle
+running; `pi.sh` starts a disposable agent container for each session:
 
 | container | what it holds | can reach |
 | --- | --- | --- |
 | `agent` | `pi`, the extension, the NVIDIA HPC compilers, the GPU, the working copy, and `docs/onboarding.md` at `/docs` | the gateway, and the model provider on the internet |
 | `gateway` | the git repository of submitted code, the ledger, the analyzer, and the codes under `programs/` read-only | the builder and the oracle; no internet |
-| `builder` | `nvfortran`, `compute-sanitizer`, `make`, `cmake`, `fpm`, the GPU | nothing; it only answers |
+| `builder` | a trusted supervisor with `nvfortran`, `compute-sanitizer`, build tools, the GPU, and access to the Docker daemon | the gateway on an internal network; each submitted command runs in a restricted disposable sibling container with no network |
 | `oracle` | one code's whole directory — manifest, captures, tolerance policy — baked into the image | nothing; it only answers |
 
 Two more services are defined and are started only on demand, by
@@ -28,8 +30,8 @@ network with the agent's token, so they reach nothing the agent could
 not reach.
 
 The agent shares no network with the builder or the oracle; those are
-missing routes, not blocked ones. Everything that persists is a plain
-directory under `deploy/state/` on the host, owned by you:
+missing routes, not blocked ones. Durable deployment state is in plain
+directories under `deploy/state/` on the host, owned by you:
 
 | directory | what it is | who writes it |
 | --- | --- | --- |
@@ -40,6 +42,10 @@ directory under `deploy/state/` on the host, owned by you:
 | `state/seed` | the baseline files the repository starts from | `up.sh` |
 | `state/pi-home` | `pi`'s own settings and login, so you log in once | `pi` |
 
+The builder's compiled per-attempt work is operational cache in the named
+Docker volume `equivalent_builder_work`. It survives ordinary service restarts
+and `docker compose down`; it is not ledger evidence and can be discarded.
+
 `up.sh` also writes the file `state/gateway.host.yaml`, which is the
 deployment's configuration with the paths of this machine instead of the
 container's mount points. Every host-side `ledger` command reads it.
@@ -49,8 +55,9 @@ container's mount points. Every host-side `ledger` command reads it.
 - Linux with an NVIDIA GPU and driver. The strategy files compile for
   compute capability 8.9 (`-gpu=cc89`); a different GPU needs that flag
   changed in `equivalent/strategy/files/*.yaml`.
-- Docker with the Compose plugin (`docker compose version` prints 2.x)
-  and the NVIDIA container toolkit. Check both at once:
+- Docker with the Compose plugin (`docker compose version` succeeds),
+  volume-subpath mount support, and the NVIDIA container toolkit. Check GPU
+  container access with:
 
       docker run --rm --gpus all ubuntu nvidia-smi
 
@@ -78,9 +85,10 @@ Then set up the deployment:
     cp .env.example .env
     $EDITOR .env                        # set EQUIVALENT_TOKEN to something of your own
 
-`EQUIVALENT_TOKEN` is the one secret. The agent and the `ledger` command
-present it to the gateway; the gateway presents it to the builder and the
-oracle. `.env` is ignored by git.
+`EQUIVALENT_TOKEN` is the one secret. The agent and the two walkthrough
+clients present it to the gateway; the gateway presents its backend token to
+the builder and the oracle. Host-side `ledger` commands read the repository
+and ledger directly and do not use this token. `.env` is ignored by git.
 
 Two more settings in the same file say what the deployment is built
 around. `EQUIVALENT_CODE` names the code: it picks
@@ -108,6 +116,30 @@ missing and removes nothing.
 `up.sh` deliberately does not build the agent image, which is the slow
 one. `pi.sh` builds it the first time it is needed.
 
+## Qualify and pin the checked runtimes
+
+Qualify the builder on each target machine, and after changing its image or
+Docker configuration:
+
+    ./qualify.sh
+
+This writes `state/builder-qualification.json`. Copy the reviewed value at
+`isolation.executor_identity` into the onboarding region's
+`executor_identity` field in `gateway.<code>.yaml`, then rerun `up.sh`. You can
+print it without another dependency using:
+
+    python3 -c 'import json; print(json.load(open("state/builder-qualification.json"))["isolation"]["executor_identity"])'
+
+Promotion refuses an onboarding region without this pin. The pre-onboarding
+oracle is intentionally unready and reports no identity. After promotion,
+commit the captures, rebuild with `up.sh`, and read the ready oracle's identity:
+
+    docker compose exec -T oracle python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://localhost:7070/healthz"))["oracle_identity"])'
+
+Add that value as `oracle_identity` beside `executor_identity` in each porting
+region, and rerun `up.sh`. These pins make configuration-aware offline status
+and later live checks refer to the reviewed builder and oracle runtimes.
+
 ## Prove the stack works before involving a model
 
     ./walkthrough.sh
@@ -134,9 +166,14 @@ The other half is the same run for a code being brought in:
     ./onboard_walkthrough.sh
 
 That resets the working copy to the code's bare baseline, writes the
-in-tree manifest, submits the whole tree, runs the eight onboarding
+in-tree manifest, submits the whole tree, runs the nine onboarding
 checks in order, and stops at the `ledger promote` command, which is a
-person's step. It drives `--region`, defaulting to `tsunami:onboard`.
+person's step. The ninth check, `harness_original`, requires an independently
+preserved pre-onboarding source snapshot and reviewed run contract configured
+as the code's `original_reference`; the agent cannot create this reference.
+The shipped `tsunami` configuration does not include one, so its onboarding
+walkthrough currently stops at that readiness requirement rather than reaching
+`ONBOARDED`. It drives `--region`, defaulting to `tsunami:onboard`.
 Both walkthroughs write into the same working copy as a session does, so
 run them one after another rather than at the same time.
 
@@ -243,8 +280,8 @@ Confirm what the session can actually use:
 
     ./pi.sh --list-models
 
-Without a stated preference `pi` starts on Google's default model. To
-change that for every session, write `state/pi-home/agent/settings.json`
+To choose the model used for every session, write
+`state/pi-home/agent/settings.json`
 with the provider and model you want:
 
     {"defaultProvider": "ollama", "defaultModel": "devstral-small-2:24b"}
@@ -278,11 +315,13 @@ the tree of the last claim. The session id for `session` is the one
     ./down.sh               # stop the containers; state stays
     ./down.sh --reset       # also discard repo, ledger, working copy, sessions (asks first)
 
-Restarting the builder discards the compiled work it keeps between
-checks. After a builder restart, the next check on an existing tree may
-report that the binary is missing; running `build_replay` again rebuilds
-it. The gateway can be restarted freely; the repository and ledger are
-on the host.
+The builder cache survives an ordinary builder restart in the named Docker
+volume `equivalent_builder_work`. If the volume is cleared or replaced, a
+dependent check asks the builder to reconstruct the exact recorded build and
+continues only when the executable bytes match the recorded digest. If that
+reconstruction cannot be proven identical, run the relevant build action
+again. The gateway can be restarted freely; the repository and ledger are on
+the host.
 
 ## Changing the code, the region, or the strategy
 
@@ -316,7 +355,9 @@ gateway image copies that directory in when it is built, so re-run
 **A new code** is what `docs/onboarding.md` is for, from end to end. In
 outline: a new directory `programs/<code>/` holding the source tree
 under `baseline/` and a `manifest.yaml` with only `version`, `name`, and
-`source`; a new `deploy/gateway.<code>.yaml` with a `codes:` entry and a
+`source`; an independently preserved original source tree and reviewed
+run/output contract outside the working copy, named by `original_reference` in
+the code configuration; a new `deploy/gateway.<code>.yaml` with a `codes:` entry and a
 `phase: onboarding` region; `EQUIVALENT_CODE` and `EQUIVALENT_REGION` in
 `.env`; a session that writes the makefile, the replay driver, the
 capture program, the tolerance policy, and the rest of the manifest
@@ -357,8 +398,10 @@ each one is.
 - **A check answers `error: builder not configured`.** The gateway was
   started without `EQUIVALENT_BUILDER_URL` or `EQUIVALENT_ORACLE_URL`;
   the compose file sets both.
-- **A check answers an error naming the builder's workspace.** The
-  builder was restarted; run `build_replay` again.
+- **A check answers an error naming the builder's workspace.** Its cached
+  artifacts were absent and the builder could not reconstruct executable bytes
+  matching the recorded build. Run the relevant build action again and inspect
+  the compiler audit if it fails.
 - **Files under `state/` are owned by root.** They should not be: the
   gateway runs as your user. If it happens, the containers were started
   without `EQUIVALENT_UID`/`EQUIVALENT_GID` set, which `up.sh` and

@@ -91,6 +91,8 @@ def build_verdict(builder, attempt_id: str, tree: list[dict], strategy: Strategy
     common = {
         "attempt_id": attempt_id, "flags": resp.get("flags"),
         "targets": resp.get("targets"), "compiles": compiles,
+        "executor_identity": resp.get("executor_identity"),
+        "image_id": resp.get("image_id"),
     }
 
     if not resp.get("ok"):

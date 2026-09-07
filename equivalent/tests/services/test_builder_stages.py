@@ -30,6 +30,7 @@ needs_gfortran = pytest.mark.skipif(
 FLAGS = ["-O1", "-fno-range-check"]
 PATTERNS = ["src/*.f90", "*.f90", "Makefile"]
 
+
 MAIN = """program main
   print *, 'ran'
 end program main
@@ -79,7 +80,9 @@ def test_a_build_that_obeys_the_makefile_reports_every_compile(tmp_path):
     })
 
     assert result["ok"] is True
-    assert result["targets"]["replay"] == {"executable": "replay", "built": True}
+    assert result["targets"]["replay"]["executable"] == "replay"
+    assert result["targets"]["replay"]["built"] is True
+    assert len(result["targets"]["replay"]["sha256"]) == 64
     assert result["flags_reached_every_compile"] is True
     assert result["compiled_only_tree_source"] is True
     assert [record["inputs"] for record in result["compiles"]] == [["src/main.f90"]]

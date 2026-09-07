@@ -11,6 +11,7 @@ import copy
 import json
 
 import yaml
+import pytest
 
 from equivalent.components import manifest_check
 from equivalent.gateway.submit import init_baseline_repo
@@ -112,6 +113,21 @@ def test_a_tolerance_entry_missing_one_of_its_three_numbers_fails(tmp_path):
     assert result["verdict"] == "fail"
     problems = " ".join(result["detail"]["problems"])
     assert name in problems and "rel" in problems and "ulp" in problems
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("abs", float("nan")), ("rel", float("inf")), ("abs", -1.0),
+    ("ulp", -1), ("ulp", 1.5), ("ulp", True),
+])
+def test_an_invalid_tolerance_number_fails_manifest_validation(tmp_path, field, value):
+    name = FIXTURE_VARIABLES[0]["name"]
+    invalid = copy.deepcopy(PROGRAM_TOLERANCES)
+    invalid["variables"][name][field] = value
+
+    result = manifest_check.check(_repo(tmp_path, tolerances=invalid), "main")
+
+    assert result["verdict"] == "fail"
+    assert any(name in problem and field in problem for problem in result["detail"]["problems"])
 
 
 def test_a_tolerance_file_that_is_not_a_policy_at_all_fails(tmp_path):

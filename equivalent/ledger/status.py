@@ -32,7 +32,10 @@ def _current_subject(store: LedgerStore, kind: str):
     return best_subject
 
 
-def requirement_status(store: LedgerStore, predicate_type: str, subject: Subject | None, producing_action: str) -> dict:
+def requirement_status(
+    store: LedgerStore, predicate_type: str, subject: Subject | None,
+    producing_action: str, *, required_materials=(),
+) -> dict:
     """Is this one requirement met? Present (with its claim) or missing (with what would produce it).
 
     Only a claim whose latest verdict is "pass" satisfies a requirement.
@@ -46,7 +49,10 @@ def requirement_status(store: LedgerStore, predicate_type: str, subject: Subject
     /run refusal both call this, so a claim renders the same way in both
     places.
     """
-    claim = store.latest(predicate_type, subject) if subject is not None else None
+    claim = (
+        store.latest(predicate_type, subject, required_materials=required_materials)
+        if subject is not None else None
+    )
     if claim is not None and claim.predicate.verdict == "pass":
         return {
             "predicateType": predicate_type,
@@ -62,12 +68,27 @@ def requirement_status(store: LedgerStore, predicate_type: str, subject: Subject
             "claim_id": claim.id,
             "producing_action": producing_action,
         }
+    # Preserve old and superseded claims as explicit history without letting
+    # them silently satisfy the current policy.  This is especially useful
+    # after a strategy, manifest, dataset, or evidence-policy upgrade.
+    stale = store.latest_unchecked(predicate_type, subject) if subject is not None else None
+    if stale is not None:
+        return {
+            "predicateType": predicate_type,
+            "status": "missing",
+            "evidence_status": "stale",
+            "verdict": stale.predicate.verdict,
+            "claim_id": stale.id,
+            "producing_action": producing_action,
+            "reason": "claim was produced under a different or legacy evidence context",
+        }
     return {"predicateType": predicate_type, "status": "missing", "producing_action": producing_action}
 
 
 def compute_status(
     store: LedgerStore, requirements, phase: str,
     tree: Subject | None = None, frozen: Subject | None = None,
+    *, required_materials=(), required_materials_by_predicate=None,
 ) -> dict:
     """Status for the region's current tree, against one phase's requirements.
 
@@ -86,9 +107,15 @@ def compute_status(
         frozen = _current_subject(store, "frozen")
 
     rows = []
+    required_materials_by_predicate = required_materials_by_predicate or {}
     for req in requirements:
         subject = tree if req.subject_kind == "tree" else frozen
-        rows.append(requirement_status(store, req.predicate_type, subject, req.producing_action))
+        rows.append(requirement_status(
+            store, req.predicate_type, subject, req.producing_action,
+            required_materials=required_materials_by_predicate.get(
+                req.predicate_type, required_materials,
+            ),
+        ))
 
     accepted = tree is not None and all(
         row["status"] == "present" and row["verdict"] == "pass" for row in rows

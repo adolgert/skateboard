@@ -51,14 +51,16 @@ def check_holdout(region_id: str, tree_sha: str, strategy: Strategy, manifest: M
             notify=strategy.device_proof.notify, mandatory=strategy.device_proof.mandatory,
         )
     except Exception as exc:
-        raise ComponentError(f"could not execute the held-out cases: {exc}") from exc
+        # Transport errors can include backend response bodies. During a
+        # held-out run those bodies are influenced by the submitted code.
+        raise ComponentError("could not execute the held-out cases; private diagnostic withheld") from exc
     if not run_resp.get("ok"):
-        raise ComponentError(f"held-out run failed: {run_resp.get('log_tail', '')}")
+        raise ComponentError("held-out run failed; private diagnostic withheld")
 
     try:
         resp = oracle.compare(dataset="holdout", outputs=run_resp["outputs"])
     except Exception as exc:
-        raise ComponentError(f"oracle /v1/compare call failed: {exc}") from exc
+        raise ComponentError("held-out comparison unavailable; private diagnostic withheld") from exc
 
     # Deliberately no outputs and no per-case detail here -- the oracle's
     # own response for holdout never includes any, and this claim's detail

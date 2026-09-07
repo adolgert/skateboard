@@ -7,7 +7,11 @@ respect to file ordering and path normalization.
 from __future__ import annotations
 
 import hashlib
+import re
+import struct
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 # "policy" is the oracle's tolerance policy -- it appears in regression
 # claims' materials (a pass under a loose policy must be distinguishable
@@ -17,7 +21,13 @@ from dataclasses import dataclass
 # against another.
 SUBJECT_KINDS = (
     "tree", "frozen", "capture_set", "strategy", "manifest", "binary", "outputs", "policy",
+    "evidence_policy", "reference", "executor", "oracle",
 )
+
+# A claim made before this policy existed is readable history, but is not
+# evidence for the current acceptance decision.  Bump this value whenever a
+# change to the gateway/checker contract changes what a passing claim means.
+EVIDENCE_POLICY_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -28,6 +38,8 @@ class Subject:
     def __post_init__(self):
         if self.kind not in SUBJECT_KINDS:
             raise ValueError(f"unknown subject kind: {self.kind!r}")
+        if not isinstance(self.sha256, str) or re.fullmatch(r"[0-9a-f]{64}", self.sha256) is None:
+            raise ValueError("subject sha256 must be exactly 64 lowercase hexadecimal characters")
 
     def to_dict(self) -> dict:
         return {"kind": self.kind, "sha256": self.sha256}
@@ -50,16 +62,24 @@ def _normalize_path(path: str) -> str:
 def hash_files(files: list[dict]) -> str:
     """sha256 over (path, content) pairs, sorted by normalized path.
 
-    `files` is a list of {"path": str, "content": str|bytes}. This is the
-    same scheme the first demonstration harness's `src_sha` used (sorted by
-    path, path bytes then content bytes, no separator) so a hash computed
-    here reduces to the same value if truncated the same way.
+    `files` is a list of {"path": str, "content": str|bytes}.
+    Paths and contents are length-delimited.  Concatenating them directly is
+    ambiguous: ("a", "bc") and ("ab", "c") otherwise hash to the same byte
+    stream without requiring a SHA-256 collision.
     """
     h = hashlib.sha256()
-    for f in sorted(files, key=lambda x: _normalize_path(x["path"])):
-        h.update(_normalize_path(f["path"]).encode("utf-8"))
-        content = f["content"]
+    h.update(b"equivalent:file-set:v2\0")
+    normalized = [(_normalize_path(f["path"]), f["content"]) for f in files]
+    paths = [path for path, _ in normalized]
+    if len(paths) != len(set(paths)):
+        raise ValueError("file set contains duplicate normalized paths")
+    h.update(struct.pack(">Q", len(normalized)))
+    for path, content in sorted(normalized, key=lambda item: item[0]):
+        path_bytes = path.encode("utf-8")
         content_bytes = content if isinstance(content, bytes) else content.encode("utf-8")
+        h.update(struct.pack(">Q", len(path_bytes)))
+        h.update(path_bytes)
+        h.update(struct.pack(">Q", len(content_bytes)))
         h.update(content_bytes)
     return h.hexdigest()
 
@@ -101,3 +121,30 @@ def outputs_subject(cases: dict) -> Subject:
         for var, data in vars_.items()
     ]
     return Subject(kind="outputs", sha256=hash_files(files))
+
+
+@lru_cache(maxsize=1)
+def evidence_policy_subject() -> Subject:
+    """Identity of the local trusted code and its evidence-contract version.
+
+    The explicit version records an intentional semantics boundary.  Hashing
+    the installed Python sources also prevents a checker edit that forgot to
+    bump that version from silently reusing older claims.
+    """
+    package_root = Path(__file__).resolve().parents[1]
+    files = [
+        {
+            "path": path.relative_to(package_root).as_posix(),
+            "content": path.read_bytes(),
+        }
+        for path in sorted(package_root.rglob("*.py"))
+        if "tests" not in path.relative_to(package_root).parts
+    ]
+    files.append({
+        "path": "@evidence-contract-version",
+        "content": str(EVIDENCE_POLICY_VERSION),
+    })
+    return Subject(
+        kind="evidence_policy",
+        sha256=hash_files(files),
+    )

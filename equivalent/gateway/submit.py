@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import fnmatch
+import hashlib
 import os
 import re
 import subprocess
@@ -41,6 +42,10 @@ class SubmitReceipt:
     rejected: tuple
     not_sent: tuple  # allowed baseline paths absent from the working copy, named as a warning
     committed: bool
+
+
+class ConcurrentSubmissionError(RuntimeError):
+    """The region branch advanced while this submission was constructed."""
 
 
 def _git(repo_dir, *args, input=None, env=None) -> str:
@@ -129,18 +134,22 @@ def _matches_any(path: str, globs: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, g) for g in globs)
 
 
-def resolve_allow_globs(store: LedgerStore, spec_path, phase: str, strategy) -> list[str]:
+def resolve_allow_globs(
+    store: LedgerStore, spec_path, phase: str, strategy, *, required_materials=(),
+) -> list[str]:
     """The region's current allow-list.
 
     While a code is being onboarded there is no region and no SESE claim:
     the agent is rewriting the build, the drivers, and the manifest, and
     the strategy's own `allow_globs` is the whole of the answer.
 
-    While a region is being ported the list narrows. Before any passing
-    sese/verified claim exists it is the spec file alone (the bootstrap
-    rule). After one exists it is whatever that claim's own detail
-    recorded -- the sese_check component is the thing that writes that
-    field; this function only reads it.
+    While a region is being ported the list narrows. Before any current-policy
+    passing sese/verified claim exists it is the spec file alone (the
+    bootstrap rule). After one exists it is whatever that claim's own detail
+    recorded, after checking those paths remain inside the strategy's reviewed
+    ceiling. The SESE verdict itself is candidate-tree scoped and must be rerun
+    after an edit; its reviewed allow-list remains the authority that permits
+    that edit to be submitted.
 
     The phase and the strategy are passed in rather than read from a
     configuration file here, so this stays a function of what it is
@@ -151,10 +160,18 @@ def resolve_allow_globs(store: LedgerStore, spec_path, phase: str, strategy) -> 
     passing = [
         c for c in store.all_claims()
         if c.predicateType == "sese/verified" and c.predicate.verdict == "pass"
+        and store.claim_matches_context(c, required_materials)
+        and isinstance(c.predicate.detail.get("allow_globs"), list)
+        and spec_path in c.predicate.detail["allow_globs"]
+        and all(
+            isinstance(pattern, str) and strategy.allows(pattern)
+            for pattern in c.predicate.detail["allow_globs"]
+        )
     ]
     if not passing:
         return [spec_path]
-    return max(passing, key=lambda c: c.ts).predicate.detail["allow_globs"]
+    # Stable sorting makes the last appended claim win timestamp ties.
+    return sorted(passing, key=lambda c: c.ts)[-1].predicate.detail["allow_globs"]
 
 
 def _build_tree(repo_dir, files: dict[str, bytes]) -> str:
@@ -175,14 +192,28 @@ def _build_tree(repo_dir, files: dict[str, bytes]) -> str:
 
 def _commit_tree_if_changed(repo_dir, branch: str, files: dict[str, bytes], message: str) -> bool:
     git_tree = _build_tree(repo_dir, files)
-    parent = _rev_parse(repo_dir, branch) or _rev_parse(repo_dir, "main")
+    old_tip = _rev_parse(repo_dir, branch)
+    parent = old_tip or _rev_parse(repo_dir, "main")
     parent_tree = _git(repo_dir, "rev-parse", f"{parent}^{{tree}}").strip()
     if git_tree == parent_tree:
-        if _rev_parse(repo_dir, branch) is None:
-            _git(repo_dir, "update-ref", f"refs/heads/{branch}", parent)
+        if old_tip is None:
+            try:
+                _git(repo_dir, "update-ref", f"refs/heads/{branch}", parent, "0" * 40)
+            except subprocess.CalledProcessError as exc:
+                raise ConcurrentSubmissionError(
+                    f"region branch {branch!r} changed during submit; retry from the current tree"
+                ) from exc
         return False
     commit = _git(repo_dir, "commit-tree", git_tree, "-p", parent, "-m", message).strip()
-    _git(repo_dir, "update-ref", f"refs/heads/{branch}", commit)
+    # Compare-and-swap the branch.  Two gateway processes may construct
+    # submissions concurrently; a late writer must not overwrite a commit it
+    # never used as its parent.
+    try:
+        _git(repo_dir, "update-ref", f"refs/heads/{branch}", commit, old_tip or "0" * 40)
+    except subprocess.CalledProcessError as exc:
+        raise ConcurrentSubmissionError(
+            f"region branch {branch!r} changed during submit; retry from the current tree"
+        ) from exc
     return True
 
 
@@ -243,6 +274,15 @@ def current_ref(repo_dir, region_id: str) -> str:
     return branch if _rev_parse(repo_dir, branch) is not None else "main"
 
 
+def current_commit(repo_dir, region_id: str) -> str:
+    """Resolve the mutable region ref once to an immutable commit id."""
+    ref = current_ref(repo_dir, region_id)
+    commit = _rev_parse(repo_dir, ref)
+    if commit is None:
+        raise ValueError(f"cannot resolve current ref {ref!r} for region {region_id!r}")
+    return commit
+
+
 def frozen_for_allow_globs(repo_dir, allow_globs: list[str]) -> str:
     """The frozen-set hash for an explicit allow-list: baseline files it doesn't cover."""
     baseline = tracked_files(repo_dir, "main")
@@ -274,8 +314,9 @@ def attempt_id_for_strategy(region_id: str, tree_sha: str, strategy_name: str) -
     onboarding step that wants one of those builds derives the same key
     from the same three things rather than being handed it.
     """
-    safe_strategy = re.sub(r"[^A-Za-z0-9._-]", "-", strategy_name)
-    return f"{attempt_id_for(region_id, tree_sha)}-{safe_strategy}"
+    safe_strategy = re.sub(r"[^A-Za-z0-9._-]", "-", strategy_name)[:32]
+    strategy_digest = hashlib.sha256(strategy_name.encode("utf-8")).hexdigest()[:12]
+    return f"{attempt_id_for(region_id, tree_sha)}-{safe_strategy}-{strategy_digest}"
 
 
 def attempt_id_for(region_id: str, tree_sha: str) -> str:
@@ -289,8 +330,9 @@ def attempt_id_for(region_id: str, tree_sha: str) -> str:
     workspace (a container restart), re-running the build re-creates it
     under the same id.
     """
-    safe_region = re.sub(r"[^A-Za-z0-9._-]", "-", region_id)
-    return f"{safe_region}-{tree_sha[:16]}"
+    safe_region = re.sub(r"[^A-Za-z0-9._-]", "-", region_id)[:48]
+    region_digest = hashlib.sha256(region_id.encode("utf-8")).hexdigest()[:16]
+    return f"{safe_region}-{region_digest}-{tree_sha}"
 
 
 def tree_payload(repo_dir, ref: str) -> list[dict]:
@@ -324,6 +366,7 @@ def baseline_tree_sha(repo_dir) -> str:
 
 def current_tree_and_frozen(
     repo_dir, region_id: str, store: LedgerStore, spec_path, phase: str, strategy,
+    *, required_materials=(), ref: str | None = None,
 ) -> tuple[str, str]:
     """The region's current tree and frozen-set hashes, read straight from the gateway repo.
 
@@ -335,8 +378,10 @@ def current_tree_and_frozen(
     frozen set, and that is the honest answer: nothing about the code is
     being held still while it is brought in.
     """
-    ref = current_ref(repo_dir, region_id)
-    allow_globs = resolve_allow_globs(store, spec_path, phase, strategy)
+    ref = ref or current_commit(repo_dir, region_id)
+    allow_globs = resolve_allow_globs(
+        store, spec_path, phase, strategy, required_materials=required_materials,
+    )
     return (
         tree_subject(tracked_files(repo_dir, ref)).sha256,
         frozen_for_allow_globs(repo_dir, allow_globs),

@@ -132,7 +132,7 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
     # matching the hash the oracle reported.
     for predicate_type in ("regression/visible", "regression/holdout"):
         claim = next(c for c in store.all_claims() if c.predicateType == predicate_type)
-        assert any(m.kind == "policy" and m.sha256 == "policyabc" for m in claim.materials)
+        assert any(m.kind == "policy" and m.sha256 == "f" * 64 for m in claim.materials)
 
     # The port's own program run was compared against the set the
     # baseline's run stored, and the claim names both that set and the
@@ -179,6 +179,97 @@ def test_sanitize_dispatch_writes_three_claims_and_is_a_duplicate_on_repeat(tmp_
     assert second["claims"] == first["claims"]
     assert len(builder.sanitize_calls) == 1  # not called again
     assert store.all_requests()[-1].outcome == "duplicate"
+
+
+def test_initcheck_failure_blocks_visible_regression_and_acceptance(tmp_path):
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in ("sese_check", "build_replay", "run_replay"):
+        _run(client, cfg, action)
+
+    original_sanitize = builder.sanitize
+
+    def initcheck_fails(attempt_id, executable, cases, tools):
+        response = original_sanitize(attempt_id, executable, cases, tools)
+        response["ok"] = False
+        response["per_tool"]["initcheck"] = {
+            "ok": False, "errors": 1, "log_tail": "uninitialized read",
+        }
+        return response
+
+    builder.sanitize = initcheck_fails
+    sanitize_result = _run(client, cfg, "sanitize")
+    refused = _run(client, cfg, "regression_visible")
+    status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+
+    verdicts = {claim["predicateType"]: claim["verdict"]
+                for claim in sanitize_result["claims"]}
+    assert verdicts["sanitize/initcheck"] == "fail"
+    assert [item["predicateType"] for item in refused["missing"]] == [
+        "sanitize/initcheck"
+    ]
+    assert status["accepted"] is False
+
+
+def test_a_lost_builder_workspace_is_rebuilt_before_dependent_execution(tmp_path):
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    _run(client, cfg, "sese_check")
+    _run(client, cfg, "build_replay")
+    builder.artifact_records.clear()  # as after a builder-volume loss/restart
+
+    result = _run(client, cfg, "run_replay")
+
+    assert result["verdict"] == "pass"
+    assert len(builder.build_calls) == 2
+    assert len(builder.run_calls) == 1
+
+
+def test_runtime_binary_must_match_the_current_build_claim(tmp_path):
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    _run(client, cfg, "sese_check")
+    _run(client, cfg, "build_replay")
+    builder.executable_identity = {
+        **builder.executable_identity, "sha256": "c" * 64,
+    }
+
+    result = _run(client, cfg, "run_replay")
+
+    assert "does not match the current passing build claim" in result["error"]
+    assert not any(claim.predicateType == "gpu/executed" for claim in store.all_claims())
+
+
+def test_a_rebuilt_binary_cohort_makes_dependent_claims_stale(tmp_path):
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in ("sese_check", "build_replay", "run_replay"):
+        _run(client, cfg, action)
+
+    builder.executable_identity = {
+        **builder.executable_identity, "sha256": "c" * 64,
+    }
+    builder.artifact_records.clear()
+    rebuilt = _run(client, cfg, "build_replay")
+    status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+
+    assert rebuilt["verdict"] == "pass"
+    gpu = next(row for row in status["rows"] if row["predicateType"] == "gpu/executed")
+    assert gpu["status"] == "missing"
+    assert gpu["evidence_status"] == "stale"
+    assert status["accepted"] is False
 
 
 def test_holdout_receipt_is_verdict_only_but_the_stored_claim_keeps_its_detail(tmp_path):
@@ -328,8 +419,8 @@ def test_how_many_examples_a_search_draws_can_be_asked_for(tmp_path):
     client.post(
         "/run",
         json={"action": "property_check", "region": cfg.region_id,
-              "config": {"seed": 5, "max_examples": 20}},
+              "config": {"seed": 5, "max_examples": 100}},
         headers=HEADERS,
     )
 
-    assert builder.properties_calls[0]["max_examples"] == 20
+    assert builder.properties_calls[0]["max_examples"] == 100

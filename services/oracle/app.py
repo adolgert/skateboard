@@ -31,6 +31,7 @@ import hashlib
 import io
 import json
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -79,6 +80,40 @@ MANIFEST = "manifest"
 # declared output type is compared exactly and needs no entry.
 BANDED_DTYPES = ("f32", "f64")
 BAND_FIELDS = ("abs", "rel", "ulp")
+
+
+def _identity_from_entries(entries) -> str:
+    """Hash named byte strings with unambiguous length framing."""
+    digest = hashlib.sha256()
+    for name, value in sorted(entries, key=lambda item: item[0]):
+        name_bytes = name.encode("utf-8")
+        value = bytes(value)
+        digest.update(len(name_bytes).to_bytes(8, "big"))
+        digest.update(name_bytes)
+        digest.update(len(value).to_bytes(8, "big"))
+        digest.update(value)
+    return digest.hexdigest()
+
+
+def _oracle_identity(captures_dir: Path, policy_bytes: bytes, outputs: list) -> str:
+    """Identity of every trusted input that can change an oracle verdict."""
+    entries = [
+        ("oracle-source", Path(__file__).read_bytes()),
+        ("python-version", sys.version.encode()),
+        ("numpy-version", np.__version__.encode()),
+        ("policy", policy_bytes),
+        ("declared-outputs", json.dumps(
+            outputs, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ).encode()),
+        ("comparator-version", cmp.COMPARATOR_VERSION.encode()),
+        ("comparator-source", Path(cmp.__file__).read_bytes()),
+    ]
+    for dataset in DATASETS:
+        root = captures_dir / dataset
+        for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
+            relative = path.relative_to(captures_dir).as_posix()
+            entries.append((f"capture:{relative}", path.read_bytes()))
+    return _identity_from_entries(entries)
 
 
 def _decode(encoded: str) -> np.ndarray:
@@ -170,6 +205,11 @@ def _check_policy(policy: dict, outputs: list) -> None:
             raise ValueError(
                 f"the tolerance policy for output variable '{name}' is missing {missing}"
             )
+        problem = cmp._tolerance_problem(band)
+        if problem:
+            raise ValueError(
+                f"the tolerance policy for output variable '{name}' is invalid: {problem}"
+            )
 
 
 class CompareReq(BaseModel):
@@ -187,6 +227,7 @@ def create_app(captures_dir, tolerances_path, manifest_path, token: str = "") ->
 
     policy = None
     policy_sha = None
+    oracle_identity = None
     bands = {}
     if ready:
         policy_bytes = Path(tolerances_path).read_bytes()
@@ -196,6 +237,7 @@ def create_app(captures_dir, tolerances_path, manifest_path, token: str = "") ->
         # list of outputs to insist on a band for.
         _check_policy(policy, outputs)
         bands = policy["variables"]
+        oracle_identity = _oracle_identity(captures_dir, policy_bytes, outputs)
 
     app = FastAPI(title="skateboard-oracle")
 
@@ -232,7 +274,11 @@ def create_app(captures_dir, tolerances_path, manifest_path, token: str = "") ->
     def get_policy(authorization: str | None = Header(default=None)):
         _auth(authorization)
         _ready()
-        return {"policy_version": policy["policy_version"], "policy_sha256": policy_sha}
+        return {
+            "policy_version": policy["policy_version"],
+            "policy_sha256": policy_sha,
+            "oracle_identity": oracle_identity,
+        }
 
     @app.get("/v1/dataset/holdout/inputs")
     def holdout_inputs(authorization: str | None = Header(default=None)):
@@ -275,6 +321,7 @@ def create_app(captures_dir, tolerances_path, manifest_path, token: str = "") ->
             "verdict": "pass" if all_pass else "fail",
             "dataset": req.dataset,
             "policy_sha256": policy_sha,
+            "oracle_identity": oracle_identity,
         }
         # Held-out returns pass/fail ONLY, by design. Visible returns detail for
         # the feedback report the agent will see.
@@ -290,6 +337,7 @@ def create_app(captures_dir, tolerances_path, manifest_path, token: str = "") ->
             "ready": ready,
             "missing": list(missing),
             "policy_sha256": policy_sha,
+            "oracle_identity": oracle_identity,
             "n_visible": len(_cases("visible")) if ready else 0,
             "n_holdout": len(_cases("holdout")) if ready else 0,
         }

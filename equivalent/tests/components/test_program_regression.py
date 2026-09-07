@@ -164,6 +164,14 @@ def test_with_no_baseline_timing_claim_it_says_to_time_the_baseline_first(tmp_pa
     assert "time_baseline" in str(excinfo.value)
 
 
+def test_baseline_reference_must_match_the_active_evidence_context(tmp_path):
+    manifest = _manifest(tmp_path)
+    store = _store_with_baseline(tmp_path, manifest)
+    store.activate_context([Subject("executor", "a" * 64)])
+    with pytest.raises(ComponentError, match="time_baseline"):
+        program_regression.reference_set(store, BASELINE_TREE)
+
+
 def test_a_baseline_claim_that_stored_no_set_is_not_a_reference(tmp_path):
     # The claim passed -- the program was timed -- but it left nothing to
     # compare against, so there is still nothing to do this check with.

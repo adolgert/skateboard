@@ -101,7 +101,7 @@ services:
       retries: 12
       start_period: 10s
 
-  builder:                      # semi-trusted executor; the only container with the GPU
+  builder:                      # trusted supervisor; submitted code runs only in disposable jobs
     build:
       context: ..
       dockerfile: services/builder/Dockerfile
@@ -111,10 +111,21 @@ services:
     environment:
       - SKATEBOARD_TOKEN=${EQUIVALENT_TOKEN}
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    # /work is a normal writable dir in the (ephemeral) container. NOT a tmpfs:
-    # Docker mounts tmpfs noexec, which blocks executing the compiled binary.
-    # The image has python3 for the service shim but no curl, so the check is
-    # written in python3. /healthz needs no token.
+      - SKATEBOARD_JOB_IMAGE=skateboard/builder
+      - SKATEBOARD_WORK_VOLUME=equivalent_builder_work
+    # The supervisor needs the engine API solely to create restricted sibling
+    # jobs. Each job mounts one attempt subdirectory, has no network or service
+    # token, uses a read-only image, and is destroyed after one command.
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777
+      - /run:rw,noexec,nosuid,nodev,size=16m,mode=755
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - builder_work:/work
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:9090/healthz').read()"]
@@ -191,3 +202,7 @@ networks:
     internal: true
   oracle_net:
     internal: true
+
+volumes:
+  builder_work:
+    name: equivalent_builder_work

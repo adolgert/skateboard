@@ -346,13 +346,36 @@ class FakeBuilder:
         self.properties_ok = True
         # What pytest's summary line said, as the real builder parses it.
         # A test that wants a property to have failed sets both.
-        self.properties_counts = {"passed": 3, "failed": 0, "errors": 0}
+        self.properties_counts = {
+            "passed": 3, "failed": 0, "errors": 0, "skipped": 0,
+            "deselected": 0, "xfailed": 0, "xpassed": 0,
+            "collected": 3, "executed": 3,
+        }
         self.properties_log = ""
+        self.replays_observed = 3
+        self.executor_identity = "e" * 64
+        self.executable_identity = {
+            "sha256": "b" * 64, "size": 12345, "role": "replay",
+            "executor_identity": self.executor_identity,
+        }
+        self.artifact_records = {}
 
     def healthz(self):
         return {
             "ok": True, "tools": dict(self.tools),
             "python_modules": dict(self.python_modules),
+            "executor_identity": self.executor_identity,
+            "isolation": {"ok": True, "backend": "fake", "executor_identity": self.executor_identity},
+        }
+
+    def artifacts(self, attempt_id):
+        executables = self.artifact_records.get(attempt_id, {})
+        return {
+            "ok": bool(executables), "attempt_id": attempt_id,
+            "executor_identity": self.executor_identity,
+            "image_id": "sha256:" + "a" * 64,
+            "executables": {name: {**identity, "verified": True}
+                            for name, identity in executables.items()},
         }
 
     def build(self, attempt_id, tree, makefile, targets, compiler, flags, link_flags,
@@ -375,7 +398,10 @@ class FakeBuilder:
         result = {
             "stage": "build",
             "targets": {
-                t["role"]: {"executable": t["executable"], "built": self.build_ok}
+                t["role"]: {
+                    "executable": t["executable"], "built": self.build_ok,
+                    "sha256": self.executable_identity["sha256"], "size": 12345,
+                }
                 for t in targets
             },
             "compiles": [record],
@@ -384,9 +410,18 @@ class FakeBuilder:
             "flags_reached_every_compile": self.flags_reached,
             "compiled_only_tree_source": self.only_tree_source,
             "minfo_excerpt": "Generating Tesla code",
+            "executor_identity": self.executor_identity,
+            "image_id": "sha256:" + "a" * 64,
         }
         if not self.build_ok:
             return {**result, "ok": False, "log_tail": "compile error"}
+        self.artifact_records[attempt_id] = {
+            target["executable"]: {
+                "sha256": self.executable_identity["sha256"], "size": 12345,
+                "role": target["role"],
+            }
+            for target in targets
+        }
         return {**result, "ok": True, "log_tail": ""}
 
     def run(self, attempt_id, executable, cases, notify=None, mandatory=False):
@@ -404,7 +439,8 @@ class FakeBuilder:
         else:
             outputs = {name: dict(self.run_outputs) for name in cases}
         return {"ok": True, "stage": "run", "outputs": outputs, "kernels_launched": self.run_kernels,
-                "launches": self.run_launches, "log_tail": ""}
+                "launches": self.run_launches, "log_tail": "",
+                "executable_identity": dict(self.executable_identity)}
 
     def properties(self, attempt_id, executable, module, cases, seed, max_examples):
         self.properties_calls.append({
@@ -415,6 +451,9 @@ class FakeBuilder:
             "ok": self.properties_ok, "stage": "properties", "seed": seed,
             "max_examples": max_examples, **self.properties_counts,
             "log_tail": self.properties_log,
+            "replays_observed": self.replays_observed,
+            "counts_source": "pytest summary emitted by the submitted property process",
+            "executable_identity": dict(self.executable_identity),
         }
 
     def mutate(self, attempt_id, makefile, replay_target, files, cases, bands, compiler,
@@ -451,22 +490,30 @@ class FakeBuilder:
                 "stdout_tail": "the capture run wrote no case directory",
             }
         cases = self.capture_cases.get(tuple(args), captured_cases(list(args)))
-        return {"ok": True, "stage": "capture", "cases": cases, "stdout_tail": ""}
+        return {
+            "ok": True, "stage": "capture", "cases": cases, "stdout_tail": "",
+            "executable_identity": dict(self.executable_identity),
+        }
 
     def sanitize(self, attempt_id, executable, cases, tools):
         self.sanitize_calls.append({
             "attempt_id": attempt_id, "executable": executable, "cases": cases, "tools": tools,
         })
         per_tool = {t: {"ok": self.sanitize_ok, "errors": 0 if self.sanitize_ok else 3, "log_tail": ""} for t in tools}
-        return {"ok": self.sanitize_ok, "stage": "sanitize", "per_tool": per_tool}
+        return {
+            "ok": self.sanitize_ok, "stage": "sanitize", "per_tool": per_tool,
+            "executable_identity": dict(self.executable_identity),
+        }
 
-    def time(self, attempt_id, executable, args, env, outputs, repeats=5, budget_s=300):
+    def time(self, attempt_id, executable, args, env, outputs, repeats=5, budget_s=300,
+             expected_outputs=None):
         self.time_calls.append({
             "attempt_id": attempt_id, "executable": executable, "args": args, "env": env,
             "outputs": outputs, "repeats": repeats, "budget_s": budget_s,
         })
         if not self.time_ok:
             return {"ok": False, "stage": "time", "log_tail": "timing binary not built"}
+        self.runs_s = [self.runs_s[i % len(self.runs_s)] for i in range(repeats)]
         return {
             "ok": True, "stage": "time", "runs_s": self.runs_s, "gpu_exclusive": True,
             # One set of files per run, in run order, as the builder
@@ -474,7 +521,7 @@ class FakeBuilder:
             # time; a test that wants a program which does not overrides
             # this method.
             "outputs": [self.timing_outputs(outputs, run) for run in range(repeats)],
-            "stdout_tail": "",
+            "stdout_tail": "", "executable_identity": dict(self.executable_identity),
         }
 
     def timing_outputs(self, outputs, run: int) -> dict:
@@ -492,7 +539,10 @@ class FakeOracle:
         self.holdout_verdict = "pass"
 
     def policy(self):
-        return {"policy_version": "1", "policy_sha256": "policyabc"}
+        return {
+            "policy_version": "1", "policy_sha256": "f" * 64,
+            "oracle_identity": "0" * 64,
+        }
 
     def holdout_inputs(self):
         return {"dataset": "holdout", "cases": {"hcase0": fixture_case(offset=7)}}
@@ -500,7 +550,10 @@ class FakeOracle:
     def compare(self, dataset, outputs, attempt_id="unknown"):
         self.compare_calls.append({"dataset": dataset, "outputs": outputs, "attempt_id": attempt_id})
         verdict = self.visible_verdict if dataset == "visible" else self.holdout_verdict
-        resp = {"verdict": verdict, "dataset": dataset, "policy_sha256": "policyabc"}
+        resp = {
+            "verdict": verdict, "dataset": dataset,
+            "policy_sha256": "f" * 64, "oracle_identity": "0" * 64,
+        }
         if dataset == "visible":
             resp["per_case"] = {name: {"pass": verdict == "pass"} for name in outputs}
         return resp

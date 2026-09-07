@@ -64,9 +64,14 @@ a session stalls if it is not true.
 
 ### Setting the deployment up
 
-1. Put the code's files under `programs/<code>/baseline/` (a `src/`
-   directory is conventional; the porting strategies allow edits under
-   `src/`). Note where they came from in `NOTICE`.
+1. Preserve a reviewed pre-onboarding source snapshot and comparison contract
+   outside the agent's working copy, following
+   [the coworker handoff](coworker-handoff.md#2-preserve-the-original-before-the-agent-edits-it).
+   Then put a copy under `programs/<code>/baseline/` (a `src/` directory is
+   conventional; the porting strategies allow edits under `src/`). Note where
+   it came from in `NOTICE`. The independent snapshot is what detects an
+   onboarding refactor that changes the application and then captures its own
+   changed behavior as the new reference.
 2. Write the minimal `programs/<code>/manifest.yaml`:
 
        version: 1
@@ -81,6 +86,7 @@ a session stalls if it is not true.
        codes:
          <code>:
            manifest: <code>/manifest.yaml
+           original_reference: <code>/original-reference.yaml
        regions:
          "<code>:onboard":
            code: <code>
@@ -89,13 +95,20 @@ a session stalls if it is not true.
            baseline_strategy: cpu_reference
 
 4. In `deploy/.env` set `EQUIVALENT_CODE=<code>` and
-   `EQUIVALENT_REGION=<code>:onboard`, then `deploy/up.sh` and
-   `deploy/pi.sh`. `EQUIVALENT_CODE` is what picks
+   `EQUIVALENT_REGION=<code>:onboard`. Run `deploy/qualify.sh`, review
+   `deploy/state/builder-qualification.json`, and copy its
+   `isolation.executor_identity` value into the onboarding region's
+   `executor_identity` field. Then run `deploy/up.sh` and `deploy/pi.sh`.
+   Promotion refuses to proceed without this reviewed pin.
+   `EQUIVALENT_CODE` is what picks
    `gateway.<code>.yaml`, seeds the baseline from this code's tree, and
    builds the oracle around this code's directory: one deployment holds
    one code. The oracle image starts without captures, answering every
    comparison with the name of what is missing; that is expected until
-   promotion.
+   promotion. An unready oracle has no identity to pin. After promotion and an
+   oracle rebuild, its `/healthz` identity is pinned for porting as described
+   below. Claims from a different tool or oracle context do not satisfy the
+   current deployment.
 5. Open the session with a message that points at this document and
    states the region, for example:
 
@@ -117,7 +130,7 @@ a session stalls if it is not true.
 
 ## The session (the model)
 
-You have the tools `submit`, `status`, and the eight onboarding checks.
+You have the tools `submit`, `status`, `claim`, and the nine onboarding checks.
 Every check is filed as a claim on the tree you last submitted; `status`
 lists which claims the current tree has and which it lacks. A check that
 refuses tells you which claim it needs first. A check that fails tells
@@ -143,9 +156,9 @@ preconditions, and the gateway enforces those, not the numbering:
    and held-out runs different runs. Fix what it names. Repeat until it
    passes.
 4. `harness_build`: every target builds under both the region's baseline
-   strategy and its port strategy, and the compiler log shows each
-   strategy's flags on every compile and nothing compiled from outside
-   the tree.
+   strategy and its port strategy, and the protected compiler audit shows each
+   strategy's flags on every compile and nothing compiled from outside the
+   tree.
 5. `harness_capture`: the capture program writes at least one case for
    every dataset the manifest declares; every case holds exactly the
    declared variables -- none missing, none extra -- at the declared
@@ -159,18 +172,33 @@ preconditions, and the gateway enforces those, not the numbering:
 8. `harness_timing`: the timing target runs twice, each run inside the
    budget the manifest declares, and writes the same declared `.npy`
    outputs both times.
-9. `harness_self_check`: mutants of the files the manifest lists under
+9. `harness_original`: the onboarded whole program agrees, on every run and
+   output in the person's external contract, with the independently preserved
+   pre-onboarding snapshot. Both sides must also reproduce their own output on
+   two runs. The claim records source and contract identity, output artifacts,
+   and reference build evidence. A missing external reference cannot produce
+   `ONBOARDED`.
+10. `harness_self_check`: mutants of the files the manifest lists under
    `interface.files` are built and replayed the way the baseline is, and
    scored with the harness's own comparator against your bands. At least
-   one mutant must be caught. A mutant that changes an output but stays
-   *inside* the bands is the tolerance-blind gap and fails the check:
-   the bands are what to change, not the check. Survivors -- mutants no
-   output changed at all for -- are listed for the person and are not
-   counted against you.
-10. `harness_property` (optional module): the properties pass against
-    the baseline build. If the code declares none, the check records
+   one mutant must be caught, and the full campaign must finish without
+   skipped, pending, or runtime-failed rows. A selected mutation that
+   changes an output but stays *inside* the bands fails this conservative
+   screen and requires review of the mutation, workload, and numerical
+   policy. Unchanged-output mutants are listed as review obligations; the
+   tool does not claim they are semantically equivalent.
+11. `harness_property` (optional module): the properties pass against
+    the baseline build, with at least one passing pytest test and protected
+    evidence that the bound replay executable ran; no tests may fail, error,
+    skip, be deselected, xfail, or xpass. If the code declares none, the check records
     that it declares none, which is still a claim.
-11. `status` reports `ONBOARDED`. Stop; promotion is the person's step.
+12. `status` reports `ONBOARDED`. Stop; promotion is the person's step.
+
+The optional `seed` for `harness_property` is a signed 64-bit integer;
+omitting it draws and records one. `max_examples` is a requested Hypothesis
+ceiling from 100 through 10000 and defaults to 100. `harness_self_check` accepts
+a `limit` from 1 through 10000 for diagnosis, but a limit that truncates the
+campaign cannot pass the adequacy check.
 
 When a check fails, read its detail before changing anything. The detail
 names the file, case, variable, or compile line it objected to.
@@ -232,14 +260,14 @@ The builder runs, in the tree root:
 
     make -f <makefile> <target>...
 
-with these in the environment: `FC` (a shim that logs every compiler
-invocation, then runs the strategy's compiler), `FFLAGS`, `LDFLAGS`,
+with these in the environment: `FC` (the strategy's compiler), `FFLAGS`,
+`LDFLAGS`,
 `MODFLAG` (`-module` for nvfortran, `-J` for gfortran), and `HARNESS`
 (the directory holding `npy_io.f90`). The Makefile must:
 
 - pass `$(FFLAGS)` to every compile and `$(LDFLAGS)` to every link --
-  the shim log is read afterwards, and a compile without the strategy's
-  flags fails `harness_build`;
+  a protected `strace/execve` observer records compiler invocations, and a
+  compile without the strategy's flags fails `harness_build`;
 - compile only files from the tree and `$(HARNESS)/npy_io.f90`; a
   compile that reaches anywhere else fails the same check, naming the
   file;
@@ -319,7 +347,8 @@ output a `files` entry, each saying all three of `abs`, `rel`, and
 A timing output needs a band whatever it holds, because nothing declares
 its element type until it is read. `manifest_check` is what refuses a
 policy that is missing one. Calibrate rather than guess: build the unported code
-twice with different flags (`-O2` and `-O3 -ffast-math`, say), replay
+twice with compiler-supported modes (`-O2` and `-O3 -fast` for nvfortran, for
+example), replay
 the visible cases and run the program under both, measure the spread,
 and set each band at several times the observed spread with a floor at
 a few ULP. Record the method and the measurements in the file. The
@@ -353,8 +382,8 @@ as `[{variable: ndarray}, ...]`. `run_replay(inputs) -> outputs` runs
 the replay binary once on those arrays in a fresh case directory and
 returns every `<name>.out.npy` the driver left, as arrays; it raises
 rather than returning if the driver fails or hangs. `settings()` is the
-Hypothesis settings every property should share -- the run's example
-count, no deadline, and the too-slow health check off, because every
+Hypothesis settings every property should share -- the run's requested example
+ceiling, no deadline, and the too-slow health check off, because every
 example here starts a process. `max_examples()` and `seed()` are the two
 numbers the run was given, for a module that needs to draw something of
 its own.
@@ -392,7 +421,10 @@ megabytes, and what a port is compared against is the deployment's own
 Then commit `programs/<code>/`, add a porting region
 to `gateway.<code>.yaml` (`phase: porting`, a `spec_path` under
 `notes/regions/`, `strategy: stdpar_managed`, `baseline_strategy:
-cpu_reference`, `visible_dataset: visible`), set `EQUIVALENT_REGION` to
-it, and run `deploy/down.sh` and `deploy/up.sh` so the oracle image is
-rebuilt with the captures. Porting sessions then proceed as
+cpu_reference`, `visible_dataset: visible`, and the reviewed
+`executor_identity`), set `EQUIVALENT_REGION` to it, and run
+`deploy/down.sh` and `deploy/up.sh` so the oracle image is rebuilt with the
+captures. Read `oracle_identity` from the ready oracle's `/healthz`, add it to
+the porting region beside `executor_identity`, and rerun `deploy/up.sh`.
+Porting sessions then proceed as
 `docs/pi-users-manual.md` describes.

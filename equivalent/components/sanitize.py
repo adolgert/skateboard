@@ -48,15 +48,55 @@ def check(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
     except Exception as exc:
         raise ComponentError(f"builder /v1/sanitize call failed: {exc}") from exc
 
-    per_tool = resp.get("per_tool", {})
+    per_tool = resp.get("per_tool")
+    response_problem = None
+    if resp.get("stage") != "sanitize":
+        response_problem = f"builder returned stage {resp.get('stage')!r}, expected 'sanitize'"
+    elif not isinstance(resp.get("ok"), bool):
+        response_problem = "builder returned no boolean top-level sanitizer outcome"
+    elif not isinstance(per_tool, dict):
+        response_problem = "builder returned no per_tool sanitizer results"
+        per_tool = {}
+    else:
+        expected_ok = all(
+            isinstance(per_tool.get(tool), dict) and per_tool[tool].get("ok") is True
+            for tool in tools
+        )
+        if resp["ok"] is not expected_ok:
+            response_problem = (
+                "builder's top-level sanitizer outcome is inconsistent with its "
+                "requested per-tool outcomes"
+            )
+
     results = {}
     for tool in tools:
-        t = per_tool.get(tool, {})
-        if t.get("ok") is False:
-            results[tool] = {"verdict": "fail", "detail": {"errors": t.get("errors"), "log_tail": t.get("log_tail", "")}}
+        t = per_tool.get(tool) if isinstance(per_tool, dict) else None
+        detail = {
+            "errors": t.get("errors") if isinstance(t, dict) else None,
+            "log_tail": t.get("log_tail", "") if isinstance(t, dict) else "",
+            "cases": sorted(cases),
+        }
+        if "executable_identity" in resp:
+            detail["executable_identity"] = resp["executable_identity"]
+        if response_problem:
+            detail["reason"] = response_problem
+            results[tool] = {"verdict": "fail", "detail": detail}
+        elif not isinstance(t, dict):
+            detail["reason"] = f"requested sanitizer '{tool}' is missing from the builder response"
+            detail["log_tail"] = resp.get("log_tail", "")
+            results[tool] = {"verdict": "fail", "detail": detail}
+        elif t.get("ok") is not True:
+            detail["reason"] = t.get("error") or f"sanitizer '{tool}' did not complete successfully"
+            results[tool] = {"verdict": "fail", "detail": detail}
+        elif (
+            isinstance(t.get("errors"), bool)
+            or not isinstance(t.get("errors"), int)
+            or t["errors"] != 0
+        ):
+            detail["reason"] = (
+                f"sanitizer '{tool}' returned an invalid or nonzero error count"
+            )
+            results[tool] = {"verdict": "fail", "detail": detail}
         else:
-            # ok is True or None (tool unavailable) -- demo's own
-            # `all(t.get("ok") in (True, None) ...)` treats "unavailable" as
-            # not a failure; carried over here rather than re-litigated.
-            results[tool] = {"verdict": "pass", "detail": {"errors": t.get("errors"), "note": t.get("error")}}
+            results[tool] = {"verdict": "pass", "detail": detail}
     return results

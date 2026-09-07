@@ -35,10 +35,14 @@ ACCEPT = "accept"
 CONFIG_KEY_SPECS = {
     "repeats": {
         "type": "integer",
+        "minimum": 5,
+        "maximum": 100,
         "description": "How many timed runs to make. Five when left out.",
     },
     "seed": {
         "type": "integer",
+        "minimum": -(2 ** 63),
+        "maximum": 2 ** 63 - 1,
         "description": (
             "The Hypothesis seed for the search. One is drawn for the run "
             "when left out, and the claim records which."
@@ -46,10 +50,17 @@ CONFIG_KEY_SPECS = {
     },
     "max_examples": {
         "type": "integer",
-        "description": "How many examples to draw per property. A hundred when left out.",
+        "minimum": 100,
+        "maximum": 10000,
+        "description": (
+            "The ceiling on examples Hypothesis may generate per property. "
+            "A hundred when left out; actual replay executions are reported separately."
+        ),
     },
     "limit": {
         "type": "integer",
+        "minimum": 1,
+        "maximum": 10000,
         "description": "Score at most this many mutants, rather than all of them.",
     },
 }
@@ -81,7 +92,7 @@ class ActionRow:
 ACTION_TABLE = (
     # Porting: one region of a code that has already been brought in.
     ActionRow("sese_check", ("sese/verified",), (), True, "analyzer:check_sese", PORTING),
-    ActionRow("build_replay", ("build/replay",), (("sese/verified", "frozen"),), True,
+    ActionRow("build_replay", ("build/replay",), (("sese/verified", "tree"),), True,
               "builder:/v1/build", PORTING),
     ActionRow("run_replay", ("gpu/executed",), (("build/replay", "tree"),), True,
               "builder:/v1/run", PORTING),
@@ -91,7 +102,8 @@ ACTION_TABLE = (
     ),
     ActionRow(
         "regression_visible", ("regression/visible",),
-        (("sanitize/memcheck", "tree"), ("sanitize/racecheck", "tree")), True,
+        (("sanitize/memcheck", "tree"), ("sanitize/racecheck", "tree"),
+         ("sanitize/initcheck", "tree")), True,
         "oracle:/v1/compare", PORTING,
     ),
     ActionRow(
@@ -129,6 +141,11 @@ ACTION_TABLE = (
               True, "builder:/v1/capture", ONBOARDING),
     ActionRow("harness_timing", ("harness/times",), (("harness/builds", "tree"),), True,
               "builder:/v1/time", ONBOARDING),
+    ActionRow(
+        "harness_original", ("harness/original",),
+        (("harness/builds", "tree"), ("harness/times", "tree")), True,
+        "builder:/v1/build+/v1/time", ONBOARDING,
+    ),
     ActionRow("harness_self_check", ("harness/self_check",), (("harness/replays", "tree"),),
               True, "builder:/v1/mutate", ONBOARDING, config_keys=("limit",)),
     ActionRow("harness_property", ("harness/properties",), (("harness/replays", "tree"),),

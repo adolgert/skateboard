@@ -19,6 +19,7 @@ come from the tree and the manifest.
 """
 import base64
 import glob
+import hashlib
 import json
 import os
 import re
@@ -30,10 +31,16 @@ from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 
-from . import contract, mutate as mutants
+from . import contract, executor, mutate as mutants
 
 HARNESS = "/opt/harness"  # baked, trusted: npy_io.f90, fc-shim
 WORK_ROOT = "/work"  # one workspace per attempt, rebuilt from scratch each build
+
+# Production leaves this unset and therefore always uses DockerJobExecutor.
+# Unit tests replace it with executor.local_run explicitly; it is not selected
+# by an environment switch and cannot become a deployment fallback.
+_JOB_RUNNER = None
+_DOCKER_EXECUTOR = None
 
 # The capture format on disk: one file per variable in the case directory,
 # <variable>.npy going in and <variable>.out.npy coming out. Each file says
@@ -89,7 +96,14 @@ CASES_FILE = "cases.json"
 
 
 def _workspace(attempt_id, work_root):
-    return os.path.join(work_root, re.sub(r"[^A-Za-z0-9._-]", "_", attempt_id))
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", attempt_id)
+    if safe != attempt_id or safe in ("", ".", "..", ".artifacts"):
+        # ``@`` cannot occur on the unchanged path above.  Reserving it for
+        # encoded names prevents an attacker from supplying the sanitized name
+        # of another attempt directly and landing in the same workspace.
+        digest = hashlib.sha256(str(attempt_id).encode()).hexdigest()
+        safe = f"@{(safe or 'attempt')[:80]}-{digest}"
+    return os.path.join(work_root, safe)
 
 
 def _tree_dir(attempt_id, work_root):
@@ -118,9 +132,126 @@ def write_tree(tree_dir, tree) -> str:
     return tree_dir
 
 
-def _run(cmd, cwd=None, env=None, timeout=300):
-    p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
-    return p.returncode, p.stdout, p.stderr
+def _job_executor(work_root=WORK_ROOT):
+    global _DOCKER_EXECUTOR
+    if _JOB_RUNNER is not None:
+        return None
+    if work_root != WORK_ROOT:
+        raise executor.IsolationUnavailable(
+            "a non-production work root requires an explicitly injected test job runner"
+        )
+    if _DOCKER_EXECUTOR is None:
+        _DOCKER_EXECUTOR = executor.DockerJobExecutor(work_root=work_root)
+    return _DOCKER_EXECUTOR
+
+
+def _run(cmd, cwd=None, env=None, timeout=300, *, work_root=WORK_ROOT, gpu=False):
+    runner = _JOB_RUNNER
+    result = (
+        runner(cmd, cwd=cwd, env=env, timeout=timeout, profile_gpu=False, gpu=gpu)
+        if runner is not None
+        else _job_executor(work_root).run(cmd, cwd=cwd, env=env, timeout=timeout, gpu=gpu)
+    )
+    return result.returncode, result.stdout, result.stderr
+
+
+def _run_audited(cmd, cwd=None, env=None, timeout=300, *, work_root=WORK_ROOT, gpu=False):
+    runner = _JOB_RUNNER
+    result = (
+        runner(cmd, cwd=cwd, env=env, timeout=timeout, audit_exec=True, gpu=gpu)
+        if runner is not None
+        else _job_executor(work_root).run(
+            cmd, cwd=cwd, env=env, timeout=timeout, audit_exec=True, gpu=gpu,
+        )
+    )
+    return result.returncode, result.stdout, result.stderr, result.evidence
+
+
+def _run_profiled(cmd, cwd=None, env=None, timeout=300, *, work_root=WORK_ROOT):
+    runner = _JOB_RUNNER
+    result = (
+        runner(cmd, cwd=cwd, env=env, timeout=timeout, profile_gpu=True)
+        if runner is not None
+        else _job_executor(work_root).run(
+            cmd, cwd=cwd, env=env, timeout=timeout, profile_gpu=True,
+        )
+    )
+    return result.returncode, result.stdout, result.stderr, result.evidence
+
+
+def isolation_status() -> dict:
+    """Deployment readiness; absence of the boundary makes health fail closed."""
+    try:
+        if _JOB_RUNNER is not None:
+            return {"ok": True, "backend": "injected-test-runner"}
+        return _job_executor().probe()
+    except Exception as exc:
+        return {"ok": False, "backend": "docker", "error": str(exc)}
+
+
+def _artifact_file(attempt_id, work_root):
+    name = os.path.basename(_workspace(attempt_id, work_root)) + ".json"
+    return os.path.join(work_root, ".artifacts", name)
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _write_artifacts(attempt_id, targets, work_root):
+    records = {}
+    tree_dir = _tree_dir(attempt_id, work_root)
+    for target in targets:
+        path = _in_tree(tree_dir, target["executable"])
+        if path is None or not os.path.isfile(path) or os.path.islink(path):
+            continue
+        records[target["executable"]] = {
+            "sha256": _sha256_file(path), "size": os.path.getsize(path),
+            "role": target["role"],
+        }
+    directory = os.path.dirname(_artifact_file(attempt_id, work_root))
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    destination = _artifact_file(attempt_id, work_root)
+    temporary = destination + ".new"
+    execution = isolation_status() if _JOB_RUNNER is None else {
+        "executor_identity": "explicit-local-test-runner", "image_id": None,
+    }
+    with open(temporary, "w", encoding="utf-8") as out:
+        json.dump({
+            "attempt_id": attempt_id, "executables": records,
+            "executor_identity": execution.get("executor_identity"),
+            "image_id": execution.get("image_id"),
+        }, out, sort_keys=True)
+    os.replace(temporary, destination)
+    return records
+
+
+def artifact_identities(attempt_id, *, work_root=WORK_ROOT) -> dict:
+    try:
+        with open(_artifact_file(attempt_id, work_root), encoding="utf-8") as source:
+            record = json.load(source)
+    except (OSError, ValueError):
+        return {"ok": False, "attempt_id": attempt_id, "executables": {}}
+    valid = {}
+    tree_dir = _tree_dir(attempt_id, work_root)
+    for relative, identity in record.get("executables", {}).items():
+        path = _in_tree(tree_dir, relative)
+        matches = bool(
+            path and os.path.isfile(path) and not os.path.islink(path)
+            and os.path.getsize(path) == identity.get("size")
+            and _sha256_file(path) == identity.get("sha256")
+        )
+        valid[relative] = {**identity, "verified": matches}
+    return {
+        "ok": bool(valid) and all(item["verified"] for item in valid.values()),
+        "attempt_id": attempt_id, "executables": valid,
+        "executor_identity": record.get("executor_identity"),
+        "image_id": record.get("image_id"),
+    }
 
 
 def _read_log(path: str) -> str:
@@ -165,6 +296,75 @@ def build_env(compiler, flags, link_flags, log_path, harness_dir=HARNESS) -> dic
     return env
 
 
+def _prepare_job_files(workspace, *, include_tree=False):
+    """Give the fixed unprivileged job uid ownership of this attempt only."""
+    if _JOB_RUNNER is not None:
+        return
+    workspace = os.path.abspath(workspace)
+    protected_parent = os.path.isdir(os.path.join(workspace, "tree"))
+    for root, directories, files in os.walk(workspace):
+        if not include_tree and os.path.basename(root) == "tree" and os.path.dirname(root) == workspace:
+            directories[:] = []
+            continue
+        if not include_tree and root == workspace and "tree" in directories:
+            directories.remove("tree")
+        if protected_parent and root == workspace:
+            os.chown(root, 0, 0, follow_symlinks=False)
+            os.chmod(root, 0o555)
+        else:
+            os.chown(root, 65532, 65532, follow_symlinks=False)
+        for name in directories:
+            os.chown(os.path.join(root, name), 65532, 65532, follow_symlinks=False)
+        for name in files:
+            os.chown(os.path.join(root, name), 65532, 65532, follow_symlinks=False)
+
+
+def _freeze_tree(tree_dir, identities):
+    """After build, submitted jobs can read code and execute bound binaries only."""
+    if _JOB_RUNNER is not None:
+        return
+    executables = {os.path.normpath(name) for name in identities}
+    for root, directories, files in os.walk(tree_dir):
+        os.chown(root, 0, 0, follow_symlinks=False)
+        os.chmod(root, 0o555)
+        for name in directories:
+            path = os.path.join(root, name)
+            os.chown(path, 0, 0, follow_symlinks=False)
+            if not os.path.islink(path):
+                os.chmod(path, 0o555)
+        for name in files:
+            path = os.path.join(root, name)
+            relative = os.path.relpath(path, tree_dir)
+            os.chown(path, 0, 0, follow_symlinks=False)
+            if not os.path.islink(path):
+                os.chmod(path, 0o555 if relative in executables else 0o444)
+
+
+def _identity_matches(path, identity):
+    return bool(
+        identity and os.path.isfile(path) and not os.path.islink(path)
+        and os.path.getsize(path) == identity.get("size")
+        and _sha256_file(path) == identity.get("sha256")
+    )
+
+
+def _writable_copy(path):
+    """Make a disposable copied tree usable as an application work directory."""
+    if _JOB_RUNNER is not None:
+        return
+    for root, directories, files in os.walk(path):
+        os.chmod(root, 0o755)
+        for name in directories:
+            child = os.path.join(root, name)
+            if not os.path.islink(child):
+                os.chmod(child, 0o755)
+        for name in files:
+            child = os.path.join(root, name)
+            if not os.path.islink(child):
+                mode = os.stat(child).st_mode
+                os.chmod(child, 0o755 if mode & 0o111 else 0o644)
+
+
 def build(attempt_id, tree, makefile, targets, compiler, flags, link_flags, source_patterns,
           *, harness_dir=HARNESS, work_root=WORK_ROOT, timeout=BUILD_TIMEOUT_S) -> dict:
     """Build the submitted tree with its own makefile, and say what that did.
@@ -185,29 +385,89 @@ def build(attempt_id, tree, makefile, targets, compiler, flags, link_flags, sour
     tree_dir = write_tree(os.path.join(workspace, "tree"), tree)
     log_path = os.path.join(workspace, LOG_NAME)
 
+    makefile_path = _in_tree(tree_dir, makefile)
+    if makefile_path is None or not os.path.isfile(makefile_path):
+        return {
+            "ok": False, "stage": "build", "targets": {}, "compiles": [],
+            "log_tail": f"the makefile '{makefile}' is not a regular file inside the tree",
+        }
+    for target in targets:
+        if _in_tree(tree_dir, target["executable"]) is None:
+            return {
+                "ok": False, "stage": "build", "targets": {}, "compiles": [],
+                "log_tail": f"target executable '{target['executable']}' leaves the tree",
+            }
+
     env = build_env(compiler, flags, link_flags, log_path, harness_dir)
+    # The protected exec observer records the compiler itself.  Giving make
+    # the real compiler also removes the writable fc.jsonl shim as a trust root.
+    if _JOB_RUNNER is None:
+        env["FC"] = compiler
     command = ["make", "-f", makefile, *[t["target"] for t in targets]]
+    _prepare_job_files(workspace, include_tree=True)
     try:
-        rc, out, err = _run(command, cwd=tree_dir, env=env, timeout=timeout)
+        rc, out, err, audit = _run_audited(
+            command, cwd=tree_dir, env=env, timeout=timeout, work_root=work_root,
+        )
     except subprocess.TimeoutExpired:
         rc, out, err = 1, "", f"the build did not finish within {timeout} seconds"
     output = out + err
 
-    compiles = contract.compile_records(
-        _read_log(log_path), tree_dir, flags, source_patterns, harness_dir=harness_dir,
-    )
-    built = {
-        t["role"]: {
-            "executable": t["executable"],
-            "built": os.path.exists(os.path.join(tree_dir, t["executable"])),
+    if _JOB_RUNNER is None:
+        if not audit or audit.get("ok") is not True:
+            return {
+                "ok": False, "stage": "build", "targets": {}, "compiles": [],
+                "log_tail": "protected compiler execution evidence was unavailable",
+            }
+        compiler_path = shutil.which(compiler)
+        if compiler_path is None:
+            return {
+                "ok": False, "stage": "build", "targets": {}, "compiles": [],
+                "log_tail": f"configured compiler '{compiler}' is not installed",
+            }
+        compiler_real = os.path.realpath(compiler_path)
+        observed = [
+            entry["argv"] for entry in audit.get("executions", [])
+            if isinstance(entry, dict) and entry.get("argv")
+            and os.path.realpath(entry.get("path", "")) == compiler_real
+        ]
+        if not observed:
+            return {
+                "ok": False, "stage": "build", "targets": {}, "compiles": [],
+                "log_tail": f"protected exec tracing observed no invocation of '{compiler_real}'",
+            }
+        protected_log = "\n".join(json.dumps({"argv": argv[1:], "cwd": tree_dir}) for argv in observed)
+        compiler_audit = {
+            "protected": True,
+            "collector": "strace/execve",
+            "observed_executions": len(audit.get("executions", [])),
+            "compiler_invocations": len(observed),
         }
-        for t in targets
-    }
+    else:
+        protected_log = _read_log(log_path)
+        compiler_audit = {
+            "protected": False,
+            "collector": "explicit-local-test-runner/fc-shim",
+        }
+    compiles = contract.compile_records(
+        protected_log, tree_dir, flags, source_patterns, harness_dir=harness_dir,
+    )
+    built = {}
+    for target in targets:
+        path = _in_tree(tree_dir, target["executable"])
+        built[target["role"]] = {
+            "executable": target["executable"],
+            "built": bool(
+                path and os.path.isfile(path) and not os.path.islink(path)
+                and os.access(path, os.X_OK)
+            ),
+        }
     result = {
         "stage": "build",
         "command": command,
         "targets": built,
         "compiles": compiles,
+        "compiler_audit": compiler_audit,
         "flags": list(flags),
         "link_flags": list(link_flags),
         "flags_reached_every_compile": contract.flags_reached_every_compile(compiles),
@@ -227,7 +487,16 @@ def build(attempt_id, tree, makefile, targets, compiler, flags, link_flags, sour
             **result, "ok": False, "missing_targets": missing,
             "log_tail": f"make succeeded but left no executable for: {named}\n{output[-3000:]}",
         }
-    return {**result, "ok": True, "log_tail": output[-2000:]}
+    identities = _write_artifacts(attempt_id, targets, work_root)
+    _freeze_tree(tree_dir, identities)
+    for target in built.values():
+        target.update(identities[target["executable"]])
+    artifact_record = artifact_identities(attempt_id, work_root=work_root)
+    return {
+        **result, "ok": True, "log_tail": output[-2000:],
+        "executor_identity": artifact_record.get("executor_identity"),
+        "image_id": artifact_record.get("image_id"),
+    }
 
 
 def _notify_env(base, notify, mandatory):
@@ -285,6 +554,8 @@ def _write_case(cdir, arrs):
     shutil.rmtree(cdir, ignore_errors=True)
     os.makedirs(cdir, exist_ok=True)
     for variable, encoded in arrs.items():
+        if not _plain_name(variable):
+            raise ValueError(f"case variable {variable!r} is not a plain name")
         with open(os.path.join(cdir, f"{variable}{INPUT_SUFFIX}"), "wb") as f:
             f.write(base64.b64decode(encoded))
     return cdir
@@ -300,6 +571,8 @@ def _read_outputs(cdir):
     """
     outputs = {}
     for path in sorted(glob.glob(os.path.join(cdir, f"*{OUTPUT_SUFFIX}"))):
+        if os.path.islink(path) or not os.path.isfile(path):
+            raise ValueError("a replay output is not a regular file")
         variable = os.path.basename(path)[: -len(OUTPUT_SUFFIX)]
         with open(path, "rb") as f:
             outputs[variable] = base64.b64encode(f.read()).decode()
@@ -307,10 +580,23 @@ def _read_outputs(cdir):
 
 
 def _executable(attempt_id, executable, work_root):
-    """The absolute path of an executable the manifest named, if it is there."""
+    """A built executable only while its supervisor-held identity still matches."""
     tree_dir = _tree_dir(attempt_id, work_root)
-    path = os.path.join(tree_dir, executable)
-    return tree_dir, path if os.path.exists(path) else None
+    path = _in_tree(tree_dir, executable)
+    if path is None or not os.path.isfile(path) or os.path.islink(path):
+        return tree_dir, None, None
+    # Explicit local test runners construct tiny fixture trees without going
+    # through build().  Production always requires the protected sidecar.
+    if _JOB_RUNNER is not None:
+        identity = {"sha256": _sha256_file(path), "size": os.path.getsize(path)}
+        return tree_dir, path, identity
+    artifact_record = artifact_identities(attempt_id, work_root=work_root)
+    identity = artifact_record.get("executables", {}).get(executable)
+    if not identity or not identity.get("verified"):
+        return tree_dir, None, None
+    answer = {k: identity[k] for k in ("sha256", "size", "role") if k in identity}
+    answer["executor_identity"] = artifact_record.get("executor_identity")
+    return tree_dir, path, answer
 
 
 # net_jail (unshare -n) is defense-in-depth. It needs CAP_SYS_ADMIN, which the
@@ -325,7 +611,7 @@ def run(attempt_id, executable, cases, notify=None, mandatory=False,
     `<executable> <case_dir>` -- the one contract a replay driver has --
     and whatever `<variable>.out.npy` files it leaves come back.
     """
-    tree_dir, replay = _executable(attempt_id, executable, work_root)
+    tree_dir, replay, identity = _executable(attempt_id, executable, work_root)
     if replay is None:
         return {
             "ok": False, "stage": "run",
@@ -338,20 +624,48 @@ def run(attempt_id, executable, cases, notify=None, mandatory=False,
     launched_at = set()
     log_tail = ""
     for name, arrs in cases.items():
+        if not _plain_name(name):
+            return {
+                "ok": False, "stage": "run", "case": str(name),
+                "log_tail": f"case name {name!r} is not a plain name",
+            }
         cdir = _write_case(os.path.join(_workspace(attempt_id, work_root), "cases", name), arrs)
-        # jail the child from the network (defense in depth; build_net is already internal)
-        prefix = ["unshare", "-n", "--"] if net_jail else []
+        _prepare_job_files(_workspace(attempt_id, work_root))
         try:
-            rc, out, err = _run(prefix + [replay, cdir], cwd=tree_dir, env=env, timeout=timeout)
-        except Exception:
-            rc, out, err = _run([replay, cdir], cwd=tree_dir, env=env, timeout=timeout)  # unshare not permitted
+            if notify in ("acc", "omp"):
+                rc, out, err, profile = _run_profiled(
+                    [replay, cdir], cwd=tree_dir, env=env, timeout=timeout,
+                    work_root=work_root,
+                )
+            else:
+                rc, out, err = _run(
+                    [replay, cdir], cwd=tree_dir, env=env, timeout=timeout,
+                    work_root=work_root, gpu=True,
+                )
+                profile = {"ok": True, "kernels_launched": 0, "kernel_names": []}
+        except executor.IsolationUnavailable as exc:
+            return {"ok": False, "stage": "run", "case": name, "log_tail": str(exc)}
         if rc != 0:
             return {"ok": False, "stage": "run", "case": name, "log_tail": (out + err)[-2000:]}
-        kernels, launches = kernel_launches(err, notify)
+        if not _identity_matches(replay, identity):
+            return {
+                "ok": False, "stage": "run", "case": name,
+                "log_tail": "the executable changed while it was being measured",
+            }
+        if notify in ("acc", "omp") and (not profile or not profile.get("ok")):
+            return {
+                "ok": False, "stage": "run", "case": name,
+                "log_tail": (profile or {}).get("error", "protected nsys evidence was unavailable"),
+            }
+        kernels = int(profile.get("kernels_launched", 0))
+        launches = [("nsys", name, "0") for name in profile.get("kernel_names", [])]
         total_kernels += kernels
         launched_at.update(launches)
         log_tail = err[-1500:]
-        outputs[name] = _read_outputs(cdir)
+        try:
+            outputs[name] = _read_outputs(cdir)
+        except ValueError as exc:
+            return {"ok": False, "stage": "run", "case": name, "log_tail": str(exc)}
 
     return {
         "ok": True, "stage": "run", "outputs": outputs,
@@ -360,6 +674,8 @@ def run(attempt_id, executable, cases, notify=None, mandatory=False,
         # across every case, so the claim says what ran and not only how
         # much of it ran.
         "launches": [list(where) for where in sorted(launched_at)],
+        "profiler": "nsys/CUPTI_ACTIVITY_KIND_KERNEL" if notify in ("acc", "omp") else None,
+        "executable_identity": identity,
         "log_tail": log_tail,
     }
 
@@ -380,7 +696,10 @@ def _read_captured_case(case_dir):
     variable and can say which one. It is the gateway, holding the code's
     manifest, that knows what the case should have held.
     """
-    with open(os.path.join(case_dir, CASE_FILE)) as f:
+    listing = os.path.join(case_dir, CASE_FILE)
+    if os.path.islink(listing) or not os.path.isfile(listing):
+        raise ValueError(f"{CASE_FILE} is not a regular file")
+    with open(listing) as f:
         listed = json.load(f)
     case = {}
     for section, suffix in (("inputs", INPUT_SUFFIX), ("outputs", OUTPUT_SUFFIX)):
@@ -389,7 +708,9 @@ def _read_captured_case(case_dir):
             if not _plain_name(name):
                 raise ValueError(f"{CASE_FILE} lists {name!r}, which is not a variable name")
             path = os.path.join(case_dir, f"{name}{suffix}")
-            if os.path.exists(path):
+            if os.path.islink(path):
+                raise ValueError(f"captured array '{name}' is a symbolic link")
+            if os.path.isfile(path):
                 with open(path, "rb") as f:
                     arrays[name] = base64.b64encode(f.read()).decode()
         case[section] = arrays
@@ -410,7 +731,7 @@ def capture(attempt_id, executable, args=(), run_name="capture", *, work_root=WO
     crash -- the program ran and produced no dataset -- so it comes back
     as `ok: false` saying that, for the gateway to turn into a verdict.
     """
-    tree_dir, program = _executable(attempt_id, executable, work_root)
+    tree_dir, program, identity = _executable(attempt_id, executable, work_root)
     if program is None:
         return {
             "ok": False, "stage": "capture", "cases": {},
@@ -423,7 +744,11 @@ def capture(attempt_id, executable, args=(), run_name="capture", *, work_root=WO
     os.makedirs(outdir, exist_ok=True)
 
     try:
-        rc, out, err = _run([program, *args, outdir], cwd=tree_dir, timeout=timeout)
+        _prepare_job_files(_workspace(attempt_id, work_root))
+        rc, out, err = _run(
+            [program, *args, outdir], cwd=tree_dir, timeout=timeout, work_root=work_root,
+            gpu=True,
+        )
     except subprocess.TimeoutExpired:
         return {
             "ok": False, "stage": "capture", "cases": {},
@@ -432,6 +757,11 @@ def capture(attempt_id, executable, args=(), run_name="capture", *, work_root=WO
     tail = (out + err)[-2000:]
     if rc != 0:
         return {"ok": False, "stage": "capture", "cases": {}, "stdout_tail": tail}
+    if not _identity_matches(program, identity):
+        return {
+            "ok": False, "stage": "capture", "cases": {},
+            "stdout_tail": "the executable changed while it was being measured",
+        }
 
     cases = {}
     for name in sorted(os.listdir(outdir)):
@@ -452,7 +782,10 @@ def capture(attempt_id, executable, args=(), run_name="capture", *, work_root=WO
             "stdout_tail": f"the capture run wrote no case directory (a directory holding "
                            f"{CASE_FILE}) into the output directory it was given\n{tail}",
         }
-    return {"ok": True, "stage": "capture", "cases": cases, "stdout_tail": tail}
+    return {
+        "ok": True, "stage": "capture", "cases": cases, "stdout_tail": tail,
+        "executable_identity": identity,
+    }
 
 
 def sanitize(attempt_id, executable, cases, tools, *, work_root=WORK_ROOT,
@@ -465,7 +798,7 @@ def sanitize(attempt_id, executable, cases, tools, *, work_root=WORK_ROOT,
     the cases and a tool fails if it failed on any of them, so a caller
     that asks for more cases gets a stricter verdict, not more verdicts.
     """
-    tree_dir, replay = _executable(attempt_id, executable, work_root)
+    tree_dir, replay, identity = _executable(attempt_id, executable, work_root)
     if replay is None:
         return {
             "ok": False, "stage": "sanitize", "per_tool": {},
@@ -483,11 +816,18 @@ def sanitize(attempt_id, executable, cases, tools, *, work_root=WORK_ROOT,
             cdir = _write_case(os.path.join(_workspace(attempt_id, work_root), "san", name), arrs)
             cmd = ["compute-sanitizer", "--tool", tool, "--error-exitcode", "1", replay, cdir]
             try:
-                rc, out, err = _run(cmd, cwd=tree_dir, timeout=timeout)
+                _prepare_job_files(_workspace(attempt_id, work_root))
+                rc, out, err = _run(
+                    cmd, cwd=tree_dir, timeout=timeout, work_root=work_root, gpu=True,
+                )
             except FileNotFoundError:
                 unavailable = "compute-sanitizer not found"
                 break
             errors += len(re.findall(r"========= ERROR|Invalid|race", out + err))
+            if not _identity_matches(replay, identity):
+                failed = True
+                failing_log = "the executable changed while it was being measured"
+                break
             last_log = (out + err)[-1500:]
             if rc != 0 and not failed:
                 failed = True
@@ -498,7 +838,10 @@ def sanitize(attempt_id, executable, cases, tools, *, work_root=WORK_ROOT,
             # The log of the first case that failed, so the reader sees the
             # failure rather than whatever the last case happened to print.
             per_tool[tool] = {"ok": not failed, "errors": errors, "log_tail": failing_log or last_log}
-    return {"ok": all(t.get("ok") in (True, None) for t in per_tool.values()), "stage": "sanitize", "per_tool": per_tool}
+    return {
+        "ok": bool(per_tool) and all(t.get("ok") is True for t in per_tool.values()),
+        "stage": "sanitize", "per_tool": per_tool, "executable_identity": identity,
+    }
 
 
 def _write_dataset(directory, cases):
@@ -523,7 +866,9 @@ def _write_dataset(directory, cases):
 # How pytest's own summary line spells what happened. The counts are read
 # from it rather than from an exit code alone, so a claim can say how much
 # ran and not only whether all of it passed.
-COUNT_PATTERN = re.compile(r"(\d+)\s+(passed|failed|errors?)\b")
+COUNT_PATTERN = re.compile(
+    r"(\d+)\s+(passed|failed|errors?|skipped|deselected|xfailed|xpassed)\b"
+)
 
 
 def pytest_counts(text) -> dict:
@@ -532,10 +877,19 @@ def pytest_counts(text) -> dict:
     The last figure for each word wins: pytest writes its summary at the
     end, and a failing test's own captured output can hold anything.
     """
-    counts = {"passed": 0, "failed": 0, "errors": 0}
+    counts = {
+        "passed": 0, "failed": 0, "errors": 0, "skipped": 0,
+        "deselected": 0, "xfailed": 0, "xpassed": 0,
+    }
     for match in COUNT_PATTERN.finditer(text):
         word = match.group(2)
         counts["errors" if word.startswith("error") else word] = int(match.group(1))
+    counts["collected"] = sum(
+        counts[name] for name in ("passed", "failed", "errors", "skipped", "xfailed", "xpassed")
+    )
+    counts["executed"] = sum(
+        counts[name] for name in ("passed", "failed", "errors", "xfailed", "xpassed")
+    )
     return counts
 
 
@@ -546,9 +900,15 @@ def _in_tree(tree_dir, relative):
     gets the same treatment as a submitted tree path: one that climbs out
     of the tree, or is absolute, names a file this service will not run.
     """
+    if not isinstance(relative, (str, os.PathLike)) or os.path.isabs(relative):
+        return None
     tree_dir = os.path.abspath(tree_dir)
     path = os.path.normpath(os.path.join(tree_dir, relative))
     if path != tree_dir and not path.startswith(tree_dir + os.sep):
+        return None
+    real_root = os.path.realpath(tree_dir)
+    real_path = os.path.realpath(path)
+    if real_path != real_root and not real_path.startswith(real_root + os.sep):
         return None
     return path
 
@@ -569,11 +929,13 @@ def properties(attempt_id, executable, module, cases, seed, max_examples,
     what it was: the same seed searches the same way, and a different one
     is a different search rather than a repeat.
     """
-    tree_dir, replay = _executable(attempt_id, executable, work_root)
+    tree_dir, replay, identity = _executable(attempt_id, executable, work_root)
     if replay is None:
         return {
             "ok": False, "stage": "properties", "seed": seed, "max_examples": max_examples,
-            "passed": 0, "failed": 0, "errors": 0,
+            "passed": 0, "failed": 0, "errors": 0, "skipped": 0,
+            "deselected": 0, "xfailed": 0, "xpassed": 0,
+            "collected": 0, "executed": 0,
             "log_tail": f"the tree holds no executable '{executable}'; build it first",
         }
 
@@ -582,7 +944,9 @@ def properties(attempt_id, executable, module, cases, seed, max_examples,
         where = "does not stay inside the tree" if module_path is None else "is not in the tree"
         return {
             "ok": False, "stage": "properties", "seed": seed, "max_examples": max_examples,
-            "passed": 0, "failed": 0, "errors": 0,
+            "passed": 0, "failed": 0, "errors": 0, "skipped": 0,
+            "deselected": 0, "xfailed": 0, "xpassed": 0,
+            "collected": 0, "executed": 0,
             "log_tail": f"the properties module '{module}' {where}",
         }
 
@@ -606,19 +970,62 @@ def properties(attempt_id, executable, module, cases, seed, max_examples,
     # -p no:cacheprovider: the tree is a submission, not a checkout, and a
     # .pytest_cache written into it would be a file nobody sent.
     command = [PYTHON, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--tb=short", module_path]
+    _prepare_job_files(workspace)
     try:
-        rc, out, err = _run(command, cwd=tree_dir, env=env, timeout=timeout)
+        if _JOB_RUNNER is None:
+            rc, out, err, audit = _run_audited(
+                command, cwd=tree_dir, env=env, timeout=timeout,
+                work_root=work_root, gpu=True,
+            )
+        else:
+            rc, out, err = _run(
+                command, cwd=tree_dir, env=env, timeout=timeout,
+                work_root=work_root, gpu=True,
+            )
+            audit = None
     except subprocess.TimeoutExpired:
         return {
             "ok": False, "stage": "properties", "seed": seed, "max_examples": max_examples,
-            "passed": 0, "failed": 0, "errors": 0,
+            "passed": 0, "failed": 0, "errors": 0, "skipped": 0,
+            "deselected": 0, "xfailed": 0, "xpassed": 0,
+            "collected": 0, "executed": 0,
             "log_tail": f"the property run did not finish within {timeout} seconds",
         }
 
     output = out + err
+    replays_observed = None
+    if _JOB_RUNNER is None:
+        if not audit or audit.get("ok") is not True:
+            return {
+                "ok": False, "stage": "properties", "seed": seed,
+                "max_examples": max_examples, **pytest_counts(output),
+                "log_tail": "protected replay execution evidence was unavailable",
+            }
+        replay_job_path = "/job/tree/" + os.path.relpath(replay, tree_dir).replace(os.sep, "/")
+        replays_observed = sum(
+            1 for entry in audit.get("executions", [])
+            if isinstance(entry, dict) and entry.get("path") == replay_job_path
+        )
+        if replays_observed == 0:
+            return {
+                "ok": False, "stage": "properties", "seed": seed,
+                "max_examples": max_examples, **pytest_counts(output),
+                "replays_observed": 0, "executable_identity": identity,
+                "log_tail": "protected exec tracing observed no replay invocation",
+            }
+    if not _identity_matches(replay, identity):
+        return {
+            "ok": False, "stage": "properties", "seed": seed,
+            "max_examples": max_examples, **pytest_counts(output),
+            "executable_identity": identity,
+            "log_tail": "the executable changed while it was being measured",
+        }
     return {
         "ok": rc == 0, "stage": "properties", "seed": seed, "max_examples": max_examples,
         **pytest_counts(output),
+        "replays_observed": replays_observed,
+        "counts_source": "pytest summary emitted by the submitted property process",
+        "executable_identity": identity,
         # Long enough to hold Hypothesis's minimized falsifying example,
         # which is the whole value of a failed property run.
         "log_tail": output[-4000:],
@@ -670,11 +1077,13 @@ def score_mutant(job) -> dict:
         shutil.rmtree(mutant_dir, ignore_errors=True)
         shutil.copytree(job["tree_dir"], mutant_dir, symlinks=True)
         _write_mutated(mutant_dir, mutant)
+        _prepare_job_files(os.path.dirname(os.path.dirname(mutant_dir)))
 
         command = ["make", "-f", job["makefile"], job["target"]]
         try:
             rc, out, err = _run(
                 command, cwd=mutant_dir, env=job["env"], timeout=_remaining(deadline),
+                work_root=job["work_root"],
             )
         except subprocess.TimeoutExpired:
             mutant.status = mutants.BUILD_FAIL
@@ -693,6 +1102,7 @@ def score_mutant(job) -> dict:
             try:
                 rc, out, err = _run(
                     [replay, case_dir], cwd=mutant_dir, timeout=_remaining(deadline),
+                    work_root=job["work_root"], gpu=True,
                 )
             except subprocess.TimeoutExpired:
                 mutant.status = mutants.RUNTIME_FAIL
@@ -822,6 +1232,8 @@ def mutate(attempt_id, makefile, replay_target, files, cases, bands, compiler, f
     env = build_env(
         compiler, flags, link_flags, os.path.join(workspace, "mutants", ".fc.jsonl"), harness_dir,
     )
+    if _JOB_RUNNER is None:
+        env["FC"] = compiler
     payloads = [
         {
             "mutant": mutant,
@@ -836,6 +1248,7 @@ def mutate(attempt_id, makefile, replay_target, files, cases, bands, compiler, f
             "cases": sorted(cases),
             "bands": bands,
             "timeout": timeout,
+            "work_root": work_root,
         }
         for mutant in todo
     ]
@@ -895,7 +1308,7 @@ def _score_all(payloads, workers: int, ceiling) -> list:
 
 
 def time_run(attempt_id, executable, args=(), env=None, outputs=(), repeats=5,
-             budget_s=300, *, work_root=WORK_ROOT) -> dict:
+             budget_s=300, expected_outputs=None, *, work_root=WORK_ROOT) -> dict:
     """Time the code's own program at the size its manifest declares.
 
     The arguments, the environment, the files the run is expected to
@@ -909,7 +1322,12 @@ def time_run(attempt_id, executable, args=(), env=None, outputs=(), repeats=5,
     whether the program wrote the same thing every time, which is a
     question a single collection at the end cannot answer.
     """
-    tree_dir, program = _executable(attempt_id, executable, work_root)
+    if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats < 1:
+        return {
+            "ok": False, "stage": "time", "runs_s": [], "outputs": [],
+            "log_tail": "timing repeats must be a positive integer",
+        }
+    tree_dir, program, identity = _executable(attempt_id, executable, work_root)
     if program is None:
         return {
             "ok": False, "stage": "time",
@@ -917,22 +1335,59 @@ def time_run(attempt_id, executable, args=(), env=None, outputs=(), repeats=5,
         }
 
     run_env = {**os.environ, **{str(k): str(v) for k, v in (env or {}).items()}}
+    if expected_outputs is not None and set(expected_outputs) != set(outputs):
+        return {
+            "ok": False, "stage": "time", "runs_s": [], "outputs": [],
+            "log_tail": "expected timing outputs do not exactly match the declared outputs",
+            "executable_identity": identity,
+        }
     # honest timing wants exclusive GPU
     gpu_excl = _gpu_exclusive()
     runs = []
     collected = []
     last = ""
-    for _ in range(repeats):
+    for repetition in range(repeats):
+        # Production executes the immutable binary from the frozen tree but
+        # gives the application a fresh writable copy as its working directory.
+        # This supports ordinary relative input/config files and arbitrary
+        # scratch output without granting write access to the measured binary.
+        if _JOB_RUNNER is None:
+            run_dir = os.path.join(
+                _workspace(attempt_id, work_root), "timing", f"run-{repetition + 1:04d}",
+            )
+            shutil.rmtree(run_dir, ignore_errors=True)
+            shutil.copytree(tree_dir, run_dir, symlinks=True)
+            _prepare_job_files(_workspace(attempt_id, work_root))
+            _writable_copy(run_dir)
+        else:
+            run_dir = tree_dir
         # A file left by an earlier run, or by an earlier attempt, would
         # otherwise be collected as if this run had written it.
         for relative in outputs:
-            path = os.path.join(tree_dir, relative)
-            if os.path.exists(path):
-                os.remove(path)
+            path = _in_tree(run_dir, relative)
+            if path is None:
+                return {
+                    "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
+                    "log_tail": f"declared timing output '{relative}' leaves the tree",
+                }
+            if run_dir == tree_dir and (
+                os.path.samefile(path, program) if os.path.exists(path) else path == program
+            ):
+                return {
+                    "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
+                    "log_tail": f"declared timing output '{relative}' is the measured executable",
+                }
+            if os.path.lexists(path):
+                os.unlink(path)
 
         t0 = time.monotonic()
         try:
-            rc, out, err = _run([program, *args], cwd=tree_dir, env=run_env, timeout=budget_s)
+            rc, out, err = _run(
+                [program, *args], cwd=run_dir, env=run_env, timeout=budget_s,
+                # Relative application paths resolve in the disposable copy;
+                # the executable path still names the frozen original.
+                work_root=work_root, gpu=True,
+            )
         except subprocess.TimeoutExpired:
             return {
                 "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
@@ -945,29 +1400,51 @@ def time_run(attempt_id, executable, args=(), env=None, outputs=(), repeats=5,
                 "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
                 "log_tail": last,
             }
+        if not _identity_matches(program, identity):
+            return {
+                "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
+                "log_tail": "the executable changed while it was being measured",
+                "executable_identity": identity,
+            }
 
         this_run = {}
         for relative in outputs:
-            path = os.path.join(tree_dir, relative)
-            if not os.path.exists(path):
+            path = _in_tree(run_dir, relative)
+            if path is None or os.path.islink(path) or not os.path.isfile(path):
                 return {
                     "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
                     "log_tail": f"run {len(runs)} wrote no '{relative}', which the "
                                 f"manifest declares",
                 }
             with open(path, "rb") as f:
-                this_run[relative] = base64.b64encode(f.read()).decode()
+                written = f.read()
+            this_run[relative] = base64.b64encode(written).decode()
+            if expected_outputs is not None and this_run[relative] != expected_outputs.get(relative):
+                return {
+                    "ok": False, "stage": "time", "runs_s": runs,
+                    "outputs": [*collected, this_run],
+                    "log_tail": f"run {len(runs)} wrote unexpected bytes to '{relative}'",
+                    "executable_identity": identity,
+                }
         collected.append(this_run)
 
     return {
         "ok": True, "stage": "time", "runs_s": runs, "gpu_exclusive": gpu_excl,
-        "outputs": collected, "stdout_tail": last,
+        "outputs": collected, "stdout_tail": last, "executable_identity": identity,
     }
 
 
 def _gpu_exclusive():
+    # This queries the trusted supervisor's GPU view; it does not execute any
+    # submitted command and therefore must not enter a disposable attempt job.
     try:
-        rc, out, err = _run(["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"], timeout=15)
+        p = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=15,
+        )
+        rc, out = p.returncode, p.stdout
+        if rc != 0:
+            return None
         procs = [l for l in out.strip().splitlines() if l.strip()]
         return len(procs) == 0
     except Exception:

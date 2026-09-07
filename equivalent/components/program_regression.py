@@ -90,20 +90,15 @@ def tolerance_policy(manifest: Manifest) -> tuple[dict, str]:
 
 def reference_set(store: LedgerStore, baseline_tree: Subject) -> str:
     """The program capture set the latest passing baseline timing left behind."""
-    stored = [
-        claim.predicate.detail[PROGRAM_SET_KEY]
-        for claim in store.claims_for(baseline_tree)
-        if claim.predicateType == BASELINE_PREDICATE
-        and claim.predicate.verdict == "pass"
-        and claim.predicate.detail.get(PROGRAM_SET_KEY)
-    ]
-    if not stored:
+    claim = store.latest(BASELINE_PREDICATE, baseline_tree)
+    if (claim is None or claim.predicate.verdict != "pass"
+            or not claim.predicate.detail.get(PROGRAM_SET_KEY)):
         raise ComponentError(
             f"the baseline tree {baseline_tree.sha256} has no passing "
             f"{BASELINE_PREDICATE} claim that stored the program's outputs, so there is "
             f"nothing to compare this port's program against; run {BASELINE_ACTION} first"
         )
-    return stored[-1]
+    return claim.predicate.detail[PROGRAM_SET_KEY]
 
 
 def _reference_outputs(store: LedgerStore, sha256: str) -> dict:
@@ -136,6 +131,24 @@ def _compare_one(path: str, name: str, reference, written: dict, bands: dict) ->
     return compare.compare_variable(reference, written[name], band)
 
 
+def compare_outputs(store, program_set, manifest, encoded_outputs, bands):
+    """Compare one measured repetition with the reviewed baseline outputs."""
+    reference = _reference_outputs(store, program_set)
+    written, unreadable = program_arrays(
+        encoded_outputs, [path for path in manifest.timing.outputs if path in encoded_outputs],
+    )
+    per_var = {}
+    for path in manifest.timing.outputs:
+        name = program_variable(path)
+        if path in unreadable:
+            per_var[name] = {"pass": False, "error": unreadable[path]}
+        elif name not in reference:
+            per_var[name] = {"pass": False, "error": f"baseline capture set holds no '{name}'"}
+        else:
+            per_var[name] = _compare_one(path, name, reference[name], written, bands)
+    return per_var
+
+
 def check(store: LedgerStore, baseline_tree: Subject, region_id: str, tree_sha: str,
           manifest: Manifest, builder) -> dict:
     """Run the port's own program and compare its files with the baseline's.
@@ -151,7 +164,6 @@ def check(store: LedgerStore, baseline_tree: Subject, region_id: str, tree_sha: 
     timing = manifest.timing
     bands, policy_sha256 = tolerance_policy(manifest)
     program_set = reference_set(store, baseline_tree)
-    reference = _reference_outputs(store, program_set)
     rests_on = {"policy_sha256": policy_sha256, PROGRAM_SET_KEY: program_set}
 
     try:
@@ -171,27 +183,12 @@ def check(store: LedgerStore, baseline_tree: Subject, region_id: str, tree_sha: 
 
     runs = resp.get("outputs", [])
     last_run = runs[-1] if runs else {}
-    # Only the files that are there are decoded: one the run never wrote
-    # is a missing output, which is a different thing from a file that is
-    # there and is not an array.
-    written, unreadable = program_arrays(
-        last_run, [path for path in timing.outputs if path in last_run],
-    )
-    per_var = {}
-    for path in timing.outputs:
-        name = program_variable(path)
-        if path in unreadable:
-            per_var[name] = {"pass": False, "error": unreadable[path]}
-        elif name not in reference:
-            per_var[name] = {
-                "pass": False,
-                "error": f"the baseline's program capture set holds no '{name}'; it was "
-                         f"stored before the manifest declared this output",
-            }
-        else:
-            per_var[name] = _compare_one(path, name, reference[name], written, bands)
+    per_var = compare_outputs(store, program_set, manifest, last_run, bands)
 
     return {
         "verdict": "pass" if all(entry["pass"] for entry in per_var.values()) else "fail",
-        "detail": {**rests_on, "per_var": per_var, "runs_s": resp.get("runs_s", [])},
+        "detail": {
+            **rests_on, "per_var": per_var, "runs_s": resp.get("runs_s", []),
+            "executable_identity": resp.get("executable_identity"),
+        },
     }

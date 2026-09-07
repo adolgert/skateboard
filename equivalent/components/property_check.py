@@ -16,11 +16,11 @@ configuration, and because they are part of what the gateway hashes, a
 repeat at the same seed is the same search and comes back as the claim
 already filed, while a fresh seed is a new one.
 
-Nothing is judged here beyond pass or fail: the builder ran pytest on the
-code's own module, and what the module asserted is the code's business.
-What this adds is the record of which module was run, at which seed, over
-how many examples, and what the run printed -- which is where Hypothesis
-writes the minimized failing example a person needs.
+The builder's protected execution trace must observe the bound replay
+executable at least once. Pytest's counts still come from the submitted
+process and `max_examples` is a Hypothesis ceiling rather than an observed
+count, so the claim records both facts separately. What the module asserted
+remains the code owner's business.
 """
 from __future__ import annotations
 
@@ -68,8 +68,15 @@ def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
     Returns {"verdict": "pass" | "fail", "detail": {...}}. Raises
     ComponentError if the builder could not be reached.
     """
+    if isinstance(max_examples, bool):
+        raise ComponentError("property max_examples must be a positive integer")
+    try:
+        examples = int(max_examples)
+    except (TypeError, ValueError) as exc:
+        raise ComponentError("property max_examples must be a positive integer") from exc
+    if examples <= 0:
+        raise ComponentError("property max_examples must be a positive integer")
     drawn = random.SystemRandom().getrandbits(SEED_BITS) if seed is None else int(seed)
-    examples = int(max_examples)
     module = properties_module(manifest)
     replay = manifest.build.targets["replay"]
 
@@ -80,18 +87,85 @@ def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
     except Exception as exc:
         raise ComponentError(f"builder /v1/properties call failed: {exc}") from exc
 
-    return {
-        "verdict": "pass" if resp.get("ok") else "fail",
-        "detail": {
-            "module": module,
-            "seed": drawn,
-            "max_examples": examples,
-            "passed": resp.get("passed", 0),
-            "failed": resp.get("failed", 0),
-            "errors": resp.get("errors", 0),
-            "log_tail": (resp.get("log_tail") or "")[-LOG_TAIL_CHARS:],
-        },
+    problems = []
+    if resp.get("stage") != "properties":
+        problems.append(f"builder returned stage {resp.get('stage')!r}, expected 'properties'")
+    if resp.get("seed") != drawn:
+        problems.append("builder returned a different seed from the property run requested")
+    if resp.get("max_examples") != examples:
+        problems.append(
+            "builder returned a different max_examples from the property run requested"
+        )
+    if not isinstance(resp.get("ok"), bool):
+        problems.append("builder returned no boolean property outcome")
+
+    counts = {}
+    for name in (
+        "passed", "failed", "errors", "skipped", "deselected", "xfailed", "xpassed",
+        "collected", "executed",
+    ):
+        value = resp.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            problems.append(f"builder returned an invalid {name} count")
+            counts[name] = 0
+        else:
+            counts[name] = value
+
+    successful = (
+        counts["passed"] > 0
+        and counts["failed"] == 0
+        and counts["errors"] == 0
+        and counts["skipped"] == 0
+        and counts["deselected"] == 0
+        and counts["xfailed"] == 0
+        and counts["xpassed"] == 0
+        and counts["collected"] == counts["passed"]
+        and counts["executed"] == counts["passed"]
+    )
+    if counts["passed"] == 0:
+        problems.append("no property test passed")
+    if counts["skipped"]:
+        problems.append(f"{counts['skipped']} property test(s) were skipped")
+    expected_collected = sum(
+        counts[name]
+        for name in ("passed", "failed", "errors", "skipped", "xfailed", "xpassed")
+    )
+    expected_executed = sum(
+        counts[name] for name in ("passed", "failed", "errors", "xfailed", "xpassed")
+    )
+    if counts["collected"] != expected_collected or counts["executed"] != expected_executed:
+        problems.append("builder's property collection counts are internally inconsistent")
+    if counts["deselected"]:
+        problems.append(f"{counts['deselected']} property test(s) were deselected")
+    for name in ("xfailed", "xpassed"):
+        if counts[name]:
+            problems.append(f"{counts[name]} property test(s) were {name}")
+    replays_observed = resp.get("replays_observed")
+    if (
+        isinstance(replays_observed, bool)
+        or not isinstance(replays_observed, int)
+        or replays_observed <= 0
+    ):
+        problems.append(
+            "protected execution evidence observed no invocation of the bound replay executable"
+        )
+    if resp.get("ok") is not successful:
+        problems.append("builder's property outcome is inconsistent with its test counts")
+
+    detail = {
+        "module": module,
+        "seed": drawn,
+        "max_examples": examples,
+        **counts,
+        "replays_observed": replays_observed,
+        "counts_source": resp.get("counts_source"),
+        "log_tail": (resp.get("log_tail") or "")[-LOG_TAIL_CHARS:],
     }
+    if "executable_identity" in resp:
+        detail["executable_identity"] = resp["executable_identity"]
+    if problems:
+        detail["problems"] = problems
+    return {"verdict": "pass" if not problems and successful else "fail", "detail": detail}
 
 
 def check(region_id: str, tree_sha: str, manifest: Manifest, visible_cases: dict, builder,

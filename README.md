@@ -1,8 +1,9 @@
 # Skateboard
 
-A firewalled harness in which an AI agent ports Fortran to the GPU under
-assurances a reviewer can check: an oracle it cannot edit, gates it cannot
-weaken, and an append-only ledger recording every claim.
+A harness for an AI-assisted Fortran GPU port, with separately recorded
+checks, a protected comparison oracle, and an append-only evidence ledger.
+It is ready for a supervised pilot after qualifying the target deployment;
+passing its gates does not establish scientific validity or test completeness.
 
 The agent works in a container with the compilers and the GPU, and nothing it
 does there is evidence. To make progress it submits its edit to the **gateway**,
@@ -16,6 +17,13 @@ transcript. A code the harness has never seen is brought in the same way: an
 **onboarding** session writes that code's build, drivers, and description, and
 each of those has a check that says whether it is right.
 
+- **[`docs/coworker-handoff.md`](docs/coworker-handoff.md)** — start here for a
+  new code: preserve an independent original, qualify the machine, and review
+  the limits of the evidence.
+- **[`docs/evidence-contract.md`](docs/evidence-contract.md)** — what each
+  claim observes, what invalidates it, and what still needs human review.
+- **[`docs/README.md`](docs/README.md)** — the documentation map, distinguishing
+  current instructions from historical experiments and research plans.
 - **[`docs/pi-install.md`](docs/pi-install.md)** — from a fresh checkout to a
   running stack and a session.
 - **[`docs/pi-users-manual.md`](docs/pi-users-manual.md)** — what a porting
@@ -23,7 +31,7 @@ each of those has a check that says whether it is right.
 - **[`docs/onboarding.md`](docs/onboarding.md)** — how a new Fortran code
   becomes one whose regions can be ported.
 - **[`docs/generalize-plan.md`](docs/generalize-plan.md)** — the plan that made
-  the gateway path work for more than one code, and what remains open.
+  the gateway path work for more than one code, with dated implementation notes.
 - **`docs/skateboard.tex`** — why this is the smallest artifact that rolls end
   to end (the "skateboard", not a wheel of the eventual car).
 - **`docs/architecture.tex`** — the component and service architecture and the
@@ -33,8 +41,8 @@ What each directory holds:
 
 - **`programs/`** — one directory per code: its manifest, tracked baseline
   sources, region specs, datasets, and reference captures.
-- **`services/`** — the builder (the only container with the GPU, which builds
-  a submitted tree with that tree's own makefile) and the oracle (sealed,
+- **`services/`** — the builder (which supervises disposable build and GPU
+  jobs using the submitted tree's makefile) and the oracle (sealed,
   holding the recorded answers and the tolerance policy).
 - **`equivalent/`** — the gateway, the ledger, the checks it dispatches, the
   analyzer, the capture format, the strategy and manifest readers, and the
@@ -50,9 +58,9 @@ What each directory holds:
 - **`experiments/`** — ledger exports from past campaigns, with what each one
   showed.
 
-First run, kept as history: Claude ported the ch04 tsunami kernel to the GPU on
-the first attempt, passed every gate including a held-out dataset, at roughly a
-12× speedup over the best CPU build, with no human intervention.
+Historical runs and their available evidence are described in
+[`experiments/README.md`](experiments/README.md). Their claims predate the
+current evidence policy and must be re-established under it.
 
 The `codes/tsunami` example (Curcic, *Modern Fortran*) is an external dependency
 and is not vendored here; `programs/tsunami/baseline` holds the specific sources

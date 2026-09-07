@@ -18,16 +18,15 @@ Three things fail the check, and each says something different:
     unnoticed, so the harness is not a harness -- usually a replay driver
     that does not write what it computed, or captured inputs that never
     reach the region.
-  * Some mutant landed in the tolerance-blind gap: its answer differed
-    from the captured one and every band let it through. That is a wrong
-    kernel this policy would accept, and it is the number to hold at
-    zero. The bands are the thing to change, not this check.
+  * Some selected mutation changed an answer but remained inside every
+    band. For this deliberately conservative self-check policy, that needs
+    human review of the mutation, workload, and numerical policy.
 
-A survivor -- a mutant no output changed at all for -- is not a failure.
-It is either code that really is equivalent or region the captured
-inputs never reach, and nothing here can tell those apart. They are
-listed in the detail for the person, which is the whole point of running
-this while a person is still reading.
+A row whose output did not change is not called equivalent: it may be
+equivalent, or the captured inputs may never reach it. Such rows are listed
+for review. Build failures are also listed but do not count as evidence that
+the harness detects a numerical fault. Runtime failures, skipped rows, and
+pending rows make the run incomplete and prevent a passing adequacy claim.
 """
 from __future__ import annotations
 
@@ -60,6 +59,12 @@ VARIABLE_BANDS = "variables"
 KILLED = "KILLED"
 EQUIVALENT = "EQUIVALENT"
 GAP = "GAP"
+BUILD_FAIL = "BUILD_FAIL"
+RUNTIME_FAIL = "RUNTIME_FAIL"
+SKIPPED = "SKIPPED"
+PENDING = "PENDING"
+KNOWN_STATUSES = frozenset({KILLED, EQUIVALENT, GAP, BUILD_FAIL, RUNTIME_FAIL, SKIPPED, PENDING})
+INCOMPLETE_STATUSES = frozenset({RUNTIME_FAIL, SKIPPED, PENDING})
 # What a named mutant is reported as, so the person can open the file at
 # that line and read the change.
 NAMED_FIELDS = ("id", "file", "line", "op", "mutated", "note")
@@ -107,7 +112,7 @@ def _named(rows, status: str) -> list:
     ]
 
 
-def _problems(generated: int, counts: dict, gap: list) -> list:
+def _problems(generated: int, rows: list, counts: dict, gap: list) -> list:
     problems = []
     if not generated:
         problems.append(
@@ -122,9 +127,21 @@ def _problems(generated: int, counts: dict, gap: list) -> list:
     if gap:
         problems.append(
             f"{len(gap)} mutant(s) changed an output and stayed inside the tolerance "
-            f"bands; each is a wrong kernel this policy would accept, so the bands are "
-            f"what has to change"
+            f"bands; the mutation, workload, and numerical policy require review"
         )
+    if generated != len(rows):
+        problems.append(
+            f"not all generated mutants were classified: generated {generated}, "
+            f"received {len(rows)} result row(s)"
+        )
+    incomplete = [row for row in rows if row.get("status") in INCOMPLETE_STATUSES]
+    if incomplete:
+        problems.append(
+            f"{len(incomplete)} mutant(s) did not complete numerical scoring"
+        )
+    unknown = [row for row in rows if row.get("status") not in KNOWN_STATUSES]
+    if unknown:
+        problems.append(f"{len(unknown)} mutant(s) have an unknown status")
     return problems
 
 
@@ -175,23 +192,62 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
         # verdict about whether this gate can tell right from wrong.
         raise ComponentError(f"the mutation run did not start: {resp.get('log_tail', '')}")
 
-    rows = resp.get("results", [])
-    counts = resp.get("counts", {})
+    rows = resp.get("results")
+    counts = resp.get("counts")
+    generated = resp.get("generated")
+    scored = resp.get("scored")
+    response_problems = []
+    if isinstance(generated, bool) or not isinstance(generated, int) or generated < 0:
+        response_problems.append("builder returned an invalid generated count")
+        generated = 0
+    if isinstance(scored, bool) or not isinstance(scored, int) or scored < 0:
+        response_problems.append("builder returned an invalid scored count")
+        scored = 0
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        response_problems.append("builder returned no valid mutation result list")
+        rows = []
+    if not isinstance(counts, dict):
+        response_problems.append("builder returned no valid mutation status counts")
+        counts = {}
+
+    derived_counts = {}
+    for row in rows:
+        status = row.get("status")
+        derived_counts[status] = derived_counts.get(status, 0) + 1
+    if scored != len(rows) or counts != derived_counts:
+        response_problems.append(
+            "builder returned mutation counts inconsistent with its result rows"
+        )
+    ids = [row.get("id") for row in rows]
+    if any(not isinstance(mid, str) or not mid for mid in ids) or len(ids) != len(set(ids)):
+        response_problems.append("builder returned missing or duplicate mutant identifiers")
+
     gap = _named(rows, GAP)
-    problems = _problems(resp.get("generated", 0), counts, gap)
+    problems = [*response_problems, *_problems(generated, rows, counts, gap)]
+    incomplete = [
+        {field: row.get(field) for field in NAMED_FIELDS}
+        for row in rows if row.get("status") in INCOMPLETE_STATUSES
+    ]
     detail = {
         "manifest_sha256": manifest.sha256,
         "policy_sha256": hashlib.sha256(policy_bytes).hexdigest(),
         "files": list(manifest.interface.files),
         "datasets": {VISIBLE: {"cases": len(cases), "capture_set": sets[VISIBLE]}},
-        "generated": resp.get("generated", 0),
-        "scored": resp.get("scored", 0),
+        "generated": generated,
+        "scored": scored,
         "counts": counts,
         "gap": gap,
-        # Not a failure, and the reason the person is reading this claim:
-        # each one is either equivalent code or region the captured
-        # inputs never reach, and only a reader can say which.
+        "adequacy_policy": {
+            "all_generated_classified": True,
+            "incomplete_statuses_forbidden": sorted(INCOMPLETE_STATUSES),
+            "minimum_killed": 1,
+            "maximum_tolerance_gap": 0,
+        },
+        "incomplete": incomplete,
+        # The builder's historical status is EQUIVALENT, but this claim
+        # deliberately labels these only as unchanged outputs.
         "survivors": _named(rows, EQUIVALENT),
+        "build_failures": _named(rows, BUILD_FAIL),
         "kept_dirs": resp.get("kept_dirs", []),
     }
     if problems:

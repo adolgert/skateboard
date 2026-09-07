@@ -12,7 +12,7 @@ import os
 import shutil
 
 from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import stages
 
@@ -138,8 +138,12 @@ class TimeReq(BaseModel):
     args: list[str] = []
     env: dict = {}
     outputs: list[str] = []  # files the run must write, collected and returned
-    repeats: int = 5
-    budget_s: int = 300
+    repeats: int = Field(default=5, ge=1)
+    budget_s: int = Field(default=300, ge=1)
+    # Optional exact expected bytes, base64 encoded by output path.  This is
+    # used when a trusted parent already holds a reference and wants every
+    # measured repetition checked before the builder calls the timing valid.
+    expected_outputs: dict[str, str] | None = None
 
 
 @app.post("/v1/build")
@@ -197,7 +201,15 @@ def time_run(req: TimeReq, authorization: str | None = Header(default=None)):
     return stages.time_run(
         req.attempt_id, req.executable, args=req.args, env=req.env,
         outputs=req.outputs, repeats=req.repeats, budget_s=req.budget_s,
+        expected_outputs=req.expected_outputs,
     )
+
+
+@app.get("/v1/artifacts/{attempt_id}")
+def artifacts(attempt_id: str, authorization: str | None = Header(default=None)):
+    """Protected executable identities, reverified against bytes on disk."""
+    _auth(authorization)
+    return stages.artifact_identities(attempt_id)
 
 
 @app.get("/healthz")
@@ -211,10 +223,13 @@ def healthz():
     writing `python:pytest`, and this says whether the interpreter that
     would run it can import it.
     """
+    isolation = stages.isolation_status()
     return {
-        "ok": True,
+        "ok": isolation.get("ok") is True,
         "tools": {name: shutil.which(name) is not None for name in TOOLS},
         "python_modules": {name: _importable(name) for name in PYTHON_MODULES},
+        "isolation": isolation,
+        "executor_identity": isolation.get("executor_identity"),
     }
 
 

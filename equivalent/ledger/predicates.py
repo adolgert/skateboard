@@ -39,7 +39,7 @@ def _register(name: str, deterministic: bool, agent_detail: DetailLevel, descrip
 _register(
     "sese/verified", True, DetailLevel.FULL,
     "Static analyzer confirms the region and its closure are single-entry/"
-    "single-exit (no goto, early return, entry, or stop), on the frozen "
+    "single-exit (no goto, early return, entry, or stop), on the candidate "
     "set. Does not check that the spec's declared footprint matches the "
     "code -- that needs real static-analysis tooling this repository "
     "doesn't yet run generically; see equivalent/components/sese_check.py.",
@@ -136,17 +136,24 @@ _register(
     "program capture set. On the tree.",
 )
 _register(
+    "harness/original", True, DetailLevel.FULL,
+    "The onboarded program and an independently reviewed pre-onboarding snapshot "
+    "produce equivalent declared outputs for every reference run. On the tree.",
+)
+_register(
     "harness/self_check", True, DetailLevel.FULL,
     "Single-token faults injected into the files the manifest says implement the "
     "region are built and replayed the way the baseline is, and scored against the "
     "captured answers with the code's own tolerance bands: at least one is caught, "
-    "and none changes an answer the bands then let through. Survivors -- mutants no "
-    "output changed at all for -- are listed rather than counted against. On the tree.",
+    "none changes an answer the bands then let through, and every generated mutant is "
+    "classified without skips or runtime failures. Unchanged-output mutants are listed "
+    "as review obligations, not asserted to be equivalent. On the tree.",
 )
 _register(
     "harness/properties", True, DetailLevel.FULL,
     "The code's own module of invariants passes against the baseline build, at the "
-    "recorded seed. A code that declares none files this claim too, saying so, because "
+    "recorded seed, with at least one executed passing test and no skipped tests. A code "
+    "that declares none files this claim too, saying so, because "
     "stating no invariants is something the code says about itself. On the tree.",
 )
 

@@ -1,5 +1,24 @@
 # Coverage-Based Testing for Fortran 2008
 
+**Research and historical measurements, not the current operating guide.**
+The survey and campaign below predate the September 2026 evidence hardening.
+Their tool-availability statements have not been revalidated as a current
+catalogue, and the recorded mutation counts have not been re-established with
+the revised comparator. Use [the coworker handoff](coworker-handoff.md) for
+current steps and [the evidence contract](evidence-contract.md) for what the
+implemented checks establish.
+
+**Repository status on 2026-09-06.** The gateway now has mutation self-checks
+during onboarding and optional per-code properties during porting. Submitted
+tests and mutants run in disposable builder jobs, and GPU activity is observed
+through protected Nsight reports. The standalone `tools/fmutate --checked`
+path includes a coverage prepass and checked rebuild; these are not a required
+per-port checked-build or coverage-CI gate. The third-code CPU test includes
+unequal grid spacings, but does not change the historical tsunami corpus.
+Write-set analysis, checked/observable coverage, and the research-scale
+techniques below remain proposals. The priorities in section 12 are the
+memo's original recommendations, not a current completion checklist.
+
 Research memo. The question behind it: when an AI agent hands back a ported kernel and the
 capture-replay oracle says PASS, *how much should we believe it?* Coverage metrics are the
 usual answer, and the plain ones (line, branch) are the weakest members of a family that
@@ -77,8 +96,9 @@ regions or `do concurrent` offloaded to the device. Nsight Systems/Compute give 
 *profiling* (was the kernel launched, how long did it take) and not *coverage* (which lines
 in the kernel ran). For this project's purposes the practical substitute is: keep the CPU
 baseline and the GPU port compiled from the same source, measure coverage on the CPU build,
-and use the device-proof check (already in `builder/stages.py`) to confirm the GPU path is
-the one actually executing at runtime.
+and use the device-activity check in `services/builder/stages.py` to observe
+kernel execution. CPU coverage does not establish device-side branch coverage,
+and a kernel count does not identify every operation that was offloaded.
 
 ---
 
@@ -147,8 +167,8 @@ value for this project:
    Attractive on paper; [known methodological pitfalls](https://arxiv.org/pdf/2005.11532),
    chiefly that models mostly learn coverage. I would not build on this yet.
 
-For a kernel-sized target (the shape this project always works in) the campaign is cheap
-enough that (1) plus brute force is sufficient.
+For a small kernel-sized target, coverage filtering plus brute force may be
+affordable. Larger regions and whole-program builds need their own cost measurements.
 
 ---
 
@@ -167,7 +187,7 @@ six operators — arithmetic (AOR), relational (ROR), logical (LCR), constant (C
 section bound (SBR)**, and statement deletion (SDL). Each mutant: rebuild
 the replay driver against the mutated module, replay the 5 visible cases, and compare to
 `programs/tsunami/captures/visible` using the real comparator (now `equivalent/capture/compare.py`) and
-`programs/tsunami/tolerances.json`, scored
+the tsunami tolerance policy (now `programs/tsunami/baseline/harness/tolerances.json`), scored
 both under the tolerance policy and under bitwise equality. Mutants on lines a coverage
 prepass shows are never executed are not built at all.
 
@@ -188,18 +208,18 @@ SURVIVED everything                 2
 
 Three findings, in ascending order of importance.
 
-### 4.1 The tolerance policy costs nothing in fault detection
+### 4.1 No tolerance-blind gap was observed in this campaign
 
 The tolerance-blind gap is **zero**: every mutant that changed the output bitwise also
 violated the tolerance policy. Given `tolerances.json` currently carries `observed_cpu_spread
 = 0` and floors of `abs 1e-6 / rel 1e-5 / ulp 16`, the floors are not masking any fault this
-operator set can produce. That is a genuinely good result and worth recording as a baseline —
+operator set exposed on these inputs. That is a useful result to record as a baseline —
 **when you recalibrate against `nvfortran`, re-run this campaign.** The number that matters
 is not the tolerance value, it is whether loosening the tolerance moves the tolerance-blind
 gap off zero. That gives you a principled ratchet: *tolerance may be loosened only as far as
 the gap stays at 0.*
 
-### 4.2 A quarter of the mutants are unkillable, and coverage says why
+### 4.2 A quarter of the mutants were outside the exercised code
 
 23 of 93 mutants land in `diff_upwind`, which `step` never calls. gcov confirms it:
 
@@ -238,7 +258,7 @@ MUTANT: dx(2:im+1) = x(3:im) - x(1:im-2)
   checked (-fcheck=all -finit-real=snan) RUNTIME-ERROR at line 22
 ```
 
-All twelve. **`-fcheck=all` converts twelve silent equivalent mutants into twelve kills.**
+All twelve. **`-fcheck=all` converts twelve release-build survivors into twelve kills.**
 (My first prototype found eight; adding a dedicated section-bound operator — `SBR` in
 `fmutate` — found four more. The operator set is the binding constraint on what mutation
 testing can tell you, which is the argument in §3.1 against regex tools that have no notion
@@ -247,8 +267,8 @@ of an array section.)
 The implication for this project is direct and not hypothetical: array-section bound
 arithmetic is precisely what an LLM rewrites when it converts an array-syntax stencil into
 an explicit `do concurrent` or `!$omp target teams distribute` loop, and off-by-one bounds
-are its characteristic failure mode. A mutant class the oracle provably cannot detect at
-`-O2` is a fault class the gate provably cannot detect at `-O2`.
+are a relevant failure mode. These mutants escaped this release-build corpus;
+that does not establish equivalence or invisibility under every input and compiler.
 
 **Recommendation:** add a checked-build gate — compile the ported kernel a second time with
 `-fcheck=all -finit-real=snan -ffpe-trap=invalid,zero,overflow` and replay the corpus under
@@ -263,7 +283,7 @@ u = u - (u * diff_centered(u) + g * diff_centered(h)) * dx * dt   ! mutant, orig
 ```
 
 survives because `mod_params.f90` sets `dx = 1.0`, so multiply and divide coincide. This is a
-true equivalent mutant *for this test suite only* — a dimensional error that becomes real the
+survivor on this test suite — a dimensional error that becomes real the
 moment anyone changes the grid spacing. Neither coverage nor a stronger oracle catches it;
 only a different input does. **Recommendation:** generate one capture case with `dx /= 1.0`
 (and ideally `hmean`, `dt` perturbed). Cheap, and it kills a mutant class that nothing else
@@ -301,12 +321,12 @@ is *one* instrumented run, not N.
    Caveat: dfsan is a Clang-driver feature; wiring it to flang-produced IR means running the
    pass manually over the `.ll`, and dfsan's ABI-list mechanism will need entries for the
    Fortran runtime. Non-trivial, but it is the only credible route.
-2. **Cheap structural proxy.** For a kernel with an explicit captured-state boundary — which
-   this project always constructs — checked coverage degenerates to something you can compute
-   from the §manifest in `refactor.md`: a written variable that is not in the compared output
-   set is *unchecked*, full stop. Comparing the manifest's write-set against the oracle's
-   compared-variable set is a five-line check that catches the important case (kernel writes
-   module state that nobody compares) with none of the machinery. **Do this first.**
+2. **Structural proxy.** Given an independently reviewed list of state the kernel
+   writes, compare it with the oracle's compared-output list. An omitted variable
+   is a review obligation. The original proposal in the separately maintained
+   `notes/refactor.md` assumed such a write-set would be available. The current
+   manifest declares the interface; it does not derive hidden writes or establish
+   checked coverage. Obtaining a complete write-set remains a separate analysis task.
 
 Related and easier to steal: [State Field Coverage](https://arxiv.org/html/2510.03071v1)
 measures how much of the object state an oracle inspects — for Fortran, "how much of the
@@ -446,11 +466,11 @@ expressed in constraints rather than tags.
 **Where SMT *is* worth using here, concretely:** not on the kernel's floating-point
 semantics, but on its **integer index arithmetic**. The §4.3 mutants are index-bound faults,
 and index arithmetic is linear integer arithmetic — the easiest thing an SMT solver does.
-A checker that extracts array-section bounds from the source (fparser2 already gives you the
-parse tree per `refactor.md`) and asks Z3 "are LHS and RHS section extents equal for all
-`im >= 3`?" would have flagged all twelve survivors **statically, in milliseconds, with no
-execution at all**. That is a far better cost/benefit than symbolic execution of the
-numerics, and it composes with the manifest tooling already planned.
+A proposed checker could extract array-section bounds from a parse tree and ask
+Z3 "are LHS and RHS section extents equal for all `im >= 3`?" The separately
+maintained `notes/refactor.md` discussed an fparser2 path; the gateway does not
+implement this analysis. Whether it detects all twelve survivors, and its cost,
+still need measurement.
 
 Equivalent-mutant detection via constraints ([Using Constraints for Equivalent Mutant
 Detection](https://arxiv.org/pdf/1207.2234)) is the other tractable SMT application:
@@ -515,7 +535,7 @@ correctness rates than a single LLM.
 validate an LLM-produced port creates a correlated blind spot: the model that cannot imagine
 a fault also cannot write it. Keep an operator-based (mechanical, boring, uncorrelated)
 mutant set as the floor and treat LLM mutants as an *additive* layer. And keep the mutation
-harness on the oracle side of the trust boundary — the same reason `builder/stages.py` owns
+harness on the trusted side of the boundary — the same reason `services/builder/stages.py` owns
 the compile commands.
 
 ---
@@ -529,7 +549,8 @@ Ordered by value/effort, with what each buys.
 1. **Checked-build gate.** Second replay of the corpus under `-fcheck=all -finit-real=snan
    -ffpe-trap=invalid,zero,overflow`. Buys: the twelve-mutant class in §4.3 that is currently
    undetectable. *Highest value item in this memo.*
-2. **gcov on the replay corpus, in CI.** Buys: `refactor.md` step 3's "trust metric"; catches
+2. **gcov on the replay corpus, in CI.** Proposed as a metric in the separately
+   maintained `notes/refactor.md`; catches
    dead surface like `diff_upwind`; remember the `.gcda` naming trap. Fail the build on a
    coverage drop, not on an absolute threshold.
 3. **A capture case with `dx /= 1.0`.** Buys: §4.4's dimensional-error class.

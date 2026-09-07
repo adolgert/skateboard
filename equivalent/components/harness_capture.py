@@ -170,6 +170,7 @@ def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
 
     per_dataset = {}
     captured = {}
+    executable_identity = None
     problems = []
     for name in sorted(manifest.datasets):
         try:
@@ -180,6 +181,7 @@ def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
             raise ComponentError(f"builder /v1/capture call failed: {exc}") from exc
 
         cases = resp.get("cases", {}) if resp.get("ok") else {}
+        executable_identity = executable_identity or resp.get("executable_identity")
         per_dataset[name] = {"cases": len(cases)}
         if not cases:
             problems.append(
@@ -204,11 +206,23 @@ def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
     if problems:
         # Nothing is stored: a set that failed its own check must not be
         # in the ledger for a later comparison to find.
-        return {"verdict": "fail", "detail": {**described, "datasets": per_dataset, "problems": problems}}
+        return {
+            "verdict": "fail",
+            "detail": {
+                **described, "datasets": per_dataset, "problems": problems,
+                "executable_identity": executable_identity,
+            },
+        }
 
     for name, cases in captured.items():
         subject = store_capture_set(
             store, name, {case: case_arrays(cases[case]) for case in cases},
         )
         per_dataset[name]["capture_set"] = subject.sha256
-    return {"verdict": "pass", "detail": {**described, "datasets": per_dataset}}
+    return {
+        "verdict": "pass",
+        "detail": {
+            **described, "datasets": per_dataset,
+            "executable_identity": executable_identity,
+        },
+    }

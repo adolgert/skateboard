@@ -80,6 +80,28 @@ def test_one_region_becomes_one_region_config_with_every_path_joined(tmp_path):
     assert config.baseline_commit == baseline
 
 
+@pytest.mark.parametrize("field", ["executor_identity", "oracle_identity"])
+def test_backend_pins_are_strict_sha256_values(tmp_path, field):
+    path, _ = _tree(tmp_path, CONFIG)
+    raw = yaml.safe_load(path.read_text())
+    raw["regions"]["ch04:step"][field] = "arbitrary-image-tag"
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="SHA-256"):
+        load_gateway_config(path)
+
+
+def test_external_original_reference_is_resolved_and_carried_to_regions(tmp_path):
+    from equivalent.tests.components.test_original_check import reference
+    path, _ = _tree(tmp_path, CONFIG)
+    program_dir = tmp_path / "programs" / "tsunami"
+    contract = reference(program_dir)
+    raw = yaml.safe_load(path.read_text())
+    raw["codes"]["tsunami"]["original_reference"] = "tsunami/reference.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_gateway_config(path)
+    assert config.regions["ch04:step"].original_reference_path == contract
+
+
 def test_the_codes_section_loads_each_manifest_and_the_region_carries_its_own(tmp_path):
     path, _ = _tree(tmp_path, CONFIG)
 

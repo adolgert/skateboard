@@ -17,7 +17,8 @@ from equivalent.gateway.table import rows_for
 from equivalent.ledger.acceptance import ONBOARDING
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
-from equivalent.tests.fakes import FakeBuilder, write_program, write_tree
+from equivalent.tests.fakes import write_program, write_tree
+from equivalent.tests.components.test_original_check import ReferenceBuilder, reference
 
 TOKEN = "test-token"
 # Every action of the onboarding phase that has something to dispatch to,
@@ -28,7 +29,7 @@ STRATEGY_DIR = Path(__file__).resolve().parents[2] / "strategy" / "files"
 REGION = "tsunami:onboarding"
 
 
-def _client(tmp_path):
+def _client(tmp_path, *, oracle=None):
     """A gateway holding one onboarding region, seeded from a bare tree."""
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, write_tree(tmp_path / "seed"))
@@ -46,12 +47,13 @@ def _client(tmp_path):
         baseline_strategy_path=STRATEGY_DIR / "cpu_reference.yaml",
         working_copy_dir=working,
         manifest=load_manifest(program / "manifest.yaml"),
+        original_reference_path=reference(tmp_path),
     )
-    builder = FakeBuilder()
+    builder = ReferenceBuilder()
     # The tree's own replay driver reproduces what its capture program
     # recorded, which is what an onboarding that is going well looks like.
     builder.replays_capture = True
-    client = TestClient(create_app({REGION: cfg}, TOKEN, builder=builder))
+    client = TestClient(create_app({REGION: cfg}, TOKEN, builder=builder, oracle=oracle))
     return client, cfg, LedgerStore(cfg.ledger_dir), builder
 
 
@@ -71,7 +73,8 @@ def test_the_onboarding_phase_offers_every_check_a_code_has_to_pass():
     # deciding it belongs in an onboarding session fails a test.
     assert ONBOARDING_ACTIONS == [
         "manifest_check", "harness_build", "harness_capture", "harness_replay",
-        "harness_determinism", "harness_timing", "harness_self_check", "harness_property",
+        "harness_determinism", "harness_timing", "harness_original",
+        "harness_self_check", "harness_property",
     ]
 
 
@@ -83,6 +86,18 @@ def test_the_build_check_is_refused_until_the_manifest_has_been_read(tmp_path):
     assert body["refused"] is True
     assert [item["predicateType"] for item in body["missing"]] == ["manifest/valid"]
     assert body["missing"][0]["producing_action"] == "manifest_check"
+
+
+def test_onboarding_never_queries_the_porting_oracle_policy(tmp_path):
+    class PortingOnlyOracle:
+        def policy(self):
+            raise AssertionError("onboarding must not query /v1/policy")
+
+    client, _, _, _ = _client(tmp_path, oracle=PortingOnlyOracle())
+
+    body = _run(client, "manifest_check")
+
+    assert body["verdict"] == "pass"
 
 
 def test_submitting_an_onboarding_region_keeps_every_file(tmp_path):
@@ -130,7 +145,7 @@ def test_status_reports_the_onboarding_requirements_and_what_is_still_missing(tm
     assert rows["harness/builds"]["status"] == "present"
     assert rows["harness/captured"]["status"] == "missing"
     assert rows["harness/captured"]["producing_action"] == "harness_capture"
-    # Six checks of the eight have not run, so the region is not onboarded.
+    # Seven checks of the nine have not run, so the region is not onboarded.
     assert body["accepted"] is False
 
 

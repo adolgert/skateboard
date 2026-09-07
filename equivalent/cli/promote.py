@@ -30,9 +30,10 @@ from pathlib import Path
 
 from equivalent.components import harness_capture
 from equivalent.gateway.config import DATASETS_DIR, GatewayConfig
+from equivalent.gateway.evidence import evidence_materials_for, required_materials_by_predicate
 from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import (
-    current_ref,
+    current_commit,
     current_tree_and_frozen,
     tracked_files,
     working_copy_files,
@@ -211,15 +212,22 @@ def _missing_rows(status: dict) -> list[str]:
 
 def _onboarded_tree(cfg: RegionConfig, store: LedgerStore) -> tuple[str, Subject]:
     """The region's current tree, refused unless every onboarding claim passed."""
-    ref = current_ref(cfg.repo_dir, cfg.region_id)
+    ref = current_commit(cfg.repo_dir, cfg.region_id)
+    materials = evidence_materials_for(cfg)
+    store.activate_context(materials)
     tree_sha, frozen_sha = current_tree_and_frozen(
         cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase,
         load_strategy(cfg.strategy_path),
+        required_materials=materials, ref=ref,
     )
     tree = Subject(kind="tree", sha256=tree_sha)
     status = compute_status(
         store, requirements_for(ONBOARDING), ONBOARDING,
         tree=tree, frozen=Subject(kind="frozen", sha256=frozen_sha),
+        required_materials=materials,
+        required_materials_by_predicate=required_materials_by_predicate(
+            store, requirements_for(ONBOARDING), ONBOARDING, tree, materials,
+        ),
     )
     if not status["accepted"]:
         raise PromoteRefused(
@@ -286,6 +294,11 @@ def promote(config: GatewayConfig, cfg: RegionConfig, programs=None, replace: bo
         )
 
     store = LedgerStore(cfg.ledger_dir)
+    if not cfg.executor_identity:
+        raise PromoteRefused(
+            "promotion requires a reviewed executor_identity in the region configuration; "
+            "qualify the deployment and pin its builder /healthz identity first"
+        )
     ref, subject = _onboarded_tree(cfg, store)
     tree = _reviewed_tree(cfg, ref)
 

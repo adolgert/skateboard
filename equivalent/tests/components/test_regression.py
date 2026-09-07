@@ -64,3 +64,18 @@ def test_holdout_fetches_inputs_from_the_oracle_and_runs_them_through_the_builde
 
     assert list(builder.run_calls[0]["cases"]) == ["hcase0"]
     assert oracle.compare_calls[0]["dataset"] == "holdout"
+
+
+@pytest.mark.parametrize("transport", [False, True])
+def test_failed_holdout_does_not_echo_candidate_output(tmp_path, transport):
+    class LeakingBuilder(FakeBuilder):
+        def run(self, *args, **kwargs):
+            if transport:
+                raise RuntimeError("SECRET_HELD_OUT_INPUT")
+            return {"ok": False, "log_tail": "SECRET_HELD_OUT_INPUT"}
+
+    with pytest.raises(ComponentError) as raised:
+        regression.check_holdout("ch04:step", "tree123", load_strategy(STRATEGY_PATH),
+                                 _manifest(tmp_path), FakeOracle(), LeakingBuilder())
+    assert "SECRET" not in str(raised.value)
+    assert "withheld" in str(raised.value)

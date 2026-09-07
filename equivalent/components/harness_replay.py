@@ -104,6 +104,7 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
 
     per_dataset = {}
     failed = []
+    executable_identity = None
     for name in sorted(sets):
         cases = load_capture_set(store, sets[name])
         try:
@@ -115,6 +116,7 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
             raise ComponentError(f"builder /v1/run call failed: {exc}") from exc
 
         entry = {"cases": len(cases), "capture_set": sets[name]}
+        executable_identity = executable_identity or resp.get("executable_identity")
         if not resp.get("ok"):
             entry["log_tail"] = resp.get("log_tail", "")
             failed.append(name)
@@ -129,6 +131,7 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
         "verdict": "fail" if failed else "pass",
         "detail": {
             "manifest_sha256": manifest.sha256,
+            "executable_identity": executable_identity,
             "datasets": per_dataset,
             "datasets_that_disagreed": failed,
         },

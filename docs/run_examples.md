@@ -1,4 +1,11 @@
-# Two runs, extracted
+# Three historical run examples
+
+These are July 2026 batch-harness records. Their `device_proof` and `ACCEPTED`
+labels describe the checks used then; they do not satisfy the current evidence
+policy. Runtime notification text used in those runs was spoofable by a
+submitted program. The current builder uses protected Nsight reports instead;
+see [the evidence contract](evidence-contract.md). Compiler behavior and
+speedups below refer to the recorded setup, not every compiler or GPU.
 
 Slide-ready material from the campaigns recorded in `../experiments/`. One port
 that **compiled, ran on the GPU, and computed the wrong physics** (qwen2.5:14b),
@@ -380,9 +387,10 @@ dialect the model happened to reach for.
 
 ---
 
-# Two corrections to `early_trials.tex`
+# Corrections identified while extracting
 
-Found while extracting; both are claims in the paper.
+Found while extracting. Both corrections have now been applied to the early
+trials write-up and experiment summary; this section retains their rationale.
 
 1. **"the error was byte-for-byte identical on attempt 4 and attempt 20"** —
    not accurate at the source level. The two files differ:
@@ -400,5 +408,5 @@ Found while extracting; both are claims in the paper.
 2. **"Sonnet/Opus updated in place"** (`experiments/README.md`, finding 3) —
    there is no Opus run anywhere in this repo: zero `opus` rows in either ledger
    CSV, no `attempt/opus-*` branch, no `/work/opus-*` workspace. `opus` is a
-   registered key in `agent-runner/app.py` that was never exercised. Either drop
-   the mention or run it.
+   registered key in the historical agent-runner that was never exercised.
+   The unsupported result has been removed from the write-up and plots.

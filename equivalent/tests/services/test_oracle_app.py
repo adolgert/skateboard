@@ -68,6 +68,57 @@ def test_policy_reports_the_version_and_the_hash_of_the_file_it_read(tmp_path):
 
     assert body["policy_version"] == PROGRAM_TOLERANCES["policy_version"]
     assert len(body["policy_sha256"]) == 64
+    assert len(body["oracle_identity"]) == 64
+
+
+def test_health_and_policy_report_the_same_oracle_identity(tmp_path):
+    client = _client(tmp_path)
+
+    assert client.get("/healthz").json()["oracle_identity"] == (
+        client.get("/v1/policy").json()["oracle_identity"]
+    )
+
+
+def test_oracle_identity_changes_when_a_capture_changes(tmp_path):
+    program = write_program(tmp_path)
+    captures = _captures(tmp_path)
+    manifest = program / "manifest.yaml"
+    policy = program_tolerances(program)
+    first = TestClient(create_app(captures, policy, manifest)).get("/healthz").json()
+
+    output = captures / "holdout" / HOLDOUT[0] / f"field{npy.OUTPUT_SUFFIX}"
+    changed = np.load(output, allow_pickle=False) + 1
+    np.save(output, changed, allow_pickle=False)
+    second = TestClient(create_app(captures, policy, manifest)).get("/healthz").json()
+
+    assert first["oracle_identity"] != second["oracle_identity"]
+
+
+def test_oracle_identity_uses_framed_paths_and_contents(tmp_path):
+    # These two trees have the same naive path+content concatenation: a/bc.
+    from services.oracle.app import _identity_from_entries
+
+    first = _identity_from_entries([("a", b"bc")])
+    second = _identity_from_entries([("ab", b"c")])
+
+    assert first != second
+
+
+def test_oracle_identity_includes_python_and_numpy_versions(tmp_path, monkeypatch):
+    import services.oracle.app as oracle_app
+
+    program = write_program(tmp_path)
+    captures = _captures(tmp_path)
+    policy = program_tolerances(program).read_bytes()
+    outputs = FIXTURE_VARIABLES
+    first = oracle_app._oracle_identity(captures, policy, outputs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(oracle_app.sys, "version", oracle_app.sys.version + "-different")
+        assert oracle_app._oracle_identity(captures, policy, outputs) != first
+    with monkeypatch.context() as patch:
+        patch.setattr(oracle_app.np, "__version__", oracle_app.np.__version__ + "-different")
+        assert oracle_app._oracle_identity(captures, policy, outputs) != first
 
 
 def test_the_expected_answers_compare_equal_to_themselves(tmp_path):
@@ -176,6 +227,18 @@ def test_startup_fails_when_a_tolerance_entry_is_incomplete(tmp_path):
     assert name in str(caught.value)
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -1.0])
+def test_startup_refuses_a_nonfinite_or_negative_tolerance(tmp_path, value):
+    name = FIXTURE_VARIABLES[0]["name"]
+    invalid = json.loads(json.dumps(PROGRAM_TOLERANCES))
+    invalid["variables"][name]["abs"] = value
+
+    with pytest.raises(ValueError) as caught:
+        _client(tmp_path, tolerances=invalid)
+
+    assert name in str(caught.value)
+
+
 def test_startup_fails_when_a_dataset_is_missing(tmp_path):
     program = write_program(tmp_path)
     captures = tmp_path / "empty"
@@ -210,6 +273,7 @@ def test_an_oracle_with_nothing_to_compare_still_starts_and_says_it_is_not_ready
     assert body["ready"] is False
     assert body["n_visible"] == 0
     assert body["n_holdout"] == 0
+    assert body["oracle_identity"] is None
     assert "captures" in body["missing"] and "tolerances" in body["missing"]
 
 

@@ -137,6 +137,10 @@ def test_status_with_a_configuration_file_shows_the_tree_the_gateway_shows(tmp_p
     from_cli = json.loads(capsys.readouterr().out)
 
     assert rc == 0
+    assert from_cli.pop("context_verified") is False
+    assert "Advisory" in from_cli.pop("note")
+    assert from_gateway.pop("context_verified") is False
+    assert from_gateway.pop("note")
     assert from_cli == from_gateway
 
 

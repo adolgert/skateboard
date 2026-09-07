@@ -1,5 +1,22 @@
 # Plan: make the gateway path work for a second Fortran code
 
+**Historical plan, with implementation notes.** The decisions below began on
+2026-08-28; “today,” proposed steps, old paths, and *As built* paragraphs refer
+to their respective stages. They are retained as the design record, not an
+up-to-date procedure. Follow [the coworker handoff](coworker-handoff.md) and
+[onboarding guide](onboarding.md) for a new code.
+
+**Status on 2026-09-06.** The gateway now uses `services/` for the builder and
+oracle, schema-2 evidence with runtime and executable identities, nine
+onboarding actions including `harness_original`, tree-scoped SESE screening,
+protected compiler tracing and Nsight kernel reports, and checks for every
+timed port repetition. These supersede the earlier frozen-SESE and notification
+designs below. The `kh2d` example and an independent CPU Fortran test fixture
+exist; this is not a record of a coworker completing the proposed third-code
+evaluation. External baseline import, generic effect analysis, dependency-cone
+subjects, and GPU qualification on the target host remain open. See the
+[evidence contract](evidence-contract.md) for the current limits.
+
 This plan follows `docs/per-code-dependencies.md`, which lists where the
 harness depends on the tsunami code. It generalizes the gateway path —
 `equivalent/`, `deploy/`, and the two `demo/` services the gateway calls
@@ -423,6 +440,9 @@ and a port that inlines the stencil into a new file.
 
 ## Step 5 — Onboarding actions and the `onboarded` row
 
+*Later change, 2026-09-06:* `harness_original` adds the ninth mandatory
+onboarding action. The eight-action count below describes the earlier commits.
+
 *As built: `e9e4c00` (phase, the minimal manifest, `manifest_check` and
 `harness_build`), `29723d3` (capture, replay, determinism, timing),
 `d73922a` (`promote`, and tsunami onboarded from its bare baseline), and
@@ -641,6 +661,10 @@ conservation is refused acceptance.
 
 ## Step 8 — The second code, end to end
 
+*Current status, 2026-09-06:* `programs/kh2d/` and deployment configuration
+exist. The original plan below is not evidence of a completed port under the
+current policy or a completed independent coworker evaluation.
+
 **Goal.** Onboard a code that is not tsunami through Step 5's session,
 then port a region of it to acceptance.
 
@@ -678,6 +702,11 @@ tsunami.
 
 ## Step 9 — Documentation
 
+*Current status, 2026-09-06:* the onboarding, installation, porting, and
+coworker-handoff guides exist and have been audited against the implementation.
+The independent follow-through on an unseen third code described below is
+still an evaluation to perform.
+
 **Goal.** A person who has never seen this repository can onboard a code
 by reading one document.
 
@@ -711,7 +740,9 @@ author, on a third code, and the places they got stuck are the review.
 - Region-scoped subjects (the dependency-cone hash from the architecture
   document). On a 63k-line code, `tree`-scoped requirements mean any
   edit re-runs every check. Becomes pressing at Step 8b.
-- A stronger device proof (nsys kernel count) as a strategy option.
+- A stronger device observation (nsys kernel count): implemented in the
+  September 2026 protected profiler path; it establishes kernel activity,
+  not attribution of all intended scientific work to the GPU.
 - The footprint check (spec-declared reads and writes versus what the
   code touches) still needs an analyzer this repository does not run
   generically. `harness_self_check` and `harness_replay` catch a wrong

@@ -45,8 +45,8 @@ describe("table", () => {
     expect(toolParameters(row)).toEqual({
       type: "object",
       properties: {
-        seed: { type: "integer", description: row.config_params!.seed.description },
-        max_examples: { type: "integer", description: row.config_params!.max_examples.description },
+        seed: { ...row.config_params!.seed },
+        max_examples: { ...row.config_params!.max_examples },
       },
     });
     // Optional: a call that names neither is the call the gateway

@@ -5,7 +5,7 @@ import pytest
 from equivalent.components import timing
 from equivalent.components.errors import ComponentError
 from equivalent.gateway.submit import init_baseline_repo
-from equivalent.ledger.capture_sets import capture_sets_dir, load_capture_set
+from equivalent.ledger.capture_sets import capture_sets_dir, load_capture_set, store_program_set, program_variable
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
@@ -24,13 +24,23 @@ def _manifest(tmp_path):
     return load_manifest(write_program(tmp_path) / "manifest.yaml")
 
 
-def _store_with_build_claim(tmp_path, flags=("-O2", "-stdpar=gpu")):
+def _store_with_build_claim(tmp_path, flags=("-O2", "-stdpar=gpu"), manifest=None):
     store = LedgerStore(tmp_path / "region")
     store.record_claim(
         [TREE], "build/replay",
         Predicate(tool="builder", version="0.1", configHash="cfg", verdict="pass",
                   detail={"flags": list(flags)}),
         [], "sess-1",
+    )
+    manifest_path = tmp_path / "programs" / "tsunami" / "manifest.yaml"
+    manifest = manifest or (load_manifest(manifest_path) if manifest_path.exists() else _manifest(tmp_path))
+    program = store_program_set(store, {
+        program_variable(path): timing_array(path) for path in manifest.timing.outputs
+    })
+    store.record_claim(
+        [TREE], "program/regression",
+        Predicate(tool="builder", version="0.1", configHash="cfg", verdict="pass",
+                  detail={"program_set": program.sha256}), [], "sess-1",
     )
     return store
 
@@ -84,7 +94,7 @@ def test_the_claim_records_the_arguments_and_environment_the_run_was_given(tmp_p
     }
     (directory / "manifest.yaml").write_text(yaml.safe_dump(raw, sort_keys=False))
     manifest = load_manifest(directory / "manifest.yaml")
-    store = _store_with_build_claim(tmp_path)
+    store = _store_with_build_claim(tmp_path, manifest=manifest)
 
     result = timing.check_port(store, TREE, "ch04:step", "tree123", manifest, FakeBuilder())
 
@@ -103,6 +113,49 @@ def test_port_fail_when_the_binary_is_not_built(tmp_path):
 
     result = timing.check_port(store, TREE, "ch04:step", "tree123", _manifest(tmp_path), builder)
 
+    assert result["verdict"] == "fail"
+
+
+def test_a_wrong_intermediate_timed_result_fails_even_if_the_last_run_is_right(tmp_path):
+    import base64
+    from equivalent.capture import npy
+
+    class WrongSecondRun(FakeBuilder):
+        def timing_outputs(self, outputs, run):
+            result = super().timing_outputs(outputs, run)
+            if run == 1:
+                result[outputs[0]] = base64.b64encode(npy.encode(timing_array(outputs[0]) + 1)).decode()
+            return result
+
+    store = _store_with_build_claim(tmp_path)
+    result = timing.check_port(store, TREE, "ch04:step", "tree123", _manifest(tmp_path), WrongSecondRun())
+    assert result["verdict"] == "fail"
+    assert result["detail"]["compared_repetitions"] == 5
+    assert not result["detail"]["per_run"][1]["field"]["pass"]
+    assert result["detail"]["per_run"][-1]["field"]["pass"]
+
+
+@pytest.mark.parametrize("field,value", [("outputs", []), ("runs_s", []),
+                                         ("runs_s", [0.0] * 5), ("runs_s", [float("nan")] * 5)])
+def test_incomplete_or_invalid_timing_cannot_pass(tmp_path, field, value):
+    class Incomplete(FakeBuilder):
+        def time(self, *args, **kwargs):
+            return {**super().time(*args, **kwargs), field: value}
+
+    store = _store_with_build_claim(tmp_path)
+    result = timing.check_port(store, TREE, "ch04:step", "tree123", _manifest(tmp_path), Incomplete())
+    assert result["verdict"] == "fail"
+
+
+def test_baseline_cannot_pass_after_ignoring_the_requested_flags(tmp_path):
+    class IgnoringFlags(FakeBuilder):
+        def build(self, *args, **kwargs):
+            return {**super().build(*args, **kwargs), "flags_reached_every_compile": False}
+
+    result = timing.check_baseline(
+        LedgerStore(tmp_path / "region"), _baseline_repo(tmp_path), "ch04:step", "basetree123",
+        _manifest(tmp_path), load_strategy(BASELINE_STRATEGY_PATH), IgnoringFlags(),
+    )
     assert result["verdict"] == "fail"
 
 

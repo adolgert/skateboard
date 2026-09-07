@@ -1,9 +1,23 @@
+# Historical session excerpt
+
+This transcript predates the current evidence policy. It preserves what the
+user and agent said; the reported `ACCEPTED` label is not a current ledger
+verification. The sequence omits checks now required, including a new
+`sese_check` after editing the tree and whole-program regression before timing.
+It also omits baseline timing and property checks when configured. Current
+acceptance additionally requires claims bound to the reviewed tool identities
+and executable digests.
+Use [the porting manual](pi-users-manual.md), the gateway's action table, and
+configuration-aware ledger status for a current session.
+
 **User**
+
 ```
 Read src/mod_kernel.f90. Write notes/regions/ch04-step.sese.yaml describing the region ch04:step: the anchor file, the entry symbol step, and pst_node as step@<first>-<last> where the lines are the inclusive body of the step subroutine, from subroutine step through end subroutine step. Then call submit, then sese_check.
 ```
 **Pi agent**
-```
+
+````text
  notes/regions/ch04-step.sese.yaml has been created with the SESE region definition for ch04:step:
  ```yaml
    region: ch04:step
@@ -14,13 +28,15 @@ Read src/mod_kernel.f90. Write notes/regions/ch04-step.sese.yaml describing the 
  ```
  Submitted the working copy and verified with sese_check:
  - sese/verified: pass (c-0001)
-```
+````
 **User**
+
 ```
 Nice.  Port the step subroutine to run on the GPU. The strategy compiles with -stdpar=gpu, so use do concurrent. Compile locally with nvfortran first to check it builds. When it builds, submit, then run build_replay, run_replay, sanitize, regression_visible, regression_holdout, and time_port in that order.
 ```
 **Pi agent**
-```
+
+````text
  The step subroutine in src/mod_kernel.f90 has been ported to execute on the GPU using do concurrent loops matching the semantic contract.
 
  ### Summary of Pipeline Results
@@ -38,4 +54,4 @@ Nice.  Port the step subroutine to run on the GPU. The strategy compiles with -s
  8. time_port: pass (c-0009)
 
  Status: ACCEPTED
- ```
+````

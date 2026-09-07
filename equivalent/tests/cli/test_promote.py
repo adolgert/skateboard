@@ -15,11 +15,13 @@ from equivalent.capture import npy
 from equivalent.cli import promote
 from equivalent.cli.main import main
 from equivalent.gateway.submit import baseline_commit, init_baseline_repo, tracked_files
+from equivalent.gateway.config import load_gateway_config
+from equivalent.gateway.evidence import evidence_materials_for
 from equivalent.ledger.acceptance import requirements_for
 from equivalent.ledger.capture_sets import store_capture_set
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import tree_subject
+from equivalent.ledger.subjects import Subject, tree_subject
 from equivalent.manifest.schema import IN_TREE_MANIFEST, load_manifest
 from equivalent.tests.fakes import (
     fixture_arrays,
@@ -54,8 +56,10 @@ def _program_case() -> dict:
     return {"program": {"inputs": {}, "outputs": {name: timing_array(TIMING_OUTPUT)}}}
 
 
-def _write_claims(store: LedgerStore, tree, details: dict, omit: str = "") -> None:
+def _write_claims(store: LedgerStore, tree, details: dict, omit: str = "", materials=()) -> None:
     """One passing claim per onboarding requirement, in the order they are asked for."""
+    binary = Subject(kind="binary", sha256="d" * 64)
+    details = {"harness/builds": {"targets": {"replay": {"sha256": binary.sha256}}}, **details}
     for requirement in requirements_for("onboarding"):
         if requirement.predicate_type == omit:
             continue
@@ -65,7 +69,7 @@ def _write_claims(store: LedgerStore, tree, details: dict, omit: str = "") -> No
                 tool="t", version="0.1", configHash="cfg", verdict="pass",
                 detail=details.get(requirement.predicate_type, {}),
             ),
-            [], "sess-1",
+            (*materials, binary), "sess-1",
         )
 
 
@@ -75,6 +79,7 @@ def _write_config(tmp_path: Path, programs: Path, phase: str = "onboarding") -> 
         "code": CODE, "phase": phase,
         "strategy": "onboarding" if phase == "onboarding" else "stdpar_managed",
         "baseline_strategy": "cpu_reference",
+        "executor_identity": "b" * 64,
     }
     if phase == "porting":
         region["spec_path"] = "notes/regions/ch04-step.sese.yaml"
@@ -111,6 +116,8 @@ def _deployment(tmp_path, *, manifest_text=None, omit: str = "", phase: str = "o
     repo = tmp_path / "repo"
     init_baseline_repo(repo, seed)
     programs = write_program(tmp_path, CODE, minimal=phase == "onboarding").parent
+    config_path = _write_config(tmp_path, programs, phase)
+    materials = evidence_materials_for(load_gateway_config(config_path).regions[REGION])
 
     store = LedgerStore(tmp_path / "ledger" / baseline_commit(repo) / REGION_SLUG)
     tree = tree_subject(tracked_files(repo, "main"))
@@ -123,10 +130,10 @@ def _deployment(tmp_path, *, manifest_text=None, omit: str = "", phase: str = "o
             "holdout": {"cases": 1, "capture_set": holdout},
         }},
         TIMED: {"datasets": {"program": {"cases": 1, "capture_set": program}}},
-    }, omit=omit)
+    }, omit=omit, materials=materials)
 
     return {
-        "config": _write_config(tmp_path, programs, phase),
+        "config": config_path,
         "working": tmp_path / "working",
         "destination": tmp_path / "promoted",
     }
@@ -162,6 +169,53 @@ def test_promote_writes_the_layout_a_code_directory_holds(tmp_path, capsys):
     assert not (code_dir / "captures" / "program").exists()
     # And the person is told what to do with what was written.
     assert f"git add {code_dir}" in out
+
+
+def test_rebuilt_binary_invalidates_offline_status_and_promotion(tmp_path, capsys):
+    import json
+
+    deployment = _deployment(tmp_path)
+    cfg = load_gateway_config(deployment["config"]).regions[REGION]
+    store = LedgerStore(tmp_path / "ledger" / baseline_commit(cfg.repo_dir) / REGION_SLUG)
+    tree = tree_subject(tracked_files(cfg.repo_dir, "main"))
+    store.record_claim(
+        [tree], "harness/builds",
+        Predicate(tool="t", version="0.1", configHash="rebuilt", verdict="pass",
+                  detail={"targets": {"replay": {"sha256": "e" * 64}}}),
+        evidence_materials_for(cfg), "sess-2",
+    )
+
+    assert main(["status", "--config", str(deployment["config"]),
+                 "--region-id", REGION, "--json"]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["accepted"] is False
+    captured = next(row for row in status["rows"] if row["predicateType"] == CAPTURED)
+    assert captured["evidence_status"] == "stale"
+    assert _promote(deployment) == 1
+    assert "harness/captured" in capsys.readouterr().err
+    assert not deployment["destination"].exists()
+
+
+def test_promotion_requires_a_reviewed_executor_pin(tmp_path, capsys):
+    deployment = _deployment(tmp_path)
+    path = deployment["config"]
+    raw = yaml.safe_load(path.read_text())
+    del raw["regions"][REGION]["executor_identity"]
+    path.write_text(yaml.safe_dump(raw))
+    assert _promote(deployment) == 1
+    assert "executor_identity" in capsys.readouterr().err
+    assert not deployment["destination"].exists()
+
+
+def test_changed_executor_pin_invalidates_promotion(tmp_path, capsys):
+    deployment = _deployment(tmp_path)
+    path = deployment["config"]
+    raw = yaml.safe_load(path.read_text())
+    raw["regions"][REGION]["executor_identity"] = "c" * 64
+    path.write_text(yaml.safe_dump(raw))
+    assert _promote(deployment) == 1
+    assert "not ONBOARDED" in capsys.readouterr().err
+    assert not deployment["destination"].exists()
 
 
 def test_the_promoted_manifest_describes_a_code_a_region_of_which_can_be_ported(tmp_path):

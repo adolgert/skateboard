@@ -144,6 +144,9 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
         _replay(builder, attempt_id, replay.executable, visible),
         _replay(builder, attempt_id, replay.executable, visible),
     ]
+    replay_detail["executable_identity"] = next(
+        (run.get("executable_identity") for run in runs if run.get("executable_identity")), None,
+    )
     if not all(run.get("ok") for run in runs):
         failing = next(run for run in runs if not run.get("ok"))
         replay_detail["same"] = False
@@ -163,6 +166,7 @@ def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str,
         "verdict": "fail" if differed else "pass",
         "detail": {
             "manifest_sha256": manifest.sha256,
+            "executable_identity": replay_detail.get("executable_identity"),
             "datasets": per_dataset,
             "replay": replay_detail,
             "differed": differed,

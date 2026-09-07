@@ -5,6 +5,7 @@
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{tikz}
+\usepackage{graphicx}
 \usetikzlibrary{arrows.meta, positioning, fit, calc}
 \usepackage{xcolor}
 \usepackage{enumitem}
@@ -22,7 +23,7 @@
 
 \title{\vspace{-1.2em}The Skateboard: a Minimum Framework for AI-Assisted\\ Porting of Fortran 2008 to GPU, with Professional Assurances\vspace{-0.4em}}
 \author{Pared down from \texttt{answers.html}; three-month scope}
-\date{July 23, 2026}
+\date{Original scope: July 23, 2026; implementation note: September 6, 2026}
 
 \setlength{\parskip}{0.35em}
 
@@ -30,7 +31,16 @@
 \maketitle
 \vspace{-1.5em}
 
-\section{Purpose and the claim being demonstrated}
+\paragraph{Document status.}
+This is the original three-month scope proposal, retained for its research
+rationale and planning history. Sections labeled ``original'' or ``planned''
+describe that proposal rather than guarantees of the current repository. The
+implementation note below records the principal differences as of September
+2026. For operational and evidence claims, the source tree, the companion
+architecture, and the version-2 evidence contract are authoritative over an
+older generated PDF.
+
+\section{Purpose and the original demonstration claim}
 
 The full framework in \texttt{answers.html} describes eleven components and fourteen requirements. It is the right design for a program that, like DARPA TRACTOR, must port many codes repeatedly. Our near-term goal is different: in three months, demonstrate on one 30{,}000-line Fortran 2008 code that an AI agent can carry out GPU ports \emph{with little human intervention}, and that the result is \emph{correct}, \emph{effective}, and \emph{repeatable} to a standard an engineering organization would accept. This document specifies the least framework that supports that claim --- the skateboard, in the sense of the smallest artifact that rolls end to end, rather than a wheel from the eventual car.
 
@@ -38,7 +48,7 @@ The paring rule is simple, and it comes straight from the TRACTOR evidence. Ever
 
 This framing also serves the client story about how professional AI use differs from personal AI use. The agent is the same in both settings. What differs is the harness: a developer on a personal project accepts ``the tests I remembered to run passed on my machine,'' while an engineering organization requires oracles the agent cannot edit, gates that make forbidden outcomes impossible, and a record that lets a reviewer reconstruct why each change was accepted. The skateboard \emph{is} that harness, at minimum size; the demo makes the difference visible by construction.
 
-\section{What survives the cut}
+\section{What the original proposal retained}
 
 Four things are kept whole. Each maps to one of the three claims.
 
@@ -54,12 +64,65 @@ Acceptance requires beating the best CPU configuration --- best flags, all cores
 \textbf{4. A bounded, scripted loop with a ledger (claims: repeatable and little-human-intervention).}
 The orchestration is a deterministic script, not agent free-play: fixed stage order (build $\rightarrow$ device proof $\rightarrow$ sanitize $\rightarrow$ correctness $\rightarrow$ performance), a fixed iteration cap per stage, and a two-rung strategy ladder (standard parallelism with managed memory first; OpenMP \texttt{target} with explicit data regions second). Every attempt is a git branch with a one-line ledger entry: region, strategy, model, oracle verdicts, timings. Repeatability is then demonstrated, not asserted: we re-run the entire pipeline from a clean checkout three times per region and report success rate, intervention count, and variance in the achieved speedup. The ledger doubles as the intervention counter --- the ``little human intervention'' claim becomes a measured number with an audit trail, which is exactly the kind of statement an engineering organization can put in a report.
 
-\section{The pared architecture and its loop}
+\section{Current implementation relative to the proposal}
+
+The repository now implements the evidence path, but not every automation and
+performance claim proposed above. An interactive Pi coding agent edits a
+configured working copy and calls a gateway reference monitor. The gateway,
+rather than a deterministic autonomous orchestrator, enforces separate
+onboarding and porting action tables. Retry counts and the strategy ladder are
+client policy; there is no global iteration cap or held-out-query budget.
+
+Submissions become immutable Git commits. A conservative SESE analyzer checks
+each candidate tree, and a later edit requires a new tree-scoped verdict. The
+analyzer does not establish complete call, alias, or effect closure; hidden
+Fortran state and the replay boundary remain scientific review obligations.
+
+Ledger schema version 2 records strict SHA-256 subjects and materials. Framed
+file-set hashes bind paths and bytes without concatenation ambiguity. Current
+claims depend on the evidence-policy implementation, strategies, manifest,
+tolerances, properties, datasets, original-reference contract, and reviewed or
+observed executor and oracle identities. Claims after a build also carry the
+complete executable digest cohort. Changed inputs make older claims readable
+history rather than current evidence.
+
+The trusted builder supervisor uses Docker to create a disposable job for each
+submitted build or execution. Jobs have no network or service token, use a
+read-only image, and receive only selected attempt data. Submitted processes run
+unprivileged; compiler tracing and GPU profiling write through a protected
+observer path. Later actions execute only binaries whose current digests match
+the protected build record. This establishes observed compiler execution and
+binary continuity, not complete final-binary provenance: a submitted Makefile
+could still overwrite an output after a legitimate compiler invocation.
+
+Port acceptance currently requires candidate-scoped SESE, replay build and GPU
+execution, clean \texttt{memcheck}, \texttt{racecheck}, and \texttt{initcheck},
+visible and held-out numerical regression, whole-program regression, valid
+repeated timing, and declared properties when present. Timing validates 5--100
+returned durations and outputs and checks every port repetition against the
+baseline program outputs. It records measurements; it does not presently impose
+the proposal's ``must beat the best CPU configuration'' speedup threshold.
+
+Onboarding requires nine tree-scoped results: manifest validity; builds under
+both reviewed strategies; capture, replay, determinism, and timing; agreement
+with a preserved original program reference; mutation self-check; and declared
+properties. Property requests accept a Hypothesis ceiling of 100--10{,}000
+examples and record separately observed replay executions. Mutation requests
+accept a limit of 1--10{,}000. Seeds are signed 64-bit integers.
+
+The held-out oracle returns verdict-only receipts to the agent, but repeated
+queries can leak information. The Docker daemon, builder supervisor, job image,
+host kernel, and GPU driver remain in the trusted computing base. CPU boundary
+qualification does not qualify GPU profiling, sanitizers, or performance; those
+claims require the full qualification on the target NVIDIA host.
+
+\section{The original pared architecture and loop}
 
 Five components replace eleven. One is stochastic (the agent); the rest are scripts and fixtures a small team can build in weeks because every hard dependency is an existing tool: profiling via HPCToolkit or \texttt{perf} plus Nsight Systems; unit scaffolding via pFUnit; capture-replay adapted from the KGen/PSyclone-extraction pattern; the toolchain via \texttt{nvfortran} on one GPU node.
 
 \begin{figure}[h]
 \centering
+\resizebox{\linewidth}{!}{%
 \begin{tikzpicture}[
   node distance=5mm and 7mm,
   box/.style={draw=accent, fill=boxfill, rounded corners=2pt, align=left,
@@ -86,16 +149,18 @@ Five components replace eleven. One is stochastic (the agent); the rest are scri
 \node[lbl, below=1.5mm of ledger.south west, anchor=north west]
   {accepted port shifts the profile; human picks next region};
 \end{tikzpicture}
-\caption{The skateboard loop. The agent is the only stochastic component and touches nothing but its patch. Oracles and captured data are read-only to it. The outer loop (which region next) is human; the inner loop (make one region's port pass the gates) is autonomous and bounded.}
+}
+\caption{The loop proposed in July 2026. The current gateway enforces the gate
+dependencies, while retry and strategy budgets remain client policy.}
 \end{figure}
 
 Two deliberate simplifications inside the loop deserve a note. \emph{Candidate selection is human}: with one code, an engineer reading one profile picks the two to four demonstration regions in an afternoon, and we choose regions dominated by plain arrays and clean loop nests --- deferring derived types with allocatable components, which are the hard case for any state-capture tool. This is scope control, not evasion, and we say so in the report. \emph{Preconditioning is agent-proposed but conservatively validated}: the agent performs the de-\texttt{COMMON}-ing and \texttt{intent} annotation for its region as ordinary patches, the full existing test suite must pass after each preconditioning patch on the CPU path, and these patches get human review at merge like any other. The compiler-grade transform library from the full design is deferred, traded for region choice and suite coverage.
 
-\section{Human touchpoints}
+\section{Planned human touchpoints}
 
 Exactly four, all logged: (1) initial region selection and tolerance sign-off; (2) review of any proposal to change a tolerance or accept a semantic difference the comparator surfaces --- expected rarely, and valuable when it happens, since it usually means the port exposed a latent defect such as argument aliasing or an uninitialized variable; (3) merge review per accepted port; (4) a go/no-go per region when the agent exhausts its ladder and caps. Everything else --- generation, repair against compiler errors, comparator discrepancies, and profiler feedback --- runs unattended. The report can then say: $M$ regions ported, $N$ total human interventions of these four kinds, everything else autonomous, with the ledger as evidence.
 
-\section{What was cut, and what the cut costs}
+\section{Components deferred by the original proposal}
 
 Table~\ref{tab:cuts} lists every full-design component that the skateboard drops or substitutes, the consequence of the cut, and the condition under which it should be restored --- so the three-month artifact reads as the first increment of the full design rather than a different design.
 
@@ -119,7 +184,7 @@ Evaluation battery (B01 analogue) & The code is the battery & No cross-code gene
 \label{tab:cuts}
 \end{table}
 
-\section{Three-month plan and the evidence pack}
+\section{Original three-month plan and proposed evidence pack}
 
 \textbf{Month 1 --- oracles before agents.} Reproducible containerized build and CI on the existing test suite; profile on representative datasets; select regions and calibrate tolerances (human touchpoint 1); build the capture-replay generator and comparator for region~1; run the na\"ive \texttt{-stdpar} baseline and the honest multicore CPU baseline. Milestone: replay driver for region~1 passes against the CPU code under the tolerance policy, from a clean checkout, in CI. If month~1 slips, the schedule slips --- nothing downstream is real without this.
 

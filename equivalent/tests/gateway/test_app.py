@@ -10,7 +10,7 @@ from equivalent.ledger.acceptance import ONBOARDING, PORTING, requirements_for
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
-from equivalent.tests.fakes import write_program
+from equivalent.tests.fakes import FakeBuilder, write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
@@ -74,7 +74,7 @@ def test_get_table_for_an_onboarding_region_returns_the_onboarding_rows(tmp_path
 
     assert [row["name"] for row in rows] == [
         "manifest_check", "harness_build", "harness_capture", "harness_replay",
-        "harness_determinism", "harness_timing", "harness_self_check",
+        "harness_determinism", "harness_timing", "harness_original", "harness_self_check",
         "harness_property", "onboarded",
     ]
     # The row that names the whole list has nothing to dispatch to, the
@@ -177,6 +177,8 @@ def test_get_status_reports_the_real_current_tree_before_any_check_has_run(tmp_p
         store, requirements_for(cfg.phase, cfg.manifest), cfg.phase,
         tree=Subject(kind="tree", sha256=tree_sha), frozen=Subject(kind="frozen", sha256=frozen_sha),
     )
+    assert body.pop("context_verified") is False
+    assert body.pop("note")
     assert body == expected
 
 
@@ -259,6 +261,21 @@ def test_healthz_answers_without_a_token(tmp_path):
 
     assert r.status_code == 200
     assert r.json() == {"ok": True}
+
+
+def test_a_pinned_builder_identity_does_not_override_an_unhealthy_backend(tmp_path):
+    class UnhealthyBuilder(FakeBuilder):
+        def healthz(self):
+            return {"ok": False, "executor_identity": self.executor_identity}
+
+    builder = UnhealthyBuilder()
+    cfg = replace(_region(tmp_path), executor_identity=builder.executor_identity)
+    client = TestClient(create_app({cfg.region_id: cfg}, TOKEN, builder=builder))
+
+    response = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "builder executor is not ready"
 
 
 def test_submit_records_the_caller_tool_call_id_when_it_sends_one(tmp_path):

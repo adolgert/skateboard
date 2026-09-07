@@ -22,10 +22,10 @@ table, because the ledger CLI must be able to check claims against it
 without the gateway installed. The table's "accept" row imports this
 list rather than writing a second copy.
 
-Matches the first demonstration harness's actual gate: sanitize/initcheck
-is recorded but does not block acceptance there (only memcheck/racecheck
-do), and timing/baseline is a one-time claim made on the baseline tree, not
-a requirement of any individual port.
+All three sanitizer modes block acceptance.  In particular, an initcheck
+failure cannot be hidden behind passing memcheck and racecheck claims.
+Timing/baseline is a one-time claim made on the baseline tree, not a
+requirement of any individual port.
 """
 from __future__ import annotations
 
@@ -47,11 +47,14 @@ PORTING = "porting"
 PHASES = (ONBOARDING, PORTING)
 
 ACCEPTANCE_REQUIREMENTS = (
-    Requirement("sese/verified", "frozen", "sese_check"),
+    # The analyzer must examine each candidate.  Scoping this to the frozen
+    # baseline let edits to the actual region retain an old SESE pass.
+    Requirement("sese/verified", "tree", "sese_check"),
     Requirement("build/replay", "tree", "build_replay"),
     Requirement("gpu/executed", "tree", "run_replay"),
     Requirement("sanitize/memcheck", "tree", "sanitize"),
     Requirement("sanitize/racecheck", "tree", "sanitize"),
+    Requirement("sanitize/initcheck", "tree", "sanitize"),
     Requirement("regression/visible", "tree", "regression_visible"),
     Requirement("regression/holdout", "tree", "regression_holdout"),
     Requirement("program/regression", "tree", "program_regression"),
@@ -76,6 +79,7 @@ ONBOARDING_REQUIREMENTS = (
     Requirement("harness/replays", "tree", "harness_replay"),
     Requirement("harness/deterministic", "tree", "harness_determinism"),
     Requirement("harness/times", "tree", "harness_timing"),
+    Requirement("harness/original", "tree", "harness_original"),
     Requirement("harness/self_check", "tree", "harness_self_check"),
     Requirement("harness/properties", "tree", "harness_property"),
 )

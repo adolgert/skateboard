@@ -34,6 +34,12 @@ class BuilderClient:
         r.raise_for_status()
         return r.json()
 
+    def artifacts(self, attempt_id: str) -> dict:
+        """Reverified executable identities retained by the builder supervisor."""
+        r = self._http.get(f"/v1/artifacts/{attempt_id}")
+        r.raise_for_status()
+        return r.json()
+
     def build(self, attempt_id: str, tree: list[dict], makefile: str, targets: list[dict],
               compiler: str, flags: list[str], link_flags: list[str],
               source_patterns: list[str]) -> dict:
@@ -131,7 +137,8 @@ class BuilderClient:
         return r.json()
 
     def time(self, attempt_id: str, executable: str, args: list[str], env: dict,
-             outputs: list[str], repeats: int = 5, budget_s: int = 300) -> dict:
+             outputs: list[str], repeats: int = 5, budget_s: int = 300,
+             expected_outputs: dict[str, str] | None = None) -> dict:
         """Time the manifest's timing executable and collect the files it declares.
 
         The declared files come back as one set per run, in run order, so
@@ -140,6 +147,7 @@ class BuilderClient:
         r = self._http.post("/v1/time", json={
             "attempt_id": attempt_id, "executable": executable, "args": args, "env": env,
             "outputs": outputs, "repeats": repeats, "budget_s": budget_s,
+            "expected_outputs": expected_outputs,
         })
         r.raise_for_status()
         return r.json()

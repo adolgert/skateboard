@@ -1,16 +1,18 @@
 from pathlib import Path
+from dataclasses import replace
 
 from fastapi.testclient import TestClient
 
 from equivalent.gateway.app import config_hash, create_app
+from equivalent.gateway.evidence import evidence_materials_for
 from equivalent.gateway.regions import RegionConfig
-from equivalent.gateway.submit import current_tree_and_frozen, init_baseline_repo, tracked_files
+from equivalent.gateway.submit import current_tree_and_frozen, init_baseline_repo
 from equivalent.gateway.table import ACTION_TABLE, CONFIG_KEY_SPECS
 from equivalent.ledger.acceptance import PHASES, PORTING
 from equivalent.ledger.predicates import PREDICATE_TYPES
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject, frozen_subject
+from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
 from equivalent.tests.fakes import write_program
@@ -49,7 +51,7 @@ def _current(cfg, store):
     """The tree and frozen hashes the gateway itself would compute."""
     return current_tree_and_frozen(
         cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase,
-        load_strategy(cfg.strategy_path),
+        load_strategy(cfg.strategy_path), required_materials=evidence_materials_for(cfg),
     )
 
 
@@ -93,19 +95,18 @@ def test_refusal_item_matches_status_item_for_the_same_missing_predicate(tmp_pat
     assert refused_item == status_item
 
 
-def test_frozen_requirement_survives_an_allowed_edit_but_tree_requirement_does_not(tmp_path):
+def test_sese_requirement_is_invalidated_by_each_candidate_edit(tmp_path):
     cfg = _region(tmp_path, with_makefile=True)
     store = LedgerStore(cfg.ledger_dir)
-    allow_globs = ["src/mod_kernel.f90"]
-    baseline = tracked_files(cfg.repo_dir, "main")
-    frozen_files = [f for f in baseline if f["path"] not in allow_globs]
-    frozen_sha = frozen_subject(frozen_files).sha256
+    allow_globs = ["src/mod_kernel.f90", SPEC_PATH]
+    tree_sha, _ = _current(cfg, store)
+    materials = evidence_materials_for(cfg)
 
     store.record_claim(
-        [Subject(kind="frozen", sha256=frozen_sha)], "sese/verified",
+        [Subject(kind="tree", sha256=tree_sha)], "sese/verified",
         Predicate(tool="sese_check", version="0.1", configHash="cfg", verdict="pass",
                   detail={"allow_globs": allow_globs}),
-        [], "sess-0",
+        materials, "sess-0",
     )
 
     client = TestClient(create_app({cfg.region_id: cfg}, TOKEN))
@@ -114,30 +115,27 @@ def test_frozen_requirement_survives_an_allowed_edit_but_tree_requirement_does_n
     (working / "src" / "mod_kernel.f90").write_text("subroutine step\n  x = 1\nend subroutine\n")
     client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
     tree_a, _ = _current(cfg, store)
-    store.record_claim(
-        [Subject(kind="tree", sha256=tree_a)], "build/replay",
-        Predicate(tool="builder", version="0.1", configHash="cfg", verdict="pass", detail={}),
-        [], "sess-0",
-    )
-
-    before = client.post(
-        "/run", json={"action": "run_replay", "region": cfg.region_id, "config": {}}, headers=HEADERS,
+    missing_after_first_edit = client.post(
+        "/run", json={"action": "build_replay", "region": cfg.region_id, "config": {}}, headers=HEADERS,
     ).json()
-    assert "refused" not in before
+    assert missing_after_first_edit["refused"] is True
+    assert missing_after_first_edit["missing"][0]["predicateType"] == "sese/verified"
+
+    store.record_claim(
+        [Subject(kind="tree", sha256=tree_a)], "sese/verified",
+        Predicate(tool="sese_check", version="0.1", configHash="cfg", verdict="pass",
+                  detail={"allow_globs": allow_globs}),
+        materials, "sess-0",
+    )
 
     (working / "src" / "mod_kernel.f90").write_text("subroutine step\n  x = 2\nend subroutine\n")
     client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
 
-    still_verified = client.post(
+    now_missing_sese = client.post(
         "/run", json={"action": "build_replay", "region": cfg.region_id, "config": {}}, headers=HEADERS,
     ).json()
-    assert "refused" not in still_verified
-
-    now_missing_build = client.post(
-        "/run", json={"action": "run_replay", "region": cfg.region_id, "config": {}}, headers=HEADERS,
-    ).json()
-    assert now_missing_build["refused"] is True
-    assert now_missing_build["missing"][0]["predicateType"] == "build/replay"
+    assert now_missing_sese["refused"] is True
+    assert now_missing_sese["missing"][0]["predicateType"] == "sese/verified"
 
 
 def test_a_failing_requirement_claim_still_refuses_the_dependent_action(tmp_path):
@@ -146,11 +144,11 @@ def test_a_failing_requirement_claim_still_refuses_the_dependent_action(tmp_path
     # that the check never ran.
     client, cfg, store = _client(tmp_path)
     _submit_spec_only(client, cfg)
-    _, frozen_sha = _current(cfg, store)
+    tree_sha, _ = _current(cfg, store)
     failed = store.record_claim(
-        [Subject(kind="frozen", sha256=frozen_sha)], "sese/verified",
+        [Subject(kind="tree", sha256=tree_sha)], "sese/verified",
         Predicate(tool="sese_check", version="0.1", configHash="cfg", verdict="fail", detail={}),
-        [], "sess-0",
+        evidence_materials_for(cfg), "sess-0",
     )
 
     body = client.post(
@@ -167,13 +165,12 @@ def test_duplicate_deterministic_request_returns_existing_claim_and_writes_no_ne
     client, cfg, store = _client(tmp_path)
     config = {}
     allow_globs = [SPEC_PATH]
-    baseline = tracked_files(cfg.repo_dir, "main")
-    frozen_sha = frozen_subject([f for f in baseline if f["path"] not in allow_globs]).sha256
+    tree_sha, _ = _current(cfg, store)
     existing = store.record_claim(
-        [Subject(kind="frozen", sha256=frozen_sha)], "sese/verified",
+        [Subject(kind="tree", sha256=tree_sha)], "sese/verified",
         Predicate(tool="sese_check", version="0.1", configHash=config_hash(config), verdict="pass",
                   detail={"allow_globs": allow_globs}),
-        [], "sess-0",
+        evidence_materials_for(cfg), "sess-0",
     )
 
     r = client.post("/run", json={"action": "sese_check", "region": cfg.region_id, "config": config}, headers=HEADERS)
@@ -182,6 +179,32 @@ def test_duplicate_deterministic_request_returns_existing_claim_and_writes_no_ne
     assert body["claim_id"] == existing.id
     assert len(store.all_claims()) == 1
     assert store.all_requests()[-1].outcome == "duplicate"
+
+
+def test_strategy_change_invalidates_status_and_duplicate_evidence(tmp_path):
+    cfg = _region(tmp_path)
+    strategy_path = tmp_path / "strategy.yaml"
+    strategy_path.write_bytes(STRATEGY_PATH.read_bytes())
+    cfg = replace(cfg, strategy_path=strategy_path)
+    store = LedgerStore(cfg.ledger_dir)
+    tree_sha, _ = _current(cfg, store)
+    old = store.record_claim(
+        [Subject(kind="tree", sha256=tree_sha)], "sese/verified",
+        Predicate(tool="sese_check", version="0.1", configHash=config_hash({}),
+                  verdict="pass", detail={"allow_globs": [SPEC_PATH]}),
+        evidence_materials_for(cfg), "sess-0",
+    )
+    client = TestClient(create_app({cfg.region_id: cfg}, TOKEN))
+
+    text = strategy_path.read_text()
+    strategy_path.write_text(text.replace("-O2", "-O3"))
+    status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+    row = next(item for item in status["rows"] if item["predicateType"] == "sese/verified")
+
+    assert row["status"] == "missing"
+    assert row["evidence_status"] == "stale"
+    assert row["claim_id"] == old.id
+    assert status["accepted"] is False
 
 
 def test_nondeterministic_action_is_never_treated_as_a_duplicate(tmp_path):
@@ -236,6 +259,15 @@ def test_every_row_references_real_predicate_types_and_agrees_with_the_registry_
             assert CONFIG_KEY_SPECS[key]["type"] == "integer"
             assert CONFIG_KEY_SPECS[key]["description"]
 
+    build = next(row for row in ACTION_TABLE if row.name == "build_replay")
+    assert ("sese/verified", "tree") in build.requires
+    visible = next(row for row in ACTION_TABLE if row.name == "regression_visible")
+    assert set(visible.requires) == {
+        ("sanitize/memcheck", "tree"),
+        ("sanitize/racecheck", "tree"),
+        ("sanitize/initcheck", "tree"),
+    }
+
 
 def test_a_config_key_the_row_does_not_declare_is_rejected_before_dispatch(tmp_path):
     # An undeclared key would hash into duplicate detection and make an
@@ -253,7 +285,7 @@ def test_a_config_key_the_row_does_not_declare_is_rejected_before_dispatch(tmp_p
 
     # A declared key passes validation ("repeats" on the timing rows).
     r = client.post(
-        "/run", json={"action": "time_baseline", "region": cfg.region_id, "config": {"repeats": 3}}, headers=HEADERS,
+        "/run", json={"action": "time_baseline", "region": cfg.region_id, "config": {"repeats": 5}}, headers=HEADERS,
     )
     assert r.status_code == 200
 
@@ -284,6 +316,34 @@ def test_a_config_value_of_the_wrong_type_is_rejected_naming_the_key(tmp_path):
     )
     assert r.status_code == 400
     assert "repeats" in r.json()["detail"]
+
+
+def test_config_values_below_acceptance_minimum_or_above_bound_are_rejected(tmp_path):
+    client, cfg, store = _client(tmp_path)
+
+    for value in (0, 4, 101):
+        response = client.post(
+            "/run",
+            json={"action": "time_baseline", "region": cfg.region_id,
+                  "config": {"repeats": value}},
+            headers=HEADERS,
+        )
+        assert response.status_code == 400
+        assert "repeats" in response.json()["detail"]
+    assert store.all_requests() == []
+
+
+def test_action_from_another_phase_is_rejected_before_dispatch(tmp_path):
+    cfg = replace(_region(tmp_path), phase="onboarding", spec_path=None)
+    client = TestClient(create_app({cfg.region_id: cfg}, TOKEN))
+
+    response = client.post(
+        "/run", json={"action": "sese_check", "region": cfg.region_id, "config": {}},
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "belongs to phase 'porting'" in response.json()["detail"]
 
 
 def test_unknown_action_and_the_componentless_accept_row_are_rejected(tmp_path):
@@ -320,13 +380,12 @@ def test_run_records_the_caller_tool_call_id_whatever_the_outcome(tmp_path):
     # the call that caused it as a claim is.
     client, cfg, store = _client(tmp_path)
     allow_globs = [SPEC_PATH]
-    baseline = tracked_files(cfg.repo_dir, "main")
-    frozen_sha = frozen_subject([f for f in baseline if f["path"] not in allow_globs]).sha256
+    tree_sha, _ = _current(cfg, store)
     store.record_claim(
-        [Subject(kind="frozen", sha256=frozen_sha)], "sese/verified",
+        [Subject(kind="tree", sha256=tree_sha)], "sese/verified",
         Predicate(tool="sese_check", version="0.1", configHash=config_hash({}), verdict="pass",
                   detail={"allow_globs": allow_globs}),
-        [], "sess-0",
+        evidence_materials_for(cfg), "sess-0",
     )
 
     client.post(

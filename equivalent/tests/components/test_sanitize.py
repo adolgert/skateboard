@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 from equivalent.components import sanitize
@@ -55,6 +56,77 @@ def test_one_failing_tool_does_not_fail_the_others(tmp_path):
 
     assert all(r["verdict"] == "fail" for r in results.values())
     assert results["memcheck"]["detail"]["errors"] == 3
+
+
+def test_a_failed_top_level_run_with_no_tool_results_fails_every_requested_tool(tmp_path):
+    class Incomplete(FakeBuilder):
+        def sanitize(self, *args, **kwargs):
+            return {"ok": False, "stage": "sanitize", "per_tool": {},
+                    "log_tail": "replay executable is missing"}
+
+    results = sanitize.check(
+        "ch04:step", "tree123", _strategy_sanitizing(tmp_path, "first"),
+        _manifest(tmp_path), CASES, Incomplete(),
+    )
+
+    assert all(row["verdict"] == "fail" for row in results.values())
+    assert all("missing" in row["detail"]["reason"] for row in results.values())
+
+
+def test_an_unavailable_tool_is_a_failure_not_a_vacuous_pass(tmp_path):
+    class Unavailable(FakeBuilder):
+        def sanitize(self, *args, **kwargs):
+            return {
+                "ok": False, "stage": "sanitize",
+                "per_tool": {
+                    "memcheck": {"ok": None, "error": "compute-sanitizer not found"},
+                    "racecheck": {"ok": True, "errors": 0, "log_tail": ""},
+                    "initcheck": {"ok": True, "errors": 0, "log_tail": ""},
+                },
+            }
+
+    results = sanitize.check(
+        "ch04:step", "tree123", _strategy_sanitizing(tmp_path, "first"),
+        _manifest(tmp_path), CASES, Unavailable(),
+    )
+
+    assert results["memcheck"]["verdict"] == "fail"
+    assert "not found" in results["memcheck"]["detail"]["reason"]
+    assert results["racecheck"]["verdict"] == "pass"
+
+
+def test_a_malformed_tool_result_fails_closed(tmp_path):
+    class Malformed(FakeBuilder):
+        def sanitize(self, *args, **kwargs):
+            return {"ok": True, "stage": "sanitize", "per_tool": {
+                "memcheck": {"ok": "yes", "errors": 0},
+                "racecheck": {"ok": True, "errors": 0},
+                "initcheck": {"ok": True, "errors": 0},
+            }}
+
+    results = sanitize.check(
+        "ch04:step", "tree123", _strategy_sanitizing(tmp_path, "first"),
+        _manifest(tmp_path), CASES, Malformed(),
+    )
+
+    assert results["memcheck"]["verdict"] == "fail"
+
+
+@pytest.mark.parametrize("errors", [None, -1, 1, True, "0"])
+def test_a_passing_tool_requires_a_zero_integer_error_count(tmp_path, errors):
+    class BadCount(FakeBuilder):
+        def sanitize(self, *args, **kwargs):
+            response = super().sanitize(*args, **kwargs)
+            response["per_tool"]["memcheck"]["errors"] = errors
+            return response
+
+    results = sanitize.check(
+        "ch04:step", "tree123", _strategy_sanitizing(tmp_path, "first"),
+        _manifest(tmp_path), CASES, BadCount(),
+    )
+
+    assert results["memcheck"]["verdict"] == "fail"
+    assert "error count" in results["memcheck"]["detail"]["reason"]
 
 
 def test_the_shipped_strategy_sanitizes_the_first_case(tmp_path):

@@ -8,7 +8,7 @@ FROM nvcr.io/nvidia/nvhpc:25.9-devel-cuda13.0-ubuntu24.04
 # and fpm are here because a code's build is its own: the harness runs the
 # tree's makefile, and that makefile may be a few lines driving cmake or fpm.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 python3-pip make cmake curl \
+ && apt-get install -y --no-install-recommends python3 python3-pip make cmake curl docker.io util-linux strace \
  && rm -rf /var/lib/apt/lists/*
 # pytest, hypothesis and numpy are here for the property stage: a code's own
 # module of invariants is a pytest file, run by this interpreter against the
@@ -27,7 +27,7 @@ RUN curl -fsSL -o /usr/local/bin/fpm \
  && echo "${FPM_SHA256}  /usr/local/bin/fpm" | sha256sum -c - \
  && chmod +x /usr/local/bin/fpm
 
-RUN mkdir -p /opt/harness /work
+RUN mkdir -p /opt/harness /opt/sandbox /run/evidence /work
 
 # The trusted, baked harness -- NOT from the agent's payload. fc-shim is the
 # compiler a submitted makefile is handed; npy_io.f90 is the capture format's
@@ -41,6 +41,9 @@ COPY services/builder/harness/npy_io.f90 services/builder/harness/fc-shim \
 RUN chmod +x /opt/harness/fc-shim
 # Service code (the build contract and the gate command lines live here).
 COPY services/builder /app/services/builder
+COPY services/builder/profile-run.py services/builder/audit-run.py /opt/sandbox/
+RUN chmod 0555 /opt/sandbox/profile-run.py /opt/sandbox/audit-run.py /opt/harness/fc-shim \
+ && chmod -R a-w /opt/harness /opt/sandbox /app
 
 # The comparator, which is the same file the oracle is built around and the
 # same one the gateway compares a program's own outputs with

@@ -69,15 +69,20 @@ def check(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
     except Exception as exc:
         raise ComponentError(f"builder /v1/run call failed: {exc}") from exc
 
+    measured = {"executable_identity": resp.get("executable_identity")}
+
     if not resp.get("ok"):
-        return {"verdict": "fail", "detail": {"log_tail": resp.get("log_tail", "")}}
+        return {
+            "verdict": "fail",
+            "detail": {**measured, "log_tail": resp.get("log_tail", "")},
+        }
 
     problems = _output_problems(manifest, resp.get("outputs", {}))
     if problems:
         return {
             "verdict": "fail",
             "detail": {
-                "outputs_rejected": problems,
+                **measured, "outputs_rejected": problems,
                 "hint": f"the replay driver must write every output code "
                         f"'{manifest.name}' declares, with the declared type and rank",
             },
@@ -88,14 +93,14 @@ def check(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
         return {
             "verdict": "fail",
             "detail": {
-                "kernels_launched": 0,
+                **measured, "kernels_launched": 0,
                 "hint": "code compiled but no GPU kernel launched; loops must be do concurrent / omp target for nvfortran to offload them",
             },
         }
     return {
         "verdict": "pass",
         "detail": {
-            "kernels_launched": kernels,
+            **measured, "kernels_launched": kernels,
             # Where the builder's runtime said the launches came from --
             # file, function, and line, one entry per distinct source
             # line. A reviewer reads this against the region's own code.

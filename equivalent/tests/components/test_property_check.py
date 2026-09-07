@@ -34,7 +34,11 @@ def _cases():
 
 def test_a_passing_property_run_is_a_pass_naming_the_module_and_the_counts(tmp_path):
     builder = FakeBuilder()
-    builder.properties_counts = {"passed": 3, "failed": 0, "errors": 0}
+    builder.properties_counts = {
+        "passed": 3, "failed": 0, "errors": 0, "skipped": 0,
+        "deselected": 0, "xfailed": 0, "xpassed": 0,
+        "collected": 3, "executed": 3,
+    }
 
     result = property_check.check(
         REGION, TREE, _manifest(tmp_path), _cases(), builder, seed=1234, max_examples=25,
@@ -44,6 +48,7 @@ def test_a_passing_property_run_is_a_pass_naming_the_module_and_the_counts(tmp_p
     assert result["detail"]["module"] == PROPERTIES_IN_TREE
     assert result["detail"]["passed"] == 3
     assert result["detail"]["failed"] == 0
+    assert result["detail"]["replays_observed"] == 3
 
     call = builder.properties_calls[0]
     assert call["module"] == PROPERTIES_IN_TREE
@@ -64,6 +69,89 @@ def test_a_failing_property_is_a_fail_carrying_the_falsifying_example(tmp_path):
     assert result["verdict"] == "fail"
     assert result["detail"]["failed"] == 1
     assert "Falsifying example" in result["detail"]["log_tail"]
+
+
+@pytest.mark.parametrize("counts", [
+    {"passed": 0, "failed": 0, "errors": 0, "skipped": 1,
+     "deselected": 0, "xfailed": 0, "xpassed": 0, "collected": 1, "executed": 0},
+    {"passed": 0, "failed": 0, "errors": 0, "skipped": 0,
+     "deselected": 0, "xfailed": 0, "xpassed": 0, "collected": 0, "executed": 0},
+])
+def test_no_executed_passing_property_can_never_be_a_pass(tmp_path, counts):
+    builder = FakeBuilder()
+    builder.properties_counts = counts
+
+    result = property_check.check(REGION, TREE, _manifest(tmp_path), _cases(), builder)
+
+    assert result["verdict"] == "fail"
+    assert "no property test passed" in result["detail"]["problems"]
+
+
+def test_inconsistent_success_and_failure_counts_fail_closed(tmp_path):
+    builder = FakeBuilder()
+    builder.properties_ok = True
+    builder.properties_counts = {
+        "passed": 2, "failed": 1, "errors": 0, "skipped": 0,
+        "deselected": 0, "xfailed": 0, "xpassed": 0,
+        "collected": 3, "executed": 3,
+    }
+
+    result = property_check.check(REGION, TREE, _manifest(tmp_path), _cases(), builder)
+
+    assert result["verdict"] == "fail"
+    assert any("inconsistent" in problem for problem in result["detail"]["problems"])
+
+
+def test_backend_must_echo_the_requested_property_configuration(tmp_path):
+    class WrongRun(FakeBuilder):
+        def properties(self, *args, **kwargs):
+            response = super().properties(*args, **kwargs)
+            response["seed"] += 1
+            return response
+
+    result = property_check.check(
+        REGION, TREE, _manifest(tmp_path), _cases(), WrongRun(), seed=4, max_examples=10,
+    )
+
+    assert result["verdict"] == "fail"
+    assert any("seed" in problem for problem in result["detail"]["problems"])
+
+
+@pytest.mark.parametrize("observed", [None, 0, -1, True, "3"])
+def test_a_pass_requires_a_protected_observation_of_the_replay_executable(tmp_path, observed):
+    builder = FakeBuilder()
+    builder.replays_observed = observed
+
+    result = property_check.check(REGION, TREE, _manifest(tmp_path), _cases(), builder)
+
+    assert result["verdict"] == "fail"
+    assert any("replay" in problem for problem in result["detail"]["problems"])
+
+
+@pytest.mark.parametrize("status", ["xfailed", "xpassed"])
+def test_an_expected_failure_or_unexpected_pass_cannot_hide_in_a_property_pass(tmp_path, status):
+    builder = FakeBuilder()
+    builder.properties_counts["passed"] = 1
+    builder.properties_counts[status] = 1
+    builder.properties_counts["collected"] = 2
+    builder.properties_counts["executed"] = 2
+
+    result = property_check.check(REGION, TREE, _manifest(tmp_path), _cases(), builder)
+
+    assert result["verdict"] == "fail"
+    assert any(status in problem for problem in result["detail"]["problems"])
+
+
+@pytest.mark.parametrize("max_examples", [0, -1, True])
+def test_a_nonpositive_or_boolean_example_count_is_rejected_before_execution(tmp_path, max_examples):
+    builder = FakeBuilder()
+
+    with pytest.raises(ComponentError):
+        property_check.check(
+            REGION, TREE, _manifest(tmp_path), _cases(), builder, max_examples=max_examples,
+        )
+
+    assert builder.properties_calls == []
 
 
 def test_the_seed_a_person_gave_is_the_seed_that_runs_and_the_seed_recorded(tmp_path):

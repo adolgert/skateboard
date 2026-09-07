@@ -350,7 +350,7 @@ def test_an_onboarding_session_is_measured_against_the_onboarding_requirements(t
 def test_the_summary_for_the_sample_session_matches_the_golden_file(tmp_path):
     store = LedgerStore(tmp_path / "region")
     store.append_claim(_claim(
-        "c-7", "2026-08-28T10:35:27Z", "sese/verified", "frozen", "def456", "pass", SAMPLE_SESSION,
+        "c-7", "2026-08-28T10:35:27Z", "sese/verified", "frozen", "def456".ljust(64, "0"), "pass", SAMPLE_SESSION,
     ))
     _, _, events = session.read_session(SAMPLE)
     requests = _sample_requests()

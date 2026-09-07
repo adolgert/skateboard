@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
 
 from equivalent.gateway.submit import attempt_id_for, tree_payload
 from equivalent.ledger.capture_sets import program_arrays, store_program_set
@@ -35,7 +36,7 @@ from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import Manifest
 from equivalent.strategy.schema import Strategy
 
-from .build_replay import build_tree
+from .build_replay import build_verdict
 from .errors import ComponentError
 
 # The manifest role of the program a timing run measures.
@@ -85,6 +86,8 @@ def _time(builder, attempt_id: str, manifest: Manifest, repeats: int,
     """
     target = timing_target(manifest)
     timing = manifest.timing
+    if type(repeats) is not int or not 1 <= repeats <= 100:
+        raise ComponentError("timing repeats must be an integer between 1 and 100")
     try:
         resp = builder.time(
             attempt_id, target.executable, list(timing.args), dict(timing.env),
@@ -94,6 +97,15 @@ def _time(builder, attempt_id: str, manifest: Manifest, repeats: int,
         raise ComponentError(f"builder /v1/time call failed: {exc}") from exc
     if not resp.get("ok"):
         return {"verdict": "fail", "detail": {"log_tail": resp.get("log_tail", "")}}, resp
+    durations = resp.get("runs_s", [])
+    runs = resp.get("outputs", [])
+    if (not isinstance(durations, list) or len(durations) != repeats
+            or any(type(t) not in (int, float) or not math.isfinite(t) or t <= 0 for t in durations)
+            or not isinstance(runs, list) or len(runs) != repeats
+            or any(not isinstance(run, dict) or set(timing.outputs) - run.keys() for run in runs)):
+        return {"verdict": "fail", "detail": {
+            "problems": ["timing requires every requested repetition, positive finite durations, and every declared output"],
+        }}, resp
     detail = {
         "runs_s": resp["runs_s"],
         "gpu_exclusive": resp.get("gpu_exclusive"),
@@ -103,6 +115,7 @@ def _time(builder, attempt_id: str, manifest: Manifest, repeats: int,
         "args": list(timing.args),
         "env": dict(timing.env),
         "outputs": _collected(resp.get("outputs", [])),
+        "executable_identity": resp.get("executable_identity"),
     }
     detail.update(extra_detail or {})
     return {"verdict": "pass", "detail": detail}, resp
@@ -122,10 +135,27 @@ def check_port(store: LedgerStore, tree: Subject, region_id: str, tree_sha: str,
     if build_claim is None or build_claim.predicate.verdict != "pass":
         raise ComponentError("no passing build/replay claim for this tree")
     flags = build_claim.predicate.detail.get("flags")
-    result, _ = _time(
+    program_claim = store.latest("program/regression", tree)
+    if program_claim is None or program_claim.predicate.verdict != "pass":
+        raise ComponentError("no passing program/regression claim for this tree")
+    program_set = program_claim.predicate.detail.get("program_set")
+    if not program_set:
+        raise ComponentError("program/regression claim has no baseline output reference")
+    result, response = _time(
         builder, attempt_id_for(region_id, tree_sha), manifest, repeats,
         extra_detail={"flags": flags},
     )
+    if result["verdict"] == "pass":
+        from . import program_regression
+        bands, policy_sha = program_regression.tolerance_policy(manifest)
+        comparisons = [program_regression.compare_outputs(store, program_set, manifest, run, bands)
+                       for run in response["outputs"]]
+        result["detail"].update(
+            program_set=program_set, policy_sha256=policy_sha,
+            compared_repetitions=len(comparisons), per_run=comparisons,
+        )
+        if not all(per_var and all(v["pass"] for v in per_var.values()) for per_var in comparisons):
+            result["verdict"] = "fail"
     return result
 
 
@@ -144,20 +174,22 @@ def check_baseline(
     detail says so rather than being silent about it.
     """
     attempt_id = attempt_id_for(f"{region_id}-baseline", baseline_tree_sha)
-    build_resp = build_tree(
+    build_result = build_verdict(
         builder, attempt_id, tree_payload(repo_dir, "main"), baseline_strategy, manifest,
     )
-    if not build_resp.get("ok"):
+    if build_result["verdict"] != "pass":
         return {
             "verdict": "fail",
             "detail": {
                 "stage": "build", "strategy": baseline_strategy.name,
-                "log_tail": build_resp.get("log_tail", ""),
+                "build": build_result["detail"],
             },
         }
     result, resp = _time(
         builder, attempt_id, manifest, repeats,
-        extra_detail={"strategy": baseline_strategy.name, "flags": build_resp.get("flags")},
+        extra_detail={"strategy": baseline_strategy.name,
+                      "flags": build_result["detail"].get("flags"),
+                      "build": build_result["detail"]},
     )
     if result["verdict"] != "pass":
         return result

@@ -36,11 +36,12 @@ import sys
 from pathlib import Path
 
 from equivalent.gateway.config import load_gateway_config
+from equivalent.gateway.evidence import evidence_materials_for, required_materials_by_predicate
 from equivalent.gateway.submit import current_tree_and_frozen
 from equivalent.ledger.acceptance import PORTING, requirements_for
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject
+from equivalent.ledger.subjects import Subject, evidence_policy_subject
 from equivalent.strategy.schema import load_strategy
 
 from . import promote as promote_module
@@ -135,13 +136,17 @@ def _open_region(parser: argparse.ArgumentParser, args):
         parser.error("name a region directory, or --config with --region-id")
 
     if args.region_dir is not None:
-        return LedgerStore(args.region_dir), None, None, PORTING, Path(args.region_dir).name, None
+        return (LedgerStore(args.region_dir), None, None, PORTING,
+                Path(args.region_dir).name, None, (evidence_policy_subject(),), False)
 
     _, cfg = _named_region(parser, args.config, args.region_id)
     store = LedgerStore(cfg.ledger_dir)
+    materials = evidence_materials_for(cfg)
+    store.activate_context(materials)
     tree_sha, frozen_sha = current_tree_and_frozen(
         cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase,
         load_strategy(cfg.strategy_path),
+        required_materials=materials,
     )
     return (
         store,
@@ -150,6 +155,8 @@ def _open_region(parser: argparse.ArgumentParser, args):
         cfg.phase,
         cfg.region_id,
         cfg.manifest,
+        materials,
+        bool(cfg.executor_identity and (cfg.phase != PORTING or cfg.oracle_identity)),
     )
 
 
@@ -226,18 +233,30 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "status":
-        store, tree, frozen, phase, name, manifest = _open_region(parser, args)
+        store, tree, frozen, phase, name, manifest, materials, verified = _open_region(parser, args)
+        requirements = requirements_for(phase, manifest)
         status = compute_status(
-            store, requirements_for(phase, manifest), phase, tree=tree, frozen=frozen,
+            store, requirements, phase, tree=tree, frozen=frozen,
+            required_materials=materials,
+            required_materials_by_predicate=(required_materials_by_predicate(
+                store, requirements, phase, tree, materials,
+            ) if tree is not None else {}),
         )
+        status["context_verified"] = verified
+        if not verified:
+            status["accepted"] = False
+            status["note"] = ("Advisory view only; current acceptance requires --config, --region-id "
+                              "and reviewed executor_identity (also oracle_identity when porting).")
         if args.json:
             print(json.dumps(status, indent=2, sort_keys=True))
         else:
+            if not verified:
+                print(status["note"])
             print(render.render_status(status, args.region or name), end="")
         return 0
 
     if args.command == "history":
-        store, _, _, _, _, _ = _open_region(parser, args)
+        store, _, _, _, _, _, _, _ = _open_region(parser, args)
         history = compute_history(store)
         if args.json:
             print(json.dumps(history, indent=2, sort_keys=True))

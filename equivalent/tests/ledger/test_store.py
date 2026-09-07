@@ -1,4 +1,5 @@
 import threading
+import multiprocessing
 
 from equivalent.ledger.records import Predicate, RequestLogLine
 from equivalent.ledger.store import LedgerStore
@@ -11,6 +12,15 @@ def _tree(n=1):
 
 def _pred(verdict="pass", config="cfg-1", tool="builder"):
     return Predicate(tool=tool, version="0.1.0", configHash=config, verdict=verdict, detail={})
+
+
+def _process_writer(path, worker_id):
+    store = LedgerStore(path)
+    for i in range(10):
+        store.record_claim(
+            [_tree(1)], "build/replay", _pred(config=f"{worker_id}-{i}"), [],
+            f"process-{worker_id}",
+        )
 
 
 def test_append_claim_never_rewrites_earlier_bytes(tmp_path):
@@ -85,6 +95,37 @@ def test_find_duplicate_matches_only_when_type_tree_and_config_all_equal(tmp_pat
     assert store.find_duplicate("gpu/executed", tree, "cfg-A") is None
 
 
+def test_duplicate_and_latest_require_current_materials(tmp_path):
+    store = LedgerStore(tmp_path / "region")
+    tree = _tree(1)
+    old_strategy = Subject(kind="strategy", sha256="a" * 64)
+    new_strategy = Subject(kind="strategy", sha256="b" * 64)
+    claim = store.record_claim(
+        [tree], "build/replay", _pred(config="cfg-A"), [old_strategy], "sess-1",
+    )
+
+    assert store.find_duplicate(
+        "build/replay", tree, "cfg-A", required_materials=[old_strategy],
+    ) == claim
+    assert store.find_duplicate(
+        "build/replay", tree, "cfg-A", required_materials=[new_strategy],
+    ) is None
+    assert store.latest(
+        "build/replay", tree, required_materials=[new_strategy],
+    ) is None
+
+
+def test_component_reads_inherit_the_request_evidence_context(tmp_path):
+    store = LedgerStore(tmp_path / "region")
+    tree = _tree(1)
+    old_strategy = Subject(kind="strategy", sha256="a" * 64)
+    new_strategy = Subject(kind="strategy", sha256="b" * 64)
+    store.record_claim([tree], "build/replay", _pred(), [old_strategy], "sess-1")
+
+    store.activate_context([new_strategy])
+    assert store.latest("build/replay", tree) is None
+
+
 def test_sequential_appends_do_not_interleave_partial_lines(tmp_path):
     store = LedgerStore(tmp_path / "region")
     tree = _tree(1)
@@ -107,6 +148,21 @@ def test_sequential_appends_do_not_interleave_partial_lines(tmp_path):
 
     ids = [json.loads(line)["id"] for line in lines]
     assert len(ids) == len(set(ids))  # the lock also serialized id assignment
+
+
+def test_separate_processes_cannot_allocate_the_same_claim_id(tmp_path):
+    region = tmp_path / "region"
+    context = multiprocessing.get_context("spawn")
+    processes = [context.Process(target=_process_writer, args=(region, i)) for i in range(3)]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=10)
+        assert process.exitcode == 0
+
+    claims = LedgerStore(region).all_claims()
+    assert len(claims) == 30
+    assert len({claim.id for claim in claims}) == 30
 
 
 def test_record_claim_assigns_non_decreasing_timestamps(tmp_path):

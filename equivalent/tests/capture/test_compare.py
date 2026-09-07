@@ -8,6 +8,8 @@ tolerances, and integer and logical variables have to match exactly.
 """
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
@@ -60,6 +62,100 @@ def test_a_one_ulp_float32_difference_is_measured_in_float32_steps():
 
     assert result["pass"] is True
     assert result["max_ulp"] == 1
+
+
+@pytest.mark.parametrize("dtype", ["<f4", "<f8"])
+def test_a_one_ulp_negative_difference_is_measured_without_signed_overflow(dtype):
+    ref = np.array([-2.0], dtype=dtype)
+
+    result = compare.compare_variable(ref, _next_after(ref), ONE_ULP)
+
+    assert result["pass"] is True
+    assert result["max_ulp"] == 1
+
+
+@pytest.mark.parametrize("dtype", ["<f4", "<f8"])
+def test_a_sign_change_cannot_overflow_the_ulp_distance_into_a_pass(dtype):
+    ref = np.array([2.0], dtype=dtype)
+    got = np.array([-2.0], dtype=dtype)
+
+    result = compare.compare_variable(ref, got, BITWISE)
+
+    assert result["pass"] is False
+    assert result["max_ulp"] > 0
+    assert result["n_bad"] == 1
+
+
+@pytest.mark.parametrize(
+    ("ref_value", "got_value"),
+    [(np.nan, np.nan), (np.inf, np.inf), (-np.inf, -np.inf), (1.0, np.nan)],
+)
+def test_nonfinite_values_fail_with_json_safe_diagnostics(ref_value, got_value):
+    result = compare.compare_variable(
+        np.array([ref_value], dtype="<f8"),
+        np.array([got_value], dtype="<f8"),
+        LOOSE,
+    )
+
+    assert result["pass"] is False
+    assert result["n_nonfinite"] == 1
+    assert "finite" in result["error"]
+    json.dumps(result, allow_nan=False)
+
+
+def test_two_empty_arrays_compare_without_crashing_and_have_finite_metrics():
+    result = compare.compare_variable(
+        np.array([], dtype="<f8"), np.array([], dtype="<f8"), BITWISE,
+    )
+
+    assert result == {
+        "pass": True, "max_abs": 0.0, "max_rel": 0.0, "max_ulp": 0,
+        "n_bad": 0, "n": 0, "n_nonfinite": 0,
+    }
+    json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize("field", ["abs", "rel"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -1.0])
+def test_a_nonfinite_or_negative_real_tolerance_is_refused(field, value):
+    tolerance = dict(BITWISE)
+    tolerance[field] = value
+
+    result = compare.compare_variable(
+        np.array([1.0], dtype="<f8"), np.array([2.0], dtype="<f8"), tolerance,
+    )
+
+    assert result["pass"] is False
+    assert "tolerance" in result["error"]
+
+
+@pytest.mark.parametrize("value", [float("inf"), -1, 1.5, True])
+def test_a_ulp_tolerance_must_be_a_nonnegative_integer(value):
+    tolerance = dict(BITWISE)
+    tolerance["ulp"] = value
+
+    result = compare.compare_variable(
+        np.array([1.0], dtype="<f8"), np.array([2.0], dtype="<f8"), tolerance,
+    )
+
+    assert result["pass"] is False
+    assert "tolerance" in result["error"]
+
+
+def test_opposite_finite_extremes_fail_with_strict_json_metrics():
+    largest = np.finfo(np.float64).max
+
+    result = compare.compare_variable(
+        np.array([-largest], dtype="<f8"),
+        np.array([largest], dtype="<f8"),
+        BITWISE,
+    )
+
+    assert result["pass"] is False
+    assert result["max_abs"] == largest
+    assert result["max_rel"] == largest
+    assert result["max_ulp"] > 2**63
+    json.dumps(result, allow_nan=False)
 
 
 def test_a_relative_error_inside_the_band_passes_even_when_the_absolute_one_does_not():

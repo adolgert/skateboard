@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from equivalent.gateway.submit import (
+    current_commit,
     init_baseline_repo,
     materialize_tree,
     resolve_allow_globs,
@@ -42,10 +43,9 @@ def _seed(root):
     return root
 
 
-# The hash of that two-file baseline, taken while submit still read every
-# tracked file as UTF-8 text. Carrying bytes instead must not move it: a
-# tree hash that changed would orphan every claim already in a ledger.
-TEXT_BASELINE_TREE = "340f09cc8926f612b1e671ce336fce9a319f74acae80d523c87d67463bedea75"
+# Fixed by the unambiguous v2 file-set serialization.  Legacy evidence used a
+# different hash and is intentionally invalid under evidence policy v2.
+TEXT_BASELINE_TREE = "3bfd503c5274ffb2387534ad956f632f1a3d5630848b884f53ceeb2c2dc03361"
 
 # A file in an encoding that is not UTF-8, and one that is not text at all.
 # A real code's tree has both -- namelists written on another machine, small
@@ -166,11 +166,28 @@ def test_a_file_that_is_not_text_is_no_longer_a_rejection_reason(tmp_path):
     assert tree["src/mod_kernel.f90"] == BINARY_BYTES
 
 
-def test_an_all_text_baseline_hashes_exactly_as_it_did_before(tmp_path):
+def test_an_all_text_baseline_hash_is_stable_under_v2_serialization(tmp_path):
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
 
     assert tree_subject(tracked_files(repo_dir, "main")).sha256 == TEXT_BASELINE_TREE
+
+
+def test_resolved_commit_remains_the_same_snapshot_after_a_later_submit(tmp_path):
+    repo_dir = tmp_path / "repo"
+    init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
+    working = tmp_path / "working"
+    _write(working, "src/mod_kernel.f90", "subroutine step\n  x = 1\nend subroutine\n")
+    submit(repo_dir, "ch04:step", working, ["src/*.f90"], "sess-1")
+    snapshot = current_commit(repo_dir, "ch04:step")
+
+    _write(working, "src/mod_kernel.f90", "subroutine step\n  x = 2\nend subroutine\n")
+    submit(repo_dir, "ch04:step", working, ["src/*.f90"], "sess-2")
+
+    old = {f["path"]: f["content"] for f in tracked_files(repo_dir, snapshot)}
+    current = {f["path"]: f["content"] for f in tracked_files(repo_dir, current_commit(repo_dir, "ch04:step"))}
+    assert b"x = 1" in old["src/mod_kernel.f90"]
+    assert b"x = 2" in current["src/mod_kernel.f90"]
 
 
 def test_the_whole_tree_is_handed_to_the_builder_as_bytes(tmp_path):
@@ -283,6 +300,21 @@ def test_resolve_allow_globs_before_and_after_sese_verified(tmp_path):
     assert resolve_allow_globs(store, spec_path, PORTING, STRATEGY) == ["src/mod_kernel.f90", spec_path]
 
 
+def test_resolve_allow_globs_does_not_trust_paths_outside_reviewed_strategy(tmp_path):
+    store = LedgerStore(tmp_path / "region")
+    spec_path = "notes/regions/ch04-step.sese.yaml"
+    store.record_claim(
+        [], "sese/verified",
+        Predicate(
+            tool="sese_check", version="0.1", configHash="cfg", verdict="pass",
+            detail={"allow_globs": ["*", spec_path]},
+        ),
+        [], "sess-1",
+    )
+
+    assert resolve_allow_globs(store, spec_path, PORTING, STRATEGY) == [spec_path]
+
+
 def test_receipt_names_allowed_baseline_paths_that_were_not_sent(tmp_path):
     # An allowed file the agent forgot to send is named in the receipt,
     # so a stale baseline copy riding along silently is visible.
@@ -348,3 +380,20 @@ def test_an_onboarding_regions_frozen_set_is_whatever_its_allow_list_leaves(tmp_
     )
 
     assert frozen_sha == frozen_subject([]).sha256
+
+
+def test_attempt_ids_bind_the_full_tree_and_unambiguous_region_identity():
+    from equivalent.gateway.submit import attempt_id_for
+
+    common_prefix = "a" * 63
+    first_tree = common_prefix + "1"
+    second_tree = common_prefix + "2"
+
+    first = attempt_id_for("code:a/b", first_tree)
+    second = attempt_id_for("code:a?b", first_tree)
+
+    assert first_tree in first
+    assert attempt_id_for("code:a/b", second_tree) != first
+    # Both ids have the same filesystem-safe spelling of the region, so
+    # their region digest is what keeps their builder workspaces distinct.
+    assert second != first

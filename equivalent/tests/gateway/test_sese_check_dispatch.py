@@ -133,19 +133,19 @@ def test_a_pass_unfreezes_every_file_the_spec_lists(tmp_path):
     claim = store.get_claim(result["claim_id"])
     assert claim.predicate.detail["file_list"] == sorted(REGION_FILES)
 
-    # The frozen value the claim is filed against is the one that leaves
-    # both listed files and the spec out -- not the narrower list that
-    # would still freeze the second file.
+    # The pass widens the allow-list, but its verdict is bound to the whole
+    # candidate it actually scanned so a later source edit requires a rerun.
     both_unfrozen = frozen_for_allow_globs(cfg.repo_dir, [*REGION_FILES, SPEC_PATH])
     only_the_anchor = frozen_for_allow_globs(cfg.repo_dir, ["src/mod_kernel.f90", SPEC_PATH])
-    assert claim.subject[0].sha256 == both_unfrozen
+    assert claim.subject[0].kind == "tree"
     assert both_unfrozen != only_the_anchor
 
     after = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+    assert claim.subject[0].sha256 == after["tree"]
     assert after["frozen"] == both_unfrozen
 
 
-def test_fail_files_against_the_current_frozen_value(tmp_path):
+def test_fail_is_also_bound_to_the_candidate_tree_that_was_scanned(tmp_path):
     client, cfg, store = _client(tmp_path, GOTO_SOURCE, hi=8)
 
     status_before = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
@@ -154,7 +154,8 @@ def test_fail_files_against_the_current_frozen_value(tmp_path):
     assert result["verdict"] == "fail"
 
     claim = store.get_claim(result["claim_id"])
-    assert claim.subject[0].sha256 == status_before["frozen"]
+    assert claim.subject[0].kind == "tree"
+    assert claim.subject[0].sha256 == status_before["tree"]
 
 
 def test_calling_sese_check_twice_returns_the_same_claim(tmp_path):

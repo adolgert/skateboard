@@ -18,7 +18,9 @@ a JSON load are the whole of the work.
 from __future__ import annotations
 
 import json
+import math
 import tempfile
+from numbers import Integral, Real
 from pathlib import Path
 
 import yaml
@@ -97,7 +99,24 @@ def _band_problems(bands: dict, name: str, because: str) -> list:
     if not isinstance(band, dict):
         return [f"{because}, and the tolerance file has no entry for '{name}'"]
     absent = [field for field in BAND_FIELDS if field not in band]
-    return [f"the tolerance entry for '{name}' is missing {absent}"] if absent else []
+    if absent:
+        return [f"the tolerance entry for '{name}' is missing {absent}"]
+    problems = []
+    for field in ("abs", "rel"):
+        value = band[field]
+        if (isinstance(value, bool) or not isinstance(value, Real)
+                or not math.isfinite(value) or value < 0):
+            problems.append(
+                f"the tolerance entry for '{name}' has invalid {field}: "
+                "it must be a finite nonnegative real number"
+            )
+    ulp = band["ulp"]
+    if isinstance(ulp, bool) or not isinstance(ulp, Integral) or ulp < 0:
+        problems.append(
+            f"the tolerance entry for '{name}' has invalid ulp: "
+            "it must be a nonnegative integer"
+        )
+    return problems
 
 
 def _tolerance_problems(manifest, bands: dict) -> list:

@@ -11,6 +11,7 @@ from equivalent.ledger.acceptance import (
 )
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
+from equivalent.ledger.subjects import Subject
 
 
 def _claim(claim_id, ts, subject_kind, sha256, predicate_type, verdict):
@@ -22,7 +23,7 @@ def _claim(claim_id, ts, subject_kind, sha256, predicate_type, verdict):
         "predicate": {"tool": "t", "version": "0.1", "configHash": "cfg", "verdict": verdict, "detail": {}},
         "materials": [],
         "session": "sess-1",
-        "version": 1,
+        "version": 2,
     }
 
 
@@ -115,6 +116,46 @@ def test_status_on_an_empty_ledger_has_no_tree_and_is_not_accepted(tmp_path):
     assert status["tree"] is None
     assert status["accepted"] is False
     assert all(row["status"] == "missing" for row in status["rows"])
+
+
+def test_legacy_claim_is_reported_stale_and_cannot_satisfy_requirement(tmp_path):
+    tree = "a" * 64
+    store = LedgerStore(tmp_path / "region")
+    legacy = _claim("c-0001", "2026-01-01T00:00:00Z", "tree", tree, "build/replay", "pass")
+    legacy["version"] = 1
+    _write_claims(store, [legacy])
+
+    status = compute_status(
+        store,
+        [next(r for r in ACCEPTANCE_REQUIREMENTS if r.predicate_type == "build/replay")],
+        PORTING,
+    )
+
+    assert status["accepted"] is False
+    assert status["rows"][0]["status"] == "missing"
+    assert status["rows"][0]["evidence_status"] == "stale"
+    assert status["rows"][0]["claim_id"] == "c-0001"
+
+
+def test_changed_strategy_material_invalidates_an_otherwise_passing_claim(tmp_path):
+    tree = "a" * 64
+    store = LedgerStore(tmp_path / "region")
+    old_strategy = {"kind": "strategy", "sha256": "1" * 64}
+    new_strategy = Subject(kind="strategy", sha256="2" * 64)
+    claim = _claim("c-0001", "2026-01-01T00:00:00Z", "tree", tree, "build/replay", "pass")
+    claim["materials"] = [old_strategy]
+    _write_claims(store, [claim])
+
+    status = compute_status(
+        store,
+        [next(r for r in ACCEPTANCE_REQUIREMENTS if r.predicate_type == "build/replay")],
+        PORTING,
+        tree=Subject(kind="tree", sha256=tree),
+        required_materials=[new_strategy],
+    )
+
+    assert status["accepted"] is False
+    assert status["rows"][0]["evidence_status"] == "stale"
 
 
 def test_an_onboarding_region_is_judged_by_the_onboarding_list(tmp_path):

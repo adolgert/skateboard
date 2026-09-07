@@ -77,16 +77,29 @@ def baseline_paths(repo_root, code: str) -> list[str]:
 def write_seed(repo_root, out_dir, code: str) -> list[str]:
     """Write the baseline into `out_dir`; return the paths written, relative to it.
 
-    Existing files are overwritten and nothing is removed, so running
-    this twice over the same directory is safe and leaves anything a
-    person put there alone.
+    An existing destination must already match this exact baseline.
+    A different code or stale file is refused before any write, so a
+    reused state directory cannot silently contaminate a new codebase.
     """
     repo_root = Path(repo_root)
     out_dir = Path(out_dir)
     directory = baseline_dir(repo_root, code)
+    paths = baseline_paths(repo_root, code)
+    if not paths:
+        raise ValueError(f"no committed baseline files for '{code}'; commit its source snapshot before starting")
+    snapshot = {relative: _git(repo_root, "show", f"{BASELINE_REF}:{directory}/{relative}")
+                for relative in paths}
+    for existing in sorted(out_dir.rglob("*")) if out_dir.exists() else []:
+        relative = existing.relative_to(out_dir).as_posix()
+        if existing.is_symlink() or (existing.is_dir() and relative in snapshot) or (existing.is_file() and (
+            relative not in snapshot or existing.read_bytes() != snapshot[relative]
+        )):
+            raise ValueError(
+                f"seed directory {out_dir} does not match the committed '{code}' baseline at {relative}; "
+                "preserve the old deployment state and use a fresh state directory for this baseline"
+            )
     written = []
-    for relative in baseline_paths(repo_root, code):
-        content = _git(repo_root, "show", f"{BASELINE_REF}:{directory}/{relative}")
+    for relative, content in snapshot.items():
         destination = out_dir / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)

@@ -61,6 +61,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 import yaml
 
@@ -68,6 +69,7 @@ from equivalent.gateway.regions import RegionConfig
 from equivalent.gateway.submit import baseline_commit, init_baseline_repo, region_slug
 from equivalent.ledger.acceptance import ONBOARDING, PHASES, PORTING
 from equivalent.manifest.schema import Manifest, load_manifest
+from equivalent.reference.schema import load_reference
 
 VERSION = 1
 
@@ -79,7 +81,7 @@ REQUIRED_REGION_KEYS = ("code", "phase", "strategy", "baseline_strategy")
 # Both of these belong to a porting region: `spec_path` is required of
 # one and meaningless to an onboarding region, and `visible_dataset` is
 # optional even when porting.
-OPTIONAL_REGION_KEYS = ("spec_path", "visible_dataset")
+OPTIONAL_REGION_KEYS = ("spec_path", "visible_dataset", "executor_identity", "oracle_identity")
 # Where a code keeps the datasets a region may name, under its own
 # directory. One spelling, so the deployment and this reader agree.
 DATASETS_DIR = "datasets"
@@ -111,6 +113,7 @@ class CodeConfig:
     name: str
     manifest_path: Path
     manifest: Manifest
+    original_reference_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -164,13 +167,24 @@ def _resolve_baseline_commit(paths: Paths, where: str, seed_if_empty: bool) -> s
 
 def _load_code(name: str, raw: dict, paths: Paths, where: str) -> CodeConfig:
     code_where = f"{where} code '{name}'"
-    _check_keys(raw, REQUIRED_CODE_KEYS, (), code_where)
+    _check_keys(raw, REQUIRED_CODE_KEYS, ("original_reference",), code_where)
     manifest_path = paths.programs / raw["manifest"]
     if not manifest_path.is_file():
         raise ValueError(
             f"{code_where} names manifest '{raw['manifest']}', but {manifest_path} does not exist"
         )
-    return CodeConfig(name=name, manifest_path=manifest_path, manifest=load_manifest(manifest_path))
+    reference_path = None
+    if raw.get("original_reference") is not None:
+        reference_path = (paths.programs / raw["original_reference"]).resolve()
+        if not reference_path.is_relative_to(paths.programs.resolve()):
+            raise ValueError(f"{code_where}: original_reference must be inside programs")
+        if reference_path.is_relative_to(paths.working_copy.resolve()):
+            raise ValueError(f"{code_where}: original_reference must be outside the agent working copy")
+        reference = load_reference(reference_path)
+        if reference.source_root.is_relative_to(paths.working_copy.resolve()):
+            raise ValueError(f"{code_where}: original reference source must be outside the agent working copy")
+    return CodeConfig(name=name, manifest_path=manifest_path, manifest=load_manifest(manifest_path),
+                      original_reference_path=reference_path)
 
 
 def _strategy_path(name, field: str, paths: Paths, region_where: str) -> Path:
@@ -212,6 +226,11 @@ def _load_region(
         )
 
     phase = raw["phase"]
+    for key in ("executor_identity", "oracle_identity"):
+        if raw.get(key) is not None and (
+            not isinstance(raw[key], str) or re.fullmatch(r"[0-9a-f]{64}", raw[key]) is None
+        ):
+            raise ValueError(f"{region_where}: {key} must be a lowercase SHA-256 identity")
     if phase not in PHASES:
         raise ValueError(
             f"{region_where} has phase {phase!r}; it must be one of {list(PHASES)}"
@@ -260,6 +279,9 @@ def _load_region(
         working_copy_dir=paths.working_copy,
         manifest=code.manifest,
         visible_dataset_dir=visible_dataset_dir,
+        original_reference_path=code.original_reference_path,
+        executor_identity=raw.get("executor_identity"),
+        oracle_identity=raw.get("oracle_identity"),
     )
 
 

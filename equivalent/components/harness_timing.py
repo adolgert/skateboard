@@ -102,6 +102,7 @@ def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
         "runs_s": resp.get("runs_s", []),
         "gpu_exclusive": resp.get("gpu_exclusive"),
         "outputs": list(timing.outputs),
+        "executable_identity": resp.get("executable_identity"),
     }
     if len(runs) < REPEATS:
         return _fail(

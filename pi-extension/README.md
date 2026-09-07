@@ -9,6 +9,11 @@ row. A refusal from the gateway comes back as the tool's result text, so
 the model reads it as its next steps. The extension decides nothing; the
 gateway remains the reference monitor.
 
+The current porting table produces 13 tools: ten callable checks plus
+`submit`, `status`, and `claim`; its `accept` row is status only. The onboarding
+table produces 12: nine callable checks plus those same three tools; its
+`onboarded` row is status only.
+
 A check's result is the verdict line and then the claim's detail as
 pretty-printed JSON — for a `fail`, the keys that explain the failure
 first and up to 24000 characters of it; for a `pass`, the same rendering
@@ -28,15 +33,26 @@ than as missing, which is a claim to read rather than a check to run.
 A tool's arguments are the settings its row says the action takes, with
 the gateway's own wording: `time_baseline` and `time_port` take
 `repeats`, `property_check` and `harness_property` take `seed` and
-`max_examples`, and `harness_self_check` takes `limit`. All of them are
-optional integers, so a call that names none is the ordinary call and
-gets the gateway's defaults, and only the keys the row declared are sent
+`max_examples`, and `harness_self_check` takes `limit`. `repeats` is 5 through
+100 and defaults to 5. `seed` is a signed 64-bit integer and is drawn when
+omitted. `max_examples` is 100 through 10000, defaults to 100, and is a
+requested Hypothesis ceiling rather than an observed execution count. `limit`
+is 1 through 10000; omitting it runs all mutants, while a limit that truncates
+the campaign cannot pass the self-check. All are optional integers, so a call that
+names none gets the gateway's defaults, and only the keys the row declared are
+sent
 — the gateway hashes the config to spot a repeated request, so nothing
 else belongs in it. `claim` takes the id of the claim to read; every
 other tool takes no arguments.
 `submit` in particular names no path: the gateway reads the working copy
 its own configuration gives the region, so the session edits its files
 and calls `submit` with nothing.
+
+For deterministic actions, the same submitted tree, materials, and normalized
+settings return the existing claim. Timing actions always run again. If a
+builder artifact has fallen out of its named-volume cache, the gateway asks the
+builder to reconstruct the recorded build and proceeds only if the executable
+bytes match.
 
 Every `/submit`, `/run`, and `/claims` call carries three identifying
 headers — `X-Session-Id`, `X-Model-Id`, and `X-Tool-Call-Id`, the last

@@ -47,3 +47,7 @@ class RegionConfig:
     # change what the running gateway believes.
     manifest: Manifest
     visible_dataset_dir: Path | None = None
+    # Human-reviewed pre-onboarding snapshot, outside the submitted tree.
+    original_reference_path: Path | None = None
+    executor_identity: str | None = None
+    oracle_identity: str | None = None

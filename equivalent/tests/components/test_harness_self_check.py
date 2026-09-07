@@ -166,6 +166,35 @@ def test_a_limit_the_caller_names_reaches_the_builder(tmp_path):
     # And the claim says how many there were, not only how many were run.
     assert result["detail"]["generated"] == 90
     assert result["detail"]["scored"] == 2
+    assert result["verdict"] == "fail"
+    assert any("not all generated mutants" in p for p in result["detail"]["problems"])
+
+
+@pytest.mark.parametrize("status", ["SKIPPED", "PENDING", "RUNTIME_FAIL"])
+def test_an_incomplete_mutant_prevents_an_adequacy_pass(tmp_path, status):
+    builder = FakeBuilder()
+    builder.mutate_results = [
+        mutant_row("m-0001", "KILLED"),
+        mutant_row("m-0002", status),
+    ]
+
+    result = _check(tmp_path, builder)
+
+    assert result["verdict"] == "fail"
+    assert result["detail"]["incomplete"][0]["id"] == "m-0002"
+
+
+def test_malformed_or_inconsistent_mutation_counts_fail_closed(tmp_path):
+    class Inconsistent(FakeBuilder):
+        def mutate(self, *args, **kwargs):
+            response = super().mutate(*args, **kwargs)
+            response["scored"] = 99
+            return response
+
+    result = _check(tmp_path, Inconsistent())
+
+    assert result["verdict"] == "fail"
+    assert any("inconsistent" in p for p in result["detail"]["problems"])
 
 
 def test_the_verdict_names_the_capture_set_and_the_policy_it_rests_on(tmp_path):

@@ -65,7 +65,12 @@ def check(repo_dir, ref: str, spec_path: str, strategy: Strategy) -> dict:
     if analysis["verdict"] != "pass":
         return {
             "verdict": "fail",
-            "detail": {"violations": analysis["violations"], "notes": analysis["notes"]},
+            "detail": {
+                "violations": analysis["violations"], "notes": analysis["notes"],
+                "resolved_ranges": analysis.get("resolved_ranges", []),
+                "range_count": analysis.get("range_count", 0),
+                "total_lines": analysis.get("total_lines", 0),
+            },
             "allow_globs": None,
         }
 
@@ -80,6 +85,11 @@ def check(repo_dir, ref: str, spec_path: str, strategy: Strategy) -> dict:
 
     return {
         "verdict": "pass",
-        "detail": {"file_list": analysis["src_files"], "allow_globs": candidate_globs},
+        "detail": {
+            "file_list": analysis["src_files"], "allow_globs": candidate_globs,
+            "resolved_ranges": analysis.get("resolved_ranges", []),
+            "range_count": analysis.get("range_count", 0),
+            "total_lines": analysis.get("total_lines", 0),
+        },
         "allow_globs": candidate_globs,
     }

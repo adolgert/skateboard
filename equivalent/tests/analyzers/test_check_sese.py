@@ -9,6 +9,8 @@ equivalent/components/sese_check.py calls it.
 import json
 import subprocess
 
+import pytest
+
 MODULE = "equivalent.analyzers.check_sese"
 
 CLEAN_SOURCE = """\
@@ -343,3 +345,143 @@ anchor:
     assert r.returncode == 1
     assert "FAIL: 1 violation(s)" in r.stdout
     assert "files" in r.stdout
+
+
+def test_a_return_before_end_if_is_an_early_return(tmp_path):
+    source = """\
+module mod_kernel
+contains
+subroutine step(a)
+  real :: a
+  if (a < 0) then
+    return
+  end if
+  a = a + 1
+end subroutine step
+end module mod_kernel
+"""
+    spec = _write_region(tmp_path, source, hi=9)
+
+    code, body = _json(spec, tmp_path)
+
+    assert code == 1
+    [violation] = body["violations"]
+    assert violation["keyword"] == "return"
+    assert violation["line"] == 6
+
+
+def test_only_a_return_immediately_before_its_procedure_end_is_terminal(tmp_path):
+    source = """\
+module mod_kernel
+contains
+subroutine step(a)
+  real :: a
+  a = a + 1
+  return
+end subroutine step
+end module mod_kernel
+"""
+    spec = _write_region(tmp_path, source, hi=7)
+
+    code, body = _json(spec, tmp_path)
+
+    assert code == 0
+    assert body["violations"] == []
+    assert body["notes"][0]["note"] == "terminal RETURN (ok)"
+
+
+@pytest.mark.parametrize(("lo", "hi"), [(0, 3), (3, 2), (3, 99)])
+def test_an_invalid_or_out_of_file_range_fails_with_a_diagnostic(tmp_path, lo, hi):
+    _write_source(tmp_path, "src/mod_kernel.f90", CLEAN_SOURCE)
+    spec = _write_spec(tmp_path, ONE_FILE_SPEC.replace("3-{hi}", f"{lo}-{hi}"))
+
+    code, body = _json(spec, tmp_path)
+
+    assert code == 1
+    assert any("range" in v["reason"] for v in body["violations"])
+
+
+def test_a_split_keyword_on_continued_lines_is_still_detected(tmp_path):
+    source = """\
+module mod_kernel
+contains
+subroutine step(a)
+  real :: a
+  if (a < 0) ret&
+       &urn
+  a = a + 1
+end subroutine step
+end module mod_kernel
+"""
+    spec = _write_region(tmp_path, source, hi=8)
+
+    code, body = _json(spec, tmp_path)
+
+    assert code == 1
+    assert body["violations"][0]["keyword"] == "return"
+    assert body["violations"][0]["line"] == 5
+
+
+def test_a_full_procedure_range_is_resolved_after_lines_shift(tmp_path):
+    shifted = "! a new header line\n" + GOTO_SOURCE
+    _write_source(tmp_path, "src/mod_kernel.f90", shifted)
+    # The spec still names the baseline's lines. The procedure name is the
+    # stable identity and the analyzer reports the candidate's actual line.
+    spec = _write_spec(tmp_path, ONE_FILE_SPEC.format(hi=8))
+
+    code, body = _json(spec, tmp_path)
+
+    assert code == 1
+    assert body["violations"][0]["line"] == 6
+    assert body["resolved_ranges"][0]["declared"] == [3, 8]
+    assert body["resolved_ranges"][0]["actual"] == [4, 9]
+
+
+def test_a_named_callee_must_resolve_to_a_procedure(tmp_path):
+    _write_source(tmp_path, "src/mod_kernel.f90", CLEAN_SOURCE)
+    spec = _write_spec(tmp_path, """\
+region: ch04:step
+files: [src/mod_kernel.f90]
+anchor:
+  file: src/mod_kernel.f90
+  pst_node: "step@3-5"
+  entry_symbol: step
+closure:
+  callees:
+    - {name: missing, lines: "3-5"}
+""")
+
+    code, body = _json(spec, tmp_path)
+
+    assert code == 1
+    assert any("procedure 'missing'" in v["reason"] for v in body["violations"])
+
+
+@pytest.mark.parametrize("path", ["/etc/passwd", "../outside.f90", "src/../outside.f90"])
+def test_a_source_path_that_leaves_the_tree_is_rejected_without_reading_it(tmp_path, path):
+    spec = _write_spec(tmp_path, f"""\
+region: ch04:step
+files: [{path}]
+anchor:
+  file: {path}
+  pst_node: "step@1-2"
+  entry_symbol: step
+""")
+
+    code, body = _json(spec, tmp_path)
+
+    assert code == 1
+    assert any("relative" in v["reason"] for v in body["violations"])
+
+
+def test_a_nonmapping_anchor_is_a_failed_spec_not_an_analyzer_crash(tmp_path):
+    spec = _write_spec(tmp_path, """\
+region: ch04:step
+files: [src/mod_kernel.f90]
+anchor: step
+""")
+
+    code, body = _json(spec, tmp_path)
+
+    assert code == 1
+    assert any("anchor" in v["reason"] for v in body["violations"])
