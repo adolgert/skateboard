@@ -9,5 +9,4 @@ region ch04:step   tree aaaaaaaaaaaa (frozen none)
   regression/holdout   pass   c-0009
   program/regression   pass   c-0010
   timing/port          pass   c-0011
-  performance/speedup  pass   c-0012
 ACCEPTED on aaaaaaaaaaaa

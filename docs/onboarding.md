@@ -236,8 +236,8 @@ names the file, case, variable, or compile line it objected to.
       outputs: [<file>.npy, ...]   # what the timing run writes; compared against the baseline's run
       budget_s: <seconds per run>
       env: {"NAME": "value"}       # optional; values are strings, so quote numbers
-      performance:                   # optional; default requires a 1.10 median speedup
-        min_median_speedup: 1.10     # finite number above 1, baseline median / port median
+      performance:                   # optional; usually absent, since acceptance ignores speed
+        min_median_speedup: 1.10     # a floor performance_check reports against, above 1
     tolerances: harness/tolerances.json
     properties: harness/properties.py   # or null
 
@@ -256,10 +256,12 @@ the minimal form, enough to seed a baseline and start a session -- or
 says all six of the rest as well. Anything in between is refused, naming
 what is absent. Timing measures end-to-end isolated builder-job wall time,
 including container setup and teardown; workspace copying precedes the timer.
-A port can be accepted only after at least five baseline and five port samples
-meet `min_median_speedup` by their medians. This is a same-builder comparison,
-not a confidence interval or cross-machine guarantee, and it does not claim
-the GPU was exclusive while measurements ran.
+`performance_check` records the ratio of the baseline and port medians from at
+least five samples each, so ports can be compared later; acceptance does not
+depend on it, and only a manifest that declares `min_median_speedup` makes a
+slower port fail that check. This is a same-builder comparison, not a
+confidence interval or cross-machine guarantee, and it does not claim the GPU
+was exclusive while measurements ran.
 
 ### The build contract
 

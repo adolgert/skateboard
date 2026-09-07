@@ -374,7 +374,7 @@ def test_a_claim_reached_under_a_strategy_nobody_uses_finishes_nothing(tmp_path)
 
     assert status["accepted"] is False
     assert [row["predicateType"] for row in status["rows"] if row["status"] == "missing"] == [
-        "timing/port", "performance/speedup",
+        "timing/port",
     ]
     assert summary.time_to_acceptance == "not accepted"
 

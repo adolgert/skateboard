@@ -79,9 +79,10 @@ def _all_passing_claims(tree, frozen, phase=PORTING):
             "timing/baseline", "pass",
         ))
         by_predicate = {claim["predicateType"]: claim for claim in claims}
-        performance = by_predicate["performance/speedup"]
+        performance = by_predicate.get("performance/speedup")
         port = by_predicate["timing/port"]
-        performance["materials"].extend([
+        if performance is not None:
+          performance["materials"].extend([
             {
                 "kind": "timing_claim",
                 "sha256": hash_bytes(
@@ -216,21 +217,6 @@ def test_status_on_an_empty_ledger_has_no_tree_and_is_not_accepted(tmp_path):
     assert status["tree"] is None
     assert status["accepted"] is False
     assert all(row["status"] == "missing" for row in status["rows"])
-
-
-def test_status_does_not_guess_a_baseline_tree_from_ledger_history(tmp_path):
-    tree, frozen = "a" * 64, "b" * 64
-    store = LedgerStore(tmp_path / "region")
-    _write_claims(store, _all_passing_claims(tree, frozen))
-
-    status = compute_status(
-        store, ACCEPTANCE_REQUIREMENTS, PORTING,
-        required_materials=(), context_verified=True,
-    )
-
-    speedup = next(row for row in status["rows"] if row["predicateType"] == "performance/speedup")
-    assert status["accepted"] is False
-    assert speedup["status"] == "missing"
 
 
 def test_legacy_claim_is_reported_stale_and_cannot_satisfy_requirement(tmp_path):

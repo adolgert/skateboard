@@ -24,9 +24,9 @@ acceptance roles and applies manifest conditions.
 
 All three sanitizer modes block acceptance.  In particular, an initcheck
 failure cannot be hidden behind passing memcheck and racecheck claims.
-Timing/baseline is a one-time claim made on the baseline tree. It becomes
-part of a port's required performance/speedup verdict rather than being a
-claim about that port itself.
+Timing/baseline is a one-time claim made on the baseline tree, not a claim
+about a port. A port's measured speedup (performance/speedup) is recorded
+so ports can be compared later; acceptance does not depend on it.
 """
 from __future__ import annotations
 

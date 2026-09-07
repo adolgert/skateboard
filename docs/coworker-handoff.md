@@ -157,10 +157,11 @@ and use it as final confirmation. Repeated pass/fail queries still permit
 adaptive learning; this implementation does not enforce a statistical holdout
 query budget.
 
-Choose `timing.performance.min_median_speedup` during onboarding (default 1.10)
-and review the fixed workload and CPU thread count. Acceptance now requires
-that speedup over at least five baseline and five port samples. The timer
-includes Docker job overhead; see the [evidence contract](evidence-contract.md).
+Review the fixed timing workload and CPU thread count during onboarding. A
+port's median speedup is recorded by `performance_check` from at least five
+baseline and five port samples, for comparing ports later; acceptance does
+not depend on it unless the manifest declares `timing.performance.min_median_speedup`.
+The timer includes Docker job overhead; see the [evidence contract](evidence-contract.md).
 For foreign implementations, review the [mixed-language contract](mixed-language.md),
 including explicit opaque-source paths and runtime-artifact declarations.
 

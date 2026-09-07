@@ -26,10 +26,10 @@ Every other path -- the makefile, the tolerance policy, the properties
 module -- is relative to the source tree root, so the same text reads
 the same whether the manifest sits beside that tree or inside it.
 
-Complete manifests may set `timing.performance.min_median_speedup` for the
-accepted port's baseline-median / port-median floor.  It defaults to 1.10 so
-older complete manifests have an explicit, reviewable policy rather than
-silently accepting any speedup.
+Complete manifests may set `timing.performance.min_median_speedup`, a
+baseline-median / port-median floor the performance check reports against.
+Most do not: acceptance does not depend on speed, and a port's measured
+speedup is recorded either way so that ports can be compared later.
 """
 from __future__ import annotations
 
@@ -75,7 +75,6 @@ REQUIRED_TIMING_FIELDS = ("args", "outputs", "budget_s")
 # The timing run may need a few environment variables set to be a fair
 # measurement. They are values, not code: strings in, strings out.
 OPTIONAL_TIMING_FIELDS = ("env", "performance")
-DEFAULT_MIN_MEDIAN_SPEEDUP = 1.10
 
 # The build target every code must offer: the replay driver is what every
 # regression check runs. `timing` and `capture` are named the same way but
@@ -135,7 +134,9 @@ class Timing:
     outputs: tuple  # files the timing run writes, compared per port
     budget_s: int
     env: dict  # {name: value} added to the timing run's environment
-    min_median_speedup: float  # baseline median / port median required for acceptance
+    # An optional floor for the performance check: baseline median over
+    # port median. None when the manifest declares none, which is usual.
+    min_median_speedup: float | None
 
 
 @dataclass(frozen=True)
@@ -335,10 +336,10 @@ def _load_timing(raw: dict, where: str) -> Timing:
     )
 
 
-def _load_min_median_speedup(raw, where: str) -> float:
-    """The explicit acceptance floor, defaulted for pre-policy manifests."""
+def _load_min_median_speedup(raw, where: str) -> float | None:
+    """The floor the performance check reports against, if the manifest declares one."""
     if raw is None:
-        return DEFAULT_MIN_MEDIAN_SPEEDUP
+        return None
     if not isinstance(raw, dict):
         raise ValueError(f"{where} is not an object")
     check_keys(raw, ("min_median_speedup",), where)

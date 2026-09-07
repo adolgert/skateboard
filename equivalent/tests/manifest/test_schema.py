@@ -308,7 +308,7 @@ def test_a_timing_run_declares_no_environment_by_default(tmp_path):
     manifest = load_manifest(_write(tmp_path, MANIFEST))
 
     assert manifest.timing.env == {}
-    assert manifest.timing.min_median_speedup == 1.10
+    assert manifest.timing.min_median_speedup is None
 
 
 def test_timing_performance_floor_is_loaded_and_must_be_a_real_speedup(tmp_path):

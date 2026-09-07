@@ -17,9 +17,10 @@ The calculation uses single precision on both CPU and GPU. Its CPU baseline is
 NVIDIA Fortran `-O2 -stdpar=multicore`, with eight threads for timing. Each timing
 run evolves 32,768 charged points through 30 solves, feeding each answer into
 the next configuration. Startup, transfers, and output are included. The
-current harness additionally measures Docker job setup and teardown. The fixed
-performance requirement is median CPU time / median candidate time >= 1.10,
-using at least five runs of each. Every timed output must pass the numerical
+current harness additionally measures Docker job setup and teardown. This
+manifest declares a performance floor of median CPU time / median candidate
+time >= 1.10 over at least five runs of each, which `performance_check` reports
+against; acceptance itself does not depend on speed. Every timed output must pass the numerical
 comparison. This criterion measures this host and workload; it is not a
 statistical confidence bound or a hardware portability guarantee.
 

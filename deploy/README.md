@@ -202,8 +202,8 @@ From the repository root, run:
 This creates an isolated deployment for the [charged-cloud application](../programs/potential/README.md),
 qualifies the GPU, runs every onboarding gate, promotes the reviewed baseline,
 and exercises rejected attempts followed by Fortran, CUDA C++, and PTX ports.
-Acceptance requires the configured median speedup as well as correctness and
-GPU evidence. The PTX run also checks that changing its external GPU module
+Acceptance rests on correctness and GPU evidence; the median speedup is
+recorded, and the demonstration's own manifest declares a floor for it. The PTX run also checks that changing its external GPU module
 invalidates acceptance. This scripts public gateway client calls; it does not
 run a language model. Each invocation requires a fresh state directory. Its
 containers and networks are removed afterward; images, work volume, source

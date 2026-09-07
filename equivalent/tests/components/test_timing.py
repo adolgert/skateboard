@@ -1,6 +1,8 @@
 """Timing a port and timing the baseline it is measured against."""
 from functools import partial
 
+from dataclasses import replace
+
 import pytest
 
 from equivalent.components import timing
@@ -269,7 +271,11 @@ def _performance_claims(harness, manifest, *, baseline_runs, port_runs,
     harness.claim("timing/port", port.detail)
 
 
-def test_performance_passes_only_when_the_recorded_median_beats_the_manifest_floor(harness):
+def _with_floor(manifest, floor):
+    return replace(manifest, timing=replace(manifest.timing, min_median_speedup=floor))
+
+
+def test_performance_records_the_speedup_without_a_floor(harness):
     manifest = _manifest(harness.tmp_path)
     _performance_claims(
         harness, manifest, baseline_runs=[0.30] * 5, port_runs=[0.20] * 5,
@@ -280,7 +286,7 @@ def test_performance_passes_only_when_the_recorded_median_beats_the_manifest_flo
 
     assert result.verdict == "pass"
     assert result.detail["median_speedup"] == pytest.approx(1.5)
-    assert result.detail["min_median_speedup"] == 1.10
+    assert result.detail["min_median_speedup"] is None
     assert result.detail["measurement_scope"] == timing.MEASUREMENT_SCOPE
     assert result.detail["gpu_exclusivity_required"] is False
     assert [material.kind for material in result.materials] == ["timing_claim", "timing_claim"]
@@ -288,8 +294,22 @@ def test_performance_passes_only_when_the_recorded_median_beats_the_manifest_flo
     assert result.detail["port_claim_id"] == harness.claims["timing/port"].id
 
 
-def test_performance_failure_keeps_the_observed_medians_for_review(harness):
+def test_a_slower_port_is_still_measured_when_no_floor_is_declared(harness):
+    # Acceptance does not depend on speed; the claim exists so a slower
+    # port can be compared with faster ones later.
     manifest = _manifest(harness.tmp_path)
+    _performance_claims(
+        harness, manifest, baseline_runs=[0.20] * 5, port_runs=[0.40] * 5,
+    )
+
+    result = timing.check_performance(harness.porting(manifest=manifest), {})
+
+    assert result.verdict == "pass"
+    assert result.detail["median_speedup"] == pytest.approx(0.5)
+
+
+def test_performance_failure_below_a_declared_floor_keeps_the_observed_medians_for_review(harness):
+    manifest = _with_floor(_manifest(harness.tmp_path), 1.10)
     _performance_claims(
         harness, manifest, baseline_runs=[0.20] * 5, port_runs=[0.20] * 5,
     )

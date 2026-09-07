@@ -196,23 +196,20 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
     assert performance_claim.predicate.verdict == "pass"
     assert {material.kind for material in performance_claim.materials} >= {"timing_claim"}
 
-    # Timing observations are inputs to a speedup verdict, not merely
-    # preconditions. Re-measuring either side retires the old comparison
-    # until the performance action compares the new pair.
+    # The speedup is recorded for comparing ports later; acceptance does
+    # not rest on it, so re-measuring the baseline leaves the port
+    # accepted and asks only for a new comparison, which names the new
+    # baseline observation.
+    old_baseline = performance_claim.predicate.detail["baseline_claim_id"]
     _run(client, cfg, "time_baseline")
-    stale = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
-    speedup = next(row for row in stale["rows"] if row["predicateType"] == "performance/speedup")
-    assert stale["accepted"] is False
-    assert speedup["status"] == "missing"
-    assert speedup["evidence_status"] == "stale"
+    after = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+    assert after["accepted"] is True
+    assert "performance/speedup" not in {row["predicateType"] for row in after["rows"]}
 
-    assert _run(client, cfg, "performance_check")["verdict"] == "pass"
-    _run(client, cfg, "time_port")
-    stale = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
-    assert stale["accepted"] is False
-    assert next(row for row in stale["rows"] if row["predicateType"] == "performance/speedup")[
-        "evidence_status"
-    ] == "stale"
+    renewed = _run(client, cfg, "performance_check")
+    assert renewed["verdict"] == "pass"
+    renewed_claim = store.get_claim(renewed["claim_id"])
+    assert renewed_claim.predicate.detail["baseline_claim_id"] != old_baseline
 
 
 def test_sanitize_dispatch_writes_three_claims_and_is_a_duplicate_on_repeat(tmp_path):

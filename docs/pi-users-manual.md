@@ -227,8 +227,8 @@ row's requirements in the tool's description.
 | `program_regression` | the whole program, run at the size the manifest declares, wrote what the baseline program wrote, file by file | `regression/holdout`, and a `timing/baseline` claim on the baseline tree |
 | `time_baseline` | how long the unmodified program takes under the region's baseline strategy, and stores that run's own outputs as the reference the row above compares against | nothing |
 | `time_port` | how long the ported program takes, at the same size and with the same arguments | `program/regression` |
-| `performance_check` | median baseline time / median port time meets the manifest threshold (default 1.10), with at least five samples each | `timing/port` and `timing/baseline` |
-| `accept` | nothing of its own: it is the name of the whole list, and there is no tool for it | every claim above except `timing/baseline`, and — for a code that declares no invariants — `regression/property` |
+| `performance_check` | records median baseline time / median port time from at least five samples each, for comparing ports later; not on the acceptance list | `timing/port` and `timing/baseline` |
+| `accept` | nothing of its own: it is the name of the whole list, and there is no tool for it | every claim above except `timing/baseline` and `performance/speedup`, and — for a code that declares no invariants — `regression/property` |
 
 `time_baseline` has no preconditions and is about the baseline tree
 rather than the submission, so it can be run at any point; everything
@@ -352,16 +352,17 @@ with the arguments and environment the manifest declares and a budget it
 declares too. Every repetition's declared outputs are compared with the
 baseline program outputs. It requires `program/regression`, so a program that
 computes the wrong thing at the timing size cannot be timed at all. This
-is followed by `performance_check` for acceptance. The claim records the flags, the
+is the last requirement for acceptance. The claim records the flags, the
 run times, what the program was given, which files it wrote and their
 digests, and whether the GPU was otherwise idle, which on a shared
 workstation it usually is not.
 
-**`performance_check`** — Requires the configured median speedup over the CPU
-baseline (default 1.10). The comparison is tied to the exact two timing claims;
-rerunning either timing action retires the previous performance verdict.
-Measurements include isolated-job overhead, and a pass is not a statistical
-confidence bound or proof of an exclusive GPU.
+**`performance_check`** — Records the port's median speedup over the CPU
+baseline so accepted ports can be compared later; acceptance does not depend
+on it. Only a manifest that declares a floor makes a slower port fail it. The
+comparison is tied to the exact two timing claims; rerunning either timing
+action retires the previous one. Measurements include isolated-job overhead,
+and the number is not a statistical confidence bound or proof of an exclusive GPU.
 
 A few rows accept settings, and the tools take them as optional
 arguments: `time_baseline` and `time_port` take `repeats`, an integer from 5
@@ -396,7 +397,6 @@ status is `ACCEPTED`. From a shell on the host:
       regression/holdout   pass   c-0008
       program/regression   pass   c-0009
       timing/port          pass   c-0010
-      performance/speedup  pass   c-0011
     ACCEPTED on aaaaaaaaaaaa
 
 `/status` inside the session prints the same rows in a narrower layout.

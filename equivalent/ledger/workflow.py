@@ -203,13 +203,16 @@ ACTIONS = (
         component='gateway:performance', tool='performance_check',
         predicates=(
             PredicateDefinition('performance/speedup',
-                "The port's median end-to-end isolated-job wall-clock time meets the manifest's required "
-                "speedup over the baseline, using at least five samples from each recorded timing "
-                "claim. This is a same-builder comparative threshold, not a statistical confidence "
-                'or cross-machine performance guarantee; GPU exclusivity is not asserted. On the tree.'
+                "The port's median end-to-end isolated-job wall-clock speedup over the baseline, "
+                "from at least five samples of each recorded timing claim, so accepted ports can "
+                "be compared later. A manifest may declare a floor the verdict is judged against; "
+                "acceptance does not depend on this claim. This is a same-builder measurement, not "
+                'a statistical confidence or cross-machine guarantee; GPU exclusivity is not '
+                'asserted. On the tree.'
             ),
         ),
         requires=('timing/port', 'timing/baseline'),
+        acceptance=AcceptanceRole.NONE,
     ),
     ActionDefinition(
         name='manifest_check', phase=ONBOARDING,

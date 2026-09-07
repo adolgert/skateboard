@@ -266,10 +266,6 @@
         "tree"
       ],
       [
-        "performance/speedup",
-        "tree"
-      ],
-      [
         "regression/property",
         "tree"
       ]

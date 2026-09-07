@@ -103,12 +103,15 @@ def _timing_samples(claim, label: str) -> tuple[float, ...]:
 
 
 def check_performance(ctx: CheckContext, config: dict) -> CheckResult:
-    """Judge an accepted port's median whole-program speedup.
+    """Record a port's median whole-program speedup over the baseline.
 
-    This is a same-builder comparative threshold, not a confidence interval or
-    a portability claim.  Its two claim materials bind the verdict to these
-    exact timing observations, so either timing action being rerun requires a
-    new performance verdict.
+    Acceptance does not depend on speed: the claim is there so that
+    accepted ports can be compared and sorted later. A manifest may
+    declare a floor, and then a slower port fails this check, but that
+    verdict is not on the acceptance list. This is a same-builder
+    measurement, not a confidence interval or a portability claim. Its
+    two claim materials bind the verdict to these exact timing
+    observations, so either timing action being rerun asks for a new one.
     """
     baseline_claim = ctx.claims["timing/baseline"]
     port_claim = ctx.claims["timing/port"]
@@ -141,7 +144,7 @@ def check_performance(ctx: CheckContext, config: dict) -> CheckResult:
             ),
             materials=materials,
         )
-    if speedup >= threshold:
+    if threshold is None or speedup >= threshold:
         return CheckResult(verdict=PASS, detail=detail, materials=materials)
     reason = (
         f"median speedup {speedup:.3f} is below the required "

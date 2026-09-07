@@ -47,11 +47,12 @@ The ledger CLI without deployment configuration is advisory.
 | Properties | The process completed successfully and a protected observer saw the bound replay execute | Assertions and submitted test counters; an example ceiling is not an observed example count |
 | Mutation self-check | The generated campaign was classified, a mutant was caught, and the tolerance-gap criterion passed | Survivors, operator coverage and suitability of the criterion |
 | Timing | `harness/times` checks repeatable outputs; `timing/baseline` records repeated durations and retains final outputs; `timing/port` compares every measured repetition to the baseline outputs | Baseline repeatability and validity, contention, workload and meaningful speedup |
-| Performance | `performance/speedup` requires median baseline time / median port time to meet the frozen manifest threshold (default 1.10), with at least five valid samples per binary | This host and workload only; noise, representativeness, and statistical significance |
+| Performance | `performance/speedup` records median baseline time / median port time from at least five valid samples per binary, and judges it against a floor only if the manifest declares one | This host and workload only; noise, representativeness, and statistical significance |
 
-Performance is required for port acceptance. Its materials identify both exact
-timing claims; rerunning either timing action invalidates the old performance
-verdict. Durations currently cover the isolated job, including Docker setup
+Performance is not required for port acceptance: a slower port can be
+accepted and compared with others by its recorded speedup later. The claim's
+materials identify both exact timing claims; rerunning either timing action
+retires the old comparison. Durations currently cover the isolated job, including Docker setup
 and teardown, application startup, data transfers and output. This can obscure
 small kernel improvements. A compute-process listing does not establish GPU
 exclusivity, and the performance gate does not require an exclusive device.
