@@ -408,6 +408,24 @@ Recorded as each step lands. Line anchors in the appendix are as of
   `ledger/evidence.py`; `status.accepted_by` serves the session summary.
   `OpenRegion` replaces the 8-tuple.
 
+- **2f (client side)** — commit `5e5e05c`. `backend_client.py` parses
+  every builder answer into a frozen dataclass of the fields the gateway
+  reads, validated in one place; an ill-formed answer is a
+  `ComponentError` at the parse point rather than a fail claim blaming
+  the port (a deliberate trust change; tests state both halves).
+  Components take the typed answers without naming their type, because
+  `components` may not import `gateway`. `FakeBuilder(**answers)` takes
+  a response object, a callable, or an exception per endpoint; the
+  twenty-one knobs are gone. `tests/test_builder_parity.py` validates
+  every request body against the builder's request model, every field
+  the gateway reads against the builder's response model and default,
+  and the fake's methods against the client's. `kernel_launches` and
+  the stderr grammar are deleted; two strategy files still carry a
+  stale comment about `NVCOMPILER_ACC_NOTIFY` counting launches, left
+  because they are hashed configuration.
+
+Step 2 is complete at `5e5e05c`: 846 tests, up from 745 at `c9fb867`.
+
 ## Appendix — The review findings, verbatim anchors
 
 Findings marked **[dissolves in 2x]** are expected to disappear as a
