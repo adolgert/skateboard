@@ -426,6 +426,120 @@ Recorded as each step lands. Line anchors in the appendix are as of
 
 Step 2 is complete at `5e5e05c`: 846 tests, up from 745 at `c9fb867`.
 
+## Step 3 as run — the second review round
+
+Five Opus agents re-ran the review at commit `25c8ed7` with the prompts
+in the appendix. Anchors below are as of that commit. The full reports
+are summarized here; the appendix ids say what each first-round finding
+became.
+
+**Overall.** All five agree the separation is now real: zero violating
+import edges and zero module cycles across 210 files (recomputed by AST
+walk, agreeing with `tests/test_imports.py`); every check is
+`check(ctx, config)`; the store has one client; the builder wire has
+two typed spellings with a parity test. What remains is of three kinds:
+a rule stated in one place and honored differently in another; a thin
+layer of unfinished adoption of the new objects; and the clarity items
+Step 2 was not meant to pass through.
+
+**Reconciled against the appendix.** Dissolved: G2, G3, G5, G6, G9,
+G10, G11, G15; C1, C4, C5, C7, C9, C13, C15; L2, L3, L7, L8, L14; S1,
+S2, S4, S5, S6, S7, S8, S9, S14; X1, X2, X4, X6, X7, X9, X10, X11, X12.
+Mostly dissolved with a residue named below: G1, G8, G14; C2, C3, C6,
+C8, C14; L1, L6; S3; X3, X5, X8. Remain (expected): G7, G12; C10, C11,
+C12; L4, L5, L9, L10, L11, L12, L15; S10, S11, S12, S13, S15; X13, X14.
+Marked "dissolves" but did not: S13 (payload types still bare dicts;
+`mutate` ten positionals; no test of `services/builder/app.py`).
+
+**Revised ranked list.** Grouped by the area an agent can own; within a
+group, most consequential first.
+
+Rules stated once and honored differently:
+1. [separation] `region/current.py:52 matches_any` (case-sensitive
+   `fnmatch`) gates submit and the frozen hash while
+   `strategy/schema.py:67-83 Strategy.allows` case-folds; a file the
+   strategy allows is rejected at submit. Three glob semantics in all
+   (`manifest/schema.py:394-419` adds `./` and `**/`). One
+   `glob_matches`, the manifest's rule.
+2. [separation] the tolerance policy is hashed two ways: plain sha256 in
+   components and the oracle, `hash_files` in `region/evidence.py:53-54`;
+   every program/regression and self_check claim carries two `policy`
+   subjects for one file. One `policy_subject`, plain sha256.
+3. [separation] `gateway/app.py:658-669 _restore_build` dispatches a
+   check with `claims={}` before the backend check at `:794`; a gateway
+   with no builder answers with an `AttributeError` string.
+4. [separation] `ledger/status.py:118-124` `context_verified` is defined
+   as "executables confirmed in place"; the CLI and promotion pass True
+   on the deployment's reviewed pins. State both grounds.
+5. [separation] `services/builder/stages.py:368-369` and
+   `workspace.py:189` raise `ValueError` out of five stages as 500s,
+   contradicting `contract.py:1-9`.
+6. [separation] `ledger/evidence.py:49-68 binary_materials` scrapes
+   detail keys spelled as literals in six components;
+   `FOUNDATION_PREDICATES` (`:21-24`) is hand-kept against the table;
+   the verdict word has no declaration (64 `"pass"`, 15 `"fail"`);
+   `"baseline_tree"` is spelled in four places with no registry
+   (`app.py:83-92 SUBJECT_KIND_OF` versus `CheckResult.subject_kind`;
+   `status.py:134` reads it as frozen). One vocabulary module in the
+   ledger; a subject-kind registry beside the table.
+
+Unfinished adoption:
+7. [separation] `program_regression.py:91-105` calls `builder.time`
+   around `time_program`; `timing.py:122-123 check_port` declares no
+   materials; `original_check.py:79-96` re-spells `build_verdict` and
+   keeps artifacts on the failure path (`:148`); `components/backend.py`
+   covers two of nine backend calls while its docstring claims all;
+   `sanitize.py:51`/`regression.py:59` read `ctx.manifest`; ad-hoc
+   workspace names at `timing.py:147`, `original_check.py:72-74`.
+8. [separation] the components' wire types live in
+   `gateway/backend_client.py:70-296`; `backend_client.py:37` imports
+   `components.errors`; twelve component tests import the gateway. The
+   oracle wire got none of the typing (`backend_client.py:398-424`,
+   `regression.py:39-77` by string, no oracle contract, no parity).
+9. [separation] `promote.py:30` imports `components.harness_capture`;
+   `sets_named_by` raises `ComponentError` past `cli/main.py:264`.
+10. [separation] builder policies: `stages.py:1106 time_run` runs in a
+    different directory per policy and `test_builder_stages.py:359-373`
+    pins the test-only branch; `Workspace.policy` read at five stage
+    sites; `audited` means two things (`workspace.py:308`,
+    `test_builder_executor.py:17-25`); `_observed_compiler_log`
+    (`:191-217`) and replay-count evidence (`:730-746`) untested;
+    `reset()` leaves `artifact_file`; `contract.ENDPOINTS` untested.
+11. [clarity] `tree.py:182-185 materialized()` manages nothing;
+    `packed.py:28-30` two unread fields pinned by a test;
+    `store.py:229 exists_pass` dead; the `required_materials_by_predicate`
+    derivation at three call sites; `status.py:46,100,157` default
+    materials the store forbids; `capture_sets.py:147 program_arrays`
+    decodes the wire inside the ledger.
+
+Gateway clarity:
+12. `_post_run` still 233 lines with five closures (`app.py:600-832`);
+    `RunRequest` lacks `extra="forbid"` (`:155-158`); `"harness/original"`
+    hardcoded in the recording rule (`:764-775`); two identity blocks
+    (`:245-291`) and a hex regex in four places; `_artifacts_match_build`
+    untyped (`:311-350`); `materials_for` restates `evidence.py:79-96`;
+    nested helpers and six `getattr`s; dead test constants;
+    `test_onboarding_dispatch.py:21` importing a component test;
+    `test_submit.py` mostly testing `tree.py` and `region/current.py`;
+    `Handler.check: object`; `record` inside a comprehension after
+    `keep`.
+
+Untouched by Step 2, in the appendix's order: R-L4, R-L5 (loaders);
+R-S11 (preflight, whose fallback now breaks `docs/pi-install.md:131`);
+R-S12; R-S10 (harness library; tsunami's `_same_bits` is weaker than
+`bitwise_equal`); R-S15 plus the untested SQLite kernel query; R-L9,
+R-L10, R-L11, R-L12, R-L15; R-C10 (the five long checks; `original_check`
+grew to 98 lines), R-C11 (three tolerance parses), R-C12; capture-format
+constants in four places and the oracle's raw manifest keys outside the
+parity net; R-X13; R-X14 (and the pi extension drops `note`).
+
+Layout recommendations from the cross-cutting review, adopted:
+`Provenance` to `components/phase.py`; the attempt-id functions out of
+`tree.py` to the components (they name a builder directory); `tree.py`,
+`promote.py`, `region/` stay where they are. The import test's
+relative-import blind spot and its three looser-than-needed rows are
+fixed with it.
+
 ## Appendix — The review findings, verbatim anchors
 
 Findings marked **[dissolves in 2x]** are expected to disappear as a
