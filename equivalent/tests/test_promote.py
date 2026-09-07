@@ -12,18 +12,16 @@ from pathlib import Path
 import yaml
 
 from equivalent.capture import npy
-from equivalent.cli import promote
 from equivalent.cli.main import main
-from equivalent.gateway.config import load_gateway_config
-from equivalent.gateway.evidence import evidence_materials_for
-from equivalent.gateway.submit import baseline_commit, init_baseline_repo
 from equivalent.ledger.acceptance import requirements_for
 from equivalent.ledger.capture_sets import store_capture_set
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import IN_TREE_MANIFEST, load_manifest
-from equivalent.tree import Tree
+from equivalent.region.deployment import load_gateway_config
+from equivalent.region.evidence import evidence_materials_for
+from equivalent.tree import Tree, baseline_commit, init_baseline_repo
 from equivalent.tests.fakes import (
     fixture_arrays,
     in_tree_manifest,
@@ -37,7 +35,7 @@ CODE = "tsunami"
 REGION = "tsunami:onboard"
 # The region's ledger directory, as the gateway spells it.
 REGION_SLUG = "tsunami-onboard"
-STRATEGY_DIR = Path(__file__).resolve().parents[2] / "strategy" / "files"
+STRATEGY_DIR = Path(__file__).resolve().parents[1] / "strategy" / "files"
 # The claims that carry a capture set, and what the set is called there.
 CAPTURED = "harness/captured"
 TIMED = "harness/times"
@@ -323,16 +321,3 @@ def test_it_refuses_a_region_that_is_not_being_onboarded(tmp_path, capsys):
 
     assert rc == 1
     assert "onboarding" in err
-
-
-def test_the_two_rewrites_of_the_source_root_are_each_other_backwards():
-    # The walkthrough writes the in-tree form from the promoted one and
-    # promote writes the promoted form back, so the two directions are one
-    # rule read twice.
-    promoted = "version: 1\nsource:\n  # where the code is\n  root: baseline\n  patterns: []\n"
-
-    in_tree = promote.in_tree_manifest_text(promoted)
-
-    assert "  root: .\n" in in_tree
-    assert "  # where the code is\n" in in_tree
-    assert promote.promoted_manifest_text(in_tree) == promoted

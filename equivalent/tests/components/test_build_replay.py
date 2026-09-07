@@ -5,7 +5,7 @@ import pytest
 
 from equivalent.components import build_replay
 from equivalent.components.errors import ComponentError
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import init_baseline_repo
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
 from equivalent.tests.fakes import FakeBuilder, write_program

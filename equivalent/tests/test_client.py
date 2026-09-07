@@ -4,8 +4,8 @@ from fastapi.testclient import TestClient
 
 from equivalent.client import GatewayClient
 from equivalent.gateway.app import create_app
-from equivalent.gateway.regions import RegionConfig
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.region.config import RegionConfig
+from equivalent.tree import init_baseline_repo
 from equivalent.ledger.acceptance import PORTING
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.fakes import write_program

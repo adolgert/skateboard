@@ -4,8 +4,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from equivalent.gateway.config import load_gateway_config
-from equivalent.gateway.submit import init_baseline_repo, region_slug
+from equivalent.region.deployment import load_gateway_config
+from equivalent.region.config import region_slug
+from equivalent.tree import init_baseline_repo
 from equivalent.tests.fakes import write_program
 
 REPO_ROOT = Path(__file__).resolve().parents[3]

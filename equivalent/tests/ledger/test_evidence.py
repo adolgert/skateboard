@@ -1,46 +1,9 @@
-from dataclasses import replace
-
-from equivalent.gateway.evidence import (
-    NO_CURRENT_BUILD,
-    evidence_materials_for,
-    required_materials_by_predicate,
-)
+"""Which build a later claim has to have been reached on top of."""
 from equivalent.ledger.acceptance import ACCEPTANCE_REQUIREMENTS, PORTING
+from equivalent.ledger.evidence import NO_CURRENT_BUILD, required_materials_by_predicate
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
-from equivalent.tests.gateway.test_run import _region
-
-
-def _by_kind(materials, kind):
-    return [material.sha256 for material in materials if material.kind == kind]
-
-
-def test_tolerance_and_visible_dataset_bytes_are_part_of_current_context(tmp_path):
-    cfg = _region(tmp_path)
-    visible = tmp_path / "visible"
-    visible.mkdir()
-    (visible / "case.bin").write_bytes(b"first")
-    cfg = replace(cfg, visible_dataset_dir=visible)
-    before = evidence_materials_for(cfg)
-
-    cfg.manifest.tolerances.write_bytes(cfg.manifest.tolerances.read_bytes() + b"\n")
-    (visible / "case.bin").write_bytes(b"second")
-    after = evidence_materials_for(cfg)
-
-    assert _by_kind(before, "policy") != _by_kind(after, "policy")
-    assert _by_kind(before, "capture_set") != _by_kind(after, "capture_set")
-
-
-def test_reviewed_backend_identity_pins_are_static_materials(tmp_path):
-    cfg = replace(
-        _region(tmp_path), executor_identity="a" * 64, oracle_identity="b" * 64,
-    )
-
-    materials = evidence_materials_for(cfg)
-
-    assert _by_kind(materials, "executor") == ["a" * 64]
-    assert _by_kind(materials, "oracle") == ["b" * 64]
 
 
 def test_dependent_predicates_require_the_current_build_binary_cohort(tmp_path):

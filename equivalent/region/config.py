@@ -1,8 +1,13 @@
-"""Where one region's files, spec, and ledger live.
+"""Where one region's files, spec, and ledger live, and what it is called.
 
 Trust role: none by itself. A wrong path here points every check at the
 wrong repository or the wrong ledger; that is a person's configuration
 mistake to catch, not something this module can validate on its own.
+
+The naming rule sits here beside the paths because a region id is used
+in two places -- the branch its submits go to and the directory its
+ledger is filed under -- and the two disagreeing would file evidence
+about one region under the name of another.
 """
 from __future__ import annotations
 
@@ -51,3 +56,19 @@ class RegionConfig:
     original_reference_path: Path | None = None
     executor_identity: str | None = None
     oracle_identity: str | None = None
+
+
+def region_slug(region_id: str) -> str:
+    """A region id spelled so it can be a path or branch component.
+
+    A region id like "ch04:step" contains a colon, which git does not
+    accept in a branch name and which is awkward in a directory name.
+    Replacing it with a dash is the one rule; the region's branch and its
+    ledger directory both use this so the two never disagree.
+    """
+    return region_id.replace(":", "-")
+
+
+def region_branch(region_id: str) -> str:
+    """The branch in the gateway's repository that holds this region's submits."""
+    return f"region/{region_slug(region_id)}"

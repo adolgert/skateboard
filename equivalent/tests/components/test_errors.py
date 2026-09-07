@@ -8,7 +8,7 @@ verdict about the agent's code.
 import pytest
 
 from equivalent.components.errors import ComponentError, after_the_manifest_check_passed
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import init_baseline_repo
 from equivalent.manifest.schema import IN_TREE_MANIFEST
 from equivalent.tests.fakes import write_tree
 from equivalent.tree import Tree

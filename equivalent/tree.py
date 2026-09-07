@@ -16,6 +16,11 @@ nobody submitted.
 This sits below both the gateway and the components. The gateway
 mutates repositories and resolves allow-lists; a component only reads a
 tree, and reads it from here.
+
+Making the repository and asking it for the baseline commit are here for
+the same reason: they are facts about the repository itself, with no
+opinion about what a submission means, and both a gateway building a
+submission and a CLI reading a ledger need them.
 """
 from __future__ import annotations
 
@@ -35,11 +40,54 @@ from equivalent.ledger.subjects import tree_subject
 from equivalent.manifest.schema import IN_TREE_MANIFEST, load_tree_manifest
 
 
-def _git_bytes(repo_dir, *args) -> bytes:
+def git_bytes(repo_dir, *args, input=None, env=None) -> bytes:
     """git's own output, undecoded: file content is not always text."""
     return subprocess.run(
-        ["git", *args], cwd=repo_dir, capture_output=True, check=True,
+        ["git", *args], cwd=repo_dir, capture_output=True,
+        input=input, env=env, check=True,
     ).stdout
+
+
+def git_text(repo_dir, *args, input=None, env=None) -> str:
+    """The same, decoded: for git's own words -- ids, refs, messages."""
+    return subprocess.run(
+        ["git", *args], cwd=repo_dir, capture_output=True, text=True,
+        input=input, env=env, check=True,
+    ).stdout
+
+
+def rev_parse(repo_dir, ref) -> str | None:
+    """The commit `ref` names, or None if the repository has no such ref."""
+    r = subprocess.run(
+        ["git", "rev-parse", "--verify", ref],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+    )
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def init_baseline_repo(repo_dir, seed_dir) -> str:
+    """Copy `seed_dir` into a fresh git repo at `repo_dir` and commit it once.
+
+    The baseline is a plain folder of files, git-init once. Returns the
+    baseline commit id.
+    """
+    repo_dir = Path(repo_dir)
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["cp", "-r", f"{seed_dir}/.", f"{repo_dir}/"], check=True)
+    git_text(repo_dir, "init", "-q")
+    git_text(repo_dir, "config", "user.email", "gateway@equivalent")
+    git_text(repo_dir, "config", "user.name", "gateway")
+    git_text(repo_dir, "add", "-A")
+    git_text(repo_dir, "commit", "-q", "-m", "baseline")
+    git_text(repo_dir, "branch", "-M", "main")
+    return git_text(repo_dir, "rev-parse", "HEAD").strip()
+
+
+def baseline_commit(repo_dir) -> str | None:
+    """The baseline commit id -- the `main` branch's tip -- or None if the repo isn't initialized."""
+    return rev_parse(repo_dir, "main")
 
 
 @dataclass(frozen=True)
@@ -69,12 +117,12 @@ class Tree:
         would otherwise quote comes back as the bytes it really is, and
         the content is read without decoding.
         """
-        listing = _git_bytes(self.repo_dir, "ls-tree", "-r", "--name-only", "-z", self.ref)
+        listing = git_bytes(self.repo_dir, "ls-tree", "-r", "--name-only", "-z", self.ref)
         files = {}
         for raw in listing.split(b"\0"):
             if raw:
                 path = raw.decode("utf-8")
-                files[path] = _git_bytes(self.repo_dir, "show", f"{self.ref}:{path}")
+                files[path] = git_bytes(self.repo_dir, "show", f"{self.ref}:{path}")
         return files
 
     @cached_property

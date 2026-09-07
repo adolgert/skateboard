@@ -4,7 +4,7 @@ import pytest
 
 from equivalent.components import timing
 from equivalent.components.errors import ComponentError
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import init_baseline_repo
 from equivalent.ledger.capture_sets import capture_sets_dir, load_capture_set, store_program_set, program_variable
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore

@@ -17,7 +17,7 @@ import pytest
 
 from equivalent.components import harness_capture, harness_self_check
 from equivalent.components.errors import ComponentError
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import init_baseline_repo
 from equivalent.tree import attempt_id_for_strategy
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore

@@ -9,6 +9,11 @@ life, so the rows a session ever sees are the rows of its region's
 phase; the table holds both because one gateway serves regions of both
 kinds, and because a reader of an old ledger has to be able to look up
 an action of either.
+
+It lives beside the acceptance list rather than in the gateway: what an
+action needs before it may run is the same fact whether a gateway is
+about to dispatch it or a session summary is reading back what was run,
+and the summary has to be readable on a host with no gateway installed.
 """
 from __future__ import annotations
 

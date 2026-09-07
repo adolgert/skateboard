@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from equivalent.components import sese_check
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import init_baseline_repo
 from equivalent.strategy.schema import load_strategy
 
 STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"

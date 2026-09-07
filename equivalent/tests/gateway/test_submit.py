@@ -1,16 +1,12 @@
 from pathlib import Path
 
-from equivalent.gateway.submit import (
-    current_commit,
-    init_baseline_repo,
-    resolve_allow_globs,
-    submit,
-)
+from equivalent.gateway.submit import submit
 from equivalent.ledger.acceptance import ONBOARDING, PORTING
 from equivalent.ledger.records import Predicate
 from equivalent.ledger.store import LedgerStore
+from equivalent.region.current import current_commit, resolve_allow_globs
 from equivalent.strategy.schema import load_strategy
-from equivalent.tree import Tree
+from equivalent.tree import Tree, init_baseline_repo
 
 STRATEGY = load_strategy(
     Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
@@ -312,7 +308,7 @@ def test_an_onboarding_region_may_submit_anything_the_strategy_allows(tmp_path):
 def test_an_onboarding_regions_frozen_set_is_whatever_its_allow_list_leaves(tmp_path):
     # With the whole tree allowed, nothing is frozen -- and an empty
     # frozen set is a real value, not a missing one.
-    from equivalent.gateway.submit import current_tree_and_frozen
+    from equivalent.region.current import current_tree_and_frozen
     from equivalent.ledger.subjects import frozen_subject
 
     store = LedgerStore(tmp_path / "ledger")

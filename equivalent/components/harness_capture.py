@@ -29,6 +29,7 @@ import hashlib
 from equivalent.capture import npy
 from equivalent.ledger.capture_sets import store_capture_set
 from equivalent.ledger.store import LedgerStore
+from equivalent.manifest.schema import REQUIRED_DATASETS
 from equivalent.strategy.schema import Strategy
 from equivalent.tree import Tree, attempt_id_for_strategy
 
@@ -40,8 +41,9 @@ CAPTURE_ROLE = "capture"
 # under. Spelled here because this is where it is written and read.
 CAPTURED_PREDICATE = "harness/captured"
 # The two datasets a port is judged by, and the pair that must not be the
-# same run. A code may declare more; nothing is held back in those.
-VISIBLE, HOLDOUT = "visible", "holdout"
+# same run. A code may declare more; nothing is held back in those. The
+# manifest is where the pair is named, so it is taken from there.
+VISIBLE, HOLDOUT = REQUIRED_DATASETS
 # What a case's two halves are called on the wire and in the manifest's
 # interface, in the words a message about one should use.
 SECTIONS = (("inputs", "input"), ("outputs", "output"))

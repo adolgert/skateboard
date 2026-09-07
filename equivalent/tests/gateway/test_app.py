@@ -4,8 +4,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from equivalent.gateway.app import create_app
-from equivalent.gateway.regions import RegionConfig
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.region.config import RegionConfig
+from equivalent.tree import init_baseline_repo
 from equivalent.ledger.acceptance import ONBOARDING, PORTING, requirements_for
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
@@ -165,7 +165,7 @@ def test_get_status_reports_the_real_current_tree_before_any_check_has_run(tmp_p
     assert body["accepted"] is False
     # The gateway's answer matches what compute_status itself would say
     # given the same tree/frozen -- one rendering, not two.
-    from equivalent.gateway.submit import current_tree_and_frozen
+    from equivalent.region.current import current_tree_and_frozen
     from equivalent.ledger.acceptance import requirements_for
     from equivalent.ledger.subjects import Subject
     from equivalent.strategy.schema import load_strategy

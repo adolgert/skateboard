@@ -22,6 +22,7 @@ from equivalent.strategy.schema import Strategy
 from equivalent.tree import attempt_id_for
 
 from .errors import ComponentError
+from .harness_capture import HOLDOUT
 
 
 def check_visible(store: LedgerStore, tree: Subject, oracle) -> dict:
@@ -58,7 +59,7 @@ def check_holdout(region_id: str, tree_sha: str, strategy: Strategy, manifest: M
         raise ComponentError("held-out run failed; private diagnostic withheld")
 
     try:
-        resp = oracle.compare(dataset="holdout", outputs=run_resp["outputs"])
+        resp = oracle.compare(dataset=HOLDOUT, outputs=run_resp["outputs"])
     except Exception as exc:
         raise ComponentError("held-out comparison unavailable; private diagnostic withheld") from exc
 

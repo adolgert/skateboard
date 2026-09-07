@@ -35,16 +35,17 @@ import json
 import sys
 from pathlib import Path
 
-from equivalent.gateway.config import load_gateway_config
-from equivalent.gateway.evidence import evidence_materials_for, required_materials_by_predicate
-from equivalent.gateway.submit import current_tree_and_frozen
 from equivalent.ledger.acceptance import PORTING, requirements_for
+from equivalent.ledger.evidence import required_materials_by_predicate
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject, evidence_policy_subject
+from equivalent.promote import PromoteRefused, promote
+from equivalent.region.current import current_tree_and_frozen
+from equivalent.region.deployment import load_gateway_config
+from equivalent.region.evidence import evidence_materials_for
 from equivalent.strategy.schema import load_strategy
 
-from . import promote as promote_module
 from . import render, session
 
 CONFIG_HELP = "gateway configuration file, read with --region-id to show the repository's current tree"
@@ -217,10 +218,10 @@ def _run_promote(parser: argparse.ArgumentParser, args) -> int:
     """
     config, cfg = _named_region(parser, args.config, args.region_id)
     try:
-        lines = promote_module.promote(
+        lines = promote(
             config, cfg, programs=args.programs, replace=args.replace,
         )
-    except promote_module.PromoteRefused as refusal:
+    except PromoteRefused as refusal:
         print(f"refused: {refusal}", file=sys.stderr)
         return 1
     for line in lines:

@@ -14,7 +14,7 @@ import yaml
 import pytest
 
 from equivalent.components import manifest_check
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import init_baseline_repo
 from equivalent.manifest.schema import IN_TREE_MANIFEST
 from equivalent.tests.fakes import (
     FIXTURE_VARIABLES,

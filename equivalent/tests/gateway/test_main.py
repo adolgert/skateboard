@@ -8,7 +8,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from equivalent.gateway.main import build_app_from_env
-from equivalent.gateway.submit import baseline_commit
+from equivalent.tree import baseline_commit
 from equivalent.tests.fakes import FakeBuilder, write_program
 
 TOKEN = "test-token"

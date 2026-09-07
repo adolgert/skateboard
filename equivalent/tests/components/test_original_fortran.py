@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 from equivalent.components import original_check
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import init_baseline_repo
 from equivalent.tree import attempt_id_for_strategy
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject

@@ -34,6 +34,7 @@ from pathlib import Path
 
 import yaml
 
+from equivalent.capture.variables import DTYPES, MAX_RANK, Variable
 from equivalent.ledger.subjects import Subject, hash_bytes
 
 VERSION = 1
@@ -72,12 +73,6 @@ REQUIRED_BUILD_TARGET = "replay"
 # two must be, and they must not be the same run twice.
 REQUIRED_DATASETS = ("visible", "holdout")
 
-# The types the capture format and the comparator can carry, spelled the
-# way the manifest writes them. Anything else would reach the harness as a
-# type no reader knows the width of.
-DTYPES = ("f32", "f64", "i32", "i64", "l")
-MAX_RANK = 4
-
 
 @dataclass(frozen=True)
 class Source:
@@ -95,13 +90,6 @@ class BuildTarget:
 class Build:
     makefile: str  # relative to the tree root
     targets: dict  # {role: BuildTarget}
-
-
-@dataclass(frozen=True)
-class Variable:
-    name: str
-    dtype: str  # one of DTYPES
-    rank: int  # 0..MAX_RANK
 
 
 @dataclass(frozen=True)

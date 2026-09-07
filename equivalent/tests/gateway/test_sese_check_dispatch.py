@@ -9,8 +9,9 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from equivalent.gateway.app import create_app
-from equivalent.gateway.regions import RegionConfig
-from equivalent.gateway.submit import frozen_for_allow_globs, init_baseline_repo
+from equivalent.region.config import RegionConfig
+from equivalent.region.current import frozen_for_allow_globs
+from equivalent.tree import init_baseline_repo
 from equivalent.ledger.acceptance import PORTING
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest

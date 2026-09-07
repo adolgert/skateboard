@@ -8,7 +8,7 @@ import yaml
 
 from equivalent.capture import npy
 from equivalent.components import original_check
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import init_baseline_repo
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.reference.schema import load_reference, fingerprint_reference

@@ -11,9 +11,9 @@ from fastapi.testclient import TestClient
 
 from equivalent.cli import render
 from equivalent.gateway.app import create_app
-from equivalent.gateway.regions import RegionConfig
-from equivalent.gateway.submit import init_baseline_repo
-from equivalent.gateway.table import rows_for
+from equivalent.region.config import RegionConfig
+from equivalent.tree import init_baseline_repo
+from equivalent.ledger.table import rows_for
 from equivalent.ledger.acceptance import ONBOARDING
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest

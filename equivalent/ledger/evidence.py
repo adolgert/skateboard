@@ -1,16 +1,19 @@
-"""The current external inputs that make a claim valid for a region."""
+"""Which claims a later claim has to have been reached on top of.
+
+Trust role: this decides what counts as current. A check that passed
+against an executable nobody builds any more is not evidence about the
+code as it stands, so every claim that depends on a build carries the
+identities of the build that is current, and a claim carrying anything
+else is stale. Getting this wrong lets an old pass stand in for a new
+one.
+
+The build itself, and the few checks that precede any build, are the
+exception: they are the foundation the cohort is derived from, so they
+are judged on the caller's own context.
+"""
 from __future__ import annotations
 
-from pathlib import Path
-
-from equivalent.ledger.subjects import (
-    Subject,
-    evidence_policy_subject,
-    hash_bytes,
-    hash_files,
-)
-from equivalent.reference.schema import fingerprint_reference
-from equivalent.strategy.schema import load_strategy
+from equivalent.ledger.subjects import Subject, hash_bytes
 
 
 BUILD_PREDICATE = {"porting": "build/replay", "onboarding": "harness/builds"}
@@ -71,50 +74,3 @@ def required_materials_by_predicate(
         for requirement in requirements
         if requirement.predicate_type not in FOUNDATION_PREDICATES
     }
-
-
-def _files_subject(path: Path, kind: str) -> Subject:
-    path = Path(path)
-    if path.is_file():
-        digest = hash_files([{"path": path.name, "content": path.read_bytes()}])
-    elif path.is_dir():
-        digest = hash_files([
-            {"path": p.relative_to(path).as_posix(), "content": p.read_bytes()}
-            for p in sorted(path.rglob("*")) if p.is_file()
-        ])
-    else:
-        digest = hash_bytes(f"absent:{path}".encode("utf-8"))
-    return Subject(kind=kind, sha256=digest)
-
-
-def evidence_materials_for(cfg, strategy=None, baseline_strategy=None) -> tuple[Subject, ...]:
-    """Recompute the dependencies shared by every current region claim."""
-    strategy = strategy or load_strategy(cfg.strategy_path)
-    baseline_strategy = baseline_strategy or load_strategy(cfg.baseline_strategy_path)
-    materials = [
-        evidence_policy_subject(),
-        strategy.as_subject(),
-        baseline_strategy.as_subject(),
-        cfg.manifest.as_subject(),
-    ]
-    if cfg.manifest.tolerances is not None:
-        materials.append(_files_subject(cfg.manifest.tolerances, "policy"))
-    if cfg.manifest.properties is not None:
-        materials.append(_files_subject(cfg.manifest.properties, "policy"))
-    if cfg.visible_dataset_dir is not None:
-        materials.append(_files_subject(cfg.visible_dataset_dir, "capture_set"))
-    if cfg.original_reference_path is not None:
-        materials.append(Subject(
-            kind="reference", sha256=fingerprint_reference(cfg.original_reference_path),
-        ))
-    else:
-        materials.append(Subject(
-            kind="reference", sha256=hash_bytes(b"equivalent:no-original-reference:v1"),
-        ))
-    executor_pin = getattr(cfg, "executor_identity", None)
-    oracle_pin = getattr(cfg, "oracle_identity", None)
-    if executor_pin is not None:
-        materials.append(Subject(kind="executor", sha256=executor_pin))
-    if oracle_pin is not None:
-        materials.append(Subject(kind="oracle", sha256=oracle_pin))
-    return tuple(materials)

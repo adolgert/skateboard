@@ -30,8 +30,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from equivalent.cli.promote import BASELINE_DIR, MANIFEST_NAME, in_tree_manifest_text
 from equivalent.client import connect
+from equivalent.manifest.layout import BASELINE_DIR, MANIFEST_NAME, in_tree_manifest_text
 from equivalent.manifest.schema import IN_TREE_MANIFEST
 
 # The nine checks, in the order each one's evidence is produced. The

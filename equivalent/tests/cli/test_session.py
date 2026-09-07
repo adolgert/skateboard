@@ -10,7 +10,7 @@ import yaml
 
 from equivalent.cli import render, session
 from equivalent.cli.main import main
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import init_baseline_repo
 from equivalent.ledger.acceptance import (
     ACCEPTANCE_REQUIREMENTS,
     ONBOARDING,

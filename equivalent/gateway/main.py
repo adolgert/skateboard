@@ -37,7 +37,7 @@ from fastapi import FastAPI
 
 from equivalent.gateway.app import create_app
 from equivalent.gateway.backend_client import connect_builder, connect_oracle
-from equivalent.gateway.config import load_gateway_config
+from equivalent.region.deployment import load_gateway_config
 from equivalent.strategy.schema import load_strategy
 
 CONFIG_VAR = "EQUIVALENT_CONFIG"

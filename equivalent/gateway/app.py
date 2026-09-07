@@ -16,7 +16,7 @@ read why. POST /run
 refuses a request whose required claims are missing, returns an existing
 claim for a repeated deterministic request, and otherwise dispatches to
 the action's component. Every row in
-equivalent.gateway.table.ACTION_TABLE that names a component has real
+equivalent.ledger.table.ACTION_TABLE that names a component has real
 dispatch; an action whose builder or oracle client isn't configured for
 this gateway instance answers that it isn't, rather than crashing.
 """
@@ -61,31 +61,37 @@ from equivalent.ledger.acceptance import (
     PORTING,
     requirements_for,
 )
+from equivalent.ledger.evidence import (
+    BUILD_PREDICATE,
+    FOUNDATION_PREDICATES,
+    binary_materials,
+    current_build_claim,
+    required_materials_by_predicate,
+)
 from equivalent.ledger.predicates import agent_receipt
 from equivalent.ledger.records import Predicate, RequestLogLine
 from equivalent.ledger.status import compute_status, requirement_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject, hash_bytes
-from equivalent.strategy.schema import load_strategy
-from equivalent.tree import Tree
-
-from .regions import RegionConfig
-from .evidence import (
-    BUILD_PREDICATE,
-    FOUNDATION_PREDICATES,
-    binary_materials,
-    current_build_claim,
-    evidence_materials_for,
-    required_materials_by_predicate,
+from equivalent.ledger.table import (
+    ACTION_TABLE,
+    CONFIG_KEY_SPECS,
+    config_params,
+    requires_for,
+    rows_for,
 )
-from .submit import (
-    ConcurrentSubmissionError,
+from equivalent.region.config import RegionConfig
+from equivalent.region.current import (
     current_commit,
     current_tree_and_frozen,
     resolve_allow_globs,
 )
+from equivalent.region.evidence import evidence_materials_for
+from equivalent.strategy.schema import load_strategy
+from equivalent.tree import Tree
+
+from .submit import ConcurrentSubmissionError
 from .submit import submit as do_submit
-from .table import ACTION_TABLE, CONFIG_KEY_SPECS, config_params, requires_for, rows_for
 
 ROWS_BY_NAME = {row.name: row for row in ACTION_TABLE}
 PRODUCERS = {predicate_type: row.name for row in ACTION_TABLE for predicate_type in row.emits}

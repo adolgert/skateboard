@@ -23,48 +23,35 @@ and is already in the ledger; this reads those claims and copies files.
 """
 from __future__ import annotations
 
-import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from equivalent.components import harness_capture
-from equivalent.gateway.config import DATASETS_DIR, GatewayConfig
-from equivalent.gateway.evidence import evidence_materials_for, required_materials_by_predicate
-from equivalent.gateway.regions import RegionConfig
-from equivalent.gateway.submit import (
+from equivalent.ledger.acceptance import FINISHED_WORD, ONBOARDING, requirements_for
+from equivalent.ledger.capture_sets import load_capture_set, write_dataset
+from equivalent.ledger.evidence import required_materials_by_predicate
+from equivalent.ledger.status import compute_status
+from equivalent.ledger.store import LedgerStore
+from equivalent.ledger.subjects import Subject
+from equivalent.manifest.layout import (
+    BASELINE_DIR,
+    CAPTURES_DIR,
+    DATASETS_DIR,
+    MANIFEST_NAME,
+    promoted_manifest_text,
+)
+from equivalent.manifest.schema import IN_TREE_MANIFEST
+from equivalent.region.config import RegionConfig
+from equivalent.region.current import (
     current_commit,
     current_tree_and_frozen,
     working_copy_files,
 )
-from equivalent.ledger.acceptance import FINISHED_WORD, ONBOARDING, requirements_for
-from equivalent.ledger.capture_sets import load_capture_set, write_dataset
-from equivalent.ledger.status import compute_status
-from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject
-from equivalent.manifest.schema import IN_TREE_MANIFEST, IN_TREE_SOURCE_ROOT
+from equivalent.region.deployment import GatewayConfig
+from equivalent.region.evidence import evidence_materials_for
 from equivalent.strategy.schema import load_strategy
 from equivalent.tree import Tree
-
-# Where a code keeps the answers a port is compared against, under its
-# own directory. The oracle spells this too, in its own words: it cannot
-# import this package, and that is the price of it being sealed.
-CAPTURES_DIR = "captures"
-# What a code's own manifest is called beside its directory. The
-# deployment's configuration may name any path under `programs`, but this
-# is where promoting puts one, and it is what the seed script looks for.
-MANIFEST_NAME = "manifest.yaml"
-# What the promoted manifest says its source root is: the directory the
-# tree is written into, beside the manifest.
-BASELINE_DIR = "baseline"
-
-# The `source:` mapping of a manifest, and a line inside it saying what
-# the source root is. The rewrite is a line replacement rather than a
-# YAML round trip because a manifest is a file a person wrote and will
-# read again: loading and dumping it would silently discard every
-# comment in it and re-order what is left.
-SOURCE_KEY = re.compile(r"^source:\s*(#.*)?$")
-TOP_LEVEL = re.compile(r"^\S")
 
 
 class PromoteRefused(Exception):
@@ -79,67 +66,6 @@ class PromotedSet:
     sha256: str
     inputs: bool
     outputs: bool
-
-
-def _root_line(value: str) -> re.Pattern:
-    """A line of a manifest that says the source root is this, and nothing else."""
-    return re.compile(rf"^(\s*)root:\s*{re.escape(value)}\s*$")
-
-
-def _source_block(lines: list[str], expected: str) -> range:
-    """The lines the manifest's top-level `source:` mapping spans."""
-    start = None
-    for number, line in enumerate(lines):
-        if start is None:
-            if SOURCE_KEY.match(line):
-                start = number + 1
-        elif line.strip() and TOP_LEVEL.match(line):
-            return range(start, number)
-    if start is None:
-        raise PromoteRefused(
-            f"the manifest at {IN_TREE_MANIFEST} has no `source:` section written as a "
-            f"block of its own; promoting rewrites one line, so spell it as `source:` "
-            f"with `root: {expected}` on a line of its own beneath it"
-        )
-    return range(start, len(lines))
-
-
-def _rewrite_source_root(text: str, expected: str, replacement: str) -> str:
-    """The same manifest with its source root changed, and everything else untouched.
-
-    Exactly one line inside `source:` may say the root, and it may say
-    nothing else. A manifest written any other way -- the root on a flow
-    mapping, two `root:` keys, a comment on the same line -- is refused
-    rather than guessed at, because a wrong guess here would promote a
-    manifest pointing at a tree that is not the one beside it.
-    """
-    lines = text.splitlines(keepends=True)
-    pattern = _root_line(expected)
-    found = [n for n in _source_block(lines, expected) if pattern.match(lines[n])]
-    if len(found) != 1:
-        raise PromoteRefused(
-            f"the manifest at {IN_TREE_MANIFEST} has {len(found)} lines inside `source:` "
-            f"saying `root: {expected}`, and promoting rewrites exactly one; spell it as "
-            f"`root: {expected}` on a line of its own, with any comment on the line above"
-        )
-    indent = pattern.match(lines[found[0]]).group(1)
-    lines[found[0]] = f"{indent}root: {replacement}\n"
-    return "".join(lines)
-
-
-def promoted_manifest_text(tree_text: str) -> str:
-    """The tree's manifest as it is written beside the code: source root `baseline`."""
-    return _rewrite_source_root(tree_text, IN_TREE_SOURCE_ROOT, BASELINE_DIR)
-
-
-def in_tree_manifest_text(promoted_text: str) -> str:
-    """The code's manifest as a tree being onboarded carries it: source root `.`.
-
-    The other direction of the same rewrite, for whoever is writing the
-    manifest into a working copy: it is the same file with the same
-    comments, saying that its source is the tree it sits in.
-    """
-    return _rewrite_source_root(promoted_text, BASELINE_DIR, IN_TREE_SOURCE_ROOT)
 
 
 def first_difference(tree: dict, working: dict) -> str | None:
@@ -304,7 +230,10 @@ def promote(config: GatewayConfig, cfg: RegionConfig, programs=None, replace: bo
 
     if IN_TREE_MANIFEST not in tree:
         raise PromoteRefused(f"the tree that passed holds no manifest at {IN_TREE_MANIFEST}")
-    manifest_text = promoted_manifest_text(tree[IN_TREE_MANIFEST].decode("utf-8"))
+    try:
+        manifest_text = promoted_manifest_text(tree[IN_TREE_MANIFEST].decode("utf-8"))
+    except ValueError as exc:
+        raise PromoteRefused(str(exc)) from exc
 
     sets = promoted_sets(harness_capture.captured_sets(store, subject))
 

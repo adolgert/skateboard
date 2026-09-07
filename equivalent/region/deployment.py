@@ -1,4 +1,5 @@
-"""The gateway's configuration file: one YAML naming every path and region.
+"""The deployment file a gateway and a CLI both read: one YAML naming
+every path and region.
 
 Trust role: this decides which repository, which ledger, which working
 copy, which code, and which strategy each region is checked against. A
@@ -65,11 +66,12 @@ import re
 
 import yaml
 
-from equivalent.gateway.regions import RegionConfig
-from equivalent.gateway.submit import baseline_commit, init_baseline_repo, region_slug
 from equivalent.ledger.acceptance import ONBOARDING, PHASES, PORTING
+from equivalent.manifest.layout import DATASETS_DIR
 from equivalent.manifest.schema import Manifest, load_manifest
 from equivalent.reference.schema import load_reference
+from equivalent.region.config import RegionConfig, region_slug
+from equivalent.tree import baseline_commit, init_baseline_repo
 
 VERSION = 1
 
@@ -82,14 +84,11 @@ REQUIRED_REGION_KEYS = ("code", "phase", "strategy", "baseline_strategy")
 # one and meaningless to an onboarding region, and `visible_dataset` is
 # optional even when porting.
 OPTIONAL_REGION_KEYS = ("spec_path", "visible_dataset", "executor_identity", "oracle_identity")
-# Where a code keeps the datasets a region may name, under its own
-# directory. One spelling, so the deployment and this reader agree.
-DATASETS_DIR = "datasets"
 
 
 @dataclass(frozen=True)
 class Paths:
-    """The directories the gateway works in, as the file named them."""
+    """The directories the deployment works in, as the file named them."""
 
     repo: Path
     ledger_root: Path

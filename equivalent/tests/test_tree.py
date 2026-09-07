@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 import equivalent.tree
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import init_baseline_repo
 from equivalent.manifest.schema import IN_TREE_MANIFEST
 from equivalent.tests.fakes import write_tree
 from equivalent.tree import Tree, attempt_id_for
@@ -114,14 +114,14 @@ def test_the_repository_is_read_once_however_often_the_files_are_asked_for(monke
     # repository once per question would be that cost several times over
     # for files that cannot have changed.
     tree = Tree.baseline(_repo(tmp_path))
-    real_read = equivalent.tree._git_bytes
+    real_read = equivalent.tree.git_bytes
     calls = []
 
     def counted(*args, **kwargs):
         calls.append(args)
         return real_read(*args, **kwargs)
 
-    monkeypatch.setattr(equivalent.tree, "_git_bytes", counted)
+    monkeypatch.setattr(equivalent.tree, "git_bytes", counted)
 
     first = tree.files
     reads = len(calls)

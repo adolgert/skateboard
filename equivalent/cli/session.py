@@ -22,7 +22,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
-from equivalent.gateway.table import ACTION_TABLE
+from equivalent.ledger.table import ACTION_TABLE
 from equivalent.ledger.acceptance import PORTING, requirements_for
 from equivalent.ledger.records import RequestLogLine
 from equivalent.ledger.store import LedgerStore

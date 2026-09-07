@@ -4,10 +4,11 @@ from dataclasses import replace
 from fastapi.testclient import TestClient
 
 from equivalent.gateway.app import config_hash, create_app
-from equivalent.gateway.evidence import evidence_materials_for
-from equivalent.gateway.regions import RegionConfig
-from equivalent.gateway.submit import current_tree_and_frozen, init_baseline_repo
-from equivalent.gateway.table import ACTION_TABLE, CONFIG_KEY_SPECS
+from equivalent.region.evidence import evidence_materials_for
+from equivalent.region.config import RegionConfig
+from equivalent.region.current import current_tree_and_frozen
+from equivalent.tree import init_baseline_repo
+from equivalent.ledger.table import ACTION_TABLE, CONFIG_KEY_SPECS
 from equivalent.ledger.acceptance import PHASES, PORTING
 from equivalent.ledger.predicates import PREDICATE_TYPES
 from equivalent.ledger.records import Predicate

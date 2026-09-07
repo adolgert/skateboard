@@ -17,9 +17,9 @@ Trust role: the definition of done. A requirement missing from either
 list lets a region be finished without that evidence; the gateway's /run
 gate and /status both derive from them.
 
-This lives in the ledger package, not next to the gateway's precondition
-table, because the ledger CLI must be able to check claims against it
-without the gateway installed. The table's "accept" row imports this
+This lives in the ledger package because the ledger CLI must be able to
+check claims against it without the gateway installed. The precondition
+table sits beside it, for the same reason; its "accept" row imports this
 list rather than writing a second copy.
 
 All three sanitizer modes block acceptance.  In particular, an initcheck

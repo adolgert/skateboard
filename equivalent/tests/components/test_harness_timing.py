@@ -16,7 +16,7 @@ import numpy as np
 
 from equivalent.capture import npy
 from equivalent.components import harness_timing
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import init_baseline_repo
 from equivalent.tree import attempt_id_for_strategy
 from equivalent.ledger import capture_sets
 from equivalent.ledger.store import LedgerStore

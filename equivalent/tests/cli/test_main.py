@@ -97,7 +97,7 @@ def test_status_with_a_configuration_file_shows_the_tree_the_gateway_shows(tmp_p
     from fastapi.testclient import TestClient
 
     from equivalent.gateway.app import create_app
-    from equivalent.gateway.config import load_gateway_config
+    from equivalent.region.deployment import load_gateway_config
 
     strategies = Path(__file__).resolve().parents[2] / "strategy" / "files"
     spec_path = "notes/regions/ch04-step.sese.yaml"
@@ -147,7 +147,7 @@ def test_status_with_a_configuration_file_shows_the_tree_the_gateway_shows(tmp_p
 def test_session_command_runs_end_to_end(tmp_path, capsys):
     import yaml
 
-    from equivalent.gateway.submit import init_baseline_repo
+    from equivalent.tree import init_baseline_repo
     from equivalent.ledger.records import RequestLogLine
 
     strategies = Path(__file__).resolve().parents[2] / "strategy" / "files"
