@@ -13,6 +13,7 @@ import pytest
 import equivalent.tree
 from equivalent.tree import init_baseline_repo
 from equivalent.manifest.schema import IN_TREE_MANIFEST
+from equivalent.gateway.submit import submit
 from equivalent.tests.fakes import write_tree
 from equivalent.tree import Tree
 
@@ -20,9 +21,11 @@ from equivalent.tree import Tree
 # different hash and is intentionally invalid under evidence policy v2.
 TEXT_BASELINE_TREE = "3bfd503c5274ffb2387534ad956f632f1a3d5630848b884f53ceeb2c2dc03361"
 
-# A file in an encoding that is not UTF-8. A real code's tree has one --
-# a namelist written on another machine, reference data next to the source.
+# A file in an encoding that is not UTF-8, and one that is not text at
+# all. A real code's tree has both -- a namelist written on another
+# machine, small reference data next to the source.
 LATIN1_BYTES = "! coefficient d'entrée\n".encode("latin-1")
+BINARY_BYTES = bytes(range(256)) * 4
 
 
 def _write(root, path, content):
@@ -53,6 +56,43 @@ def _onboarding_repo(tmp_path, drop_manifest: bool = False):
     repo = tmp_path / "repo"
     init_baseline_repo(repo, seed)
     return repo
+
+
+def test_init_baseline_repo_matches_seed_folder(tmp_path):
+    seed = _seed(tmp_path / "seed")
+    repo_dir = tmp_path / "repo"
+
+    baseline_commit = init_baseline_repo(repo_dir, seed)
+
+    assert len(baseline_commit) == 40
+    assert Tree.baseline(repo_dir).files == {
+        "src/mod_kernel.f90": b"subroutine step\nend subroutine\n",
+        "Makefile": b"all:\n\techo build\n",
+    }
+
+
+def test_bytes_that_are_not_utf8_survive_seed_repo_submit_and_materialize(tmp_path):
+    # A code's tree is not all UTF-8 source: it holds namelists in other
+    # encodings and small data files. Whatever the baseline holds has to
+    # come back out of the gateway's repository byte for byte, or a claim
+    # is about a tree that is not the one the person is reading.
+    repo_dir = _repo(tmp_path, {"data/coeffs.nml": LATIN1_BYTES, "data/table.bin": BINARY_BYTES})
+    working = tmp_path / "working"
+    _write(working, "src/mod_kernel.f90", "subroutine step\n  x = 1\nend subroutine\n")
+    _write(working, "src/table.f90", BINARY_BYTES)
+
+    submit(repo_dir, "ch04:step", working, ["src/*.f90"], "sess-1")
+
+    tree = Tree(repo_dir, "region/ch04-step")
+    assert tree.files["data/coeffs.nml"] == LATIN1_BYTES
+    assert tree.files["data/table.bin"] == BINARY_BYTES
+    assert tree.files["src/table.f90"] == BINARY_BYTES
+
+    out = tmp_path / "materialized"
+    tree.write_to(out)
+    assert (out / "data" / "coeffs.nml").read_bytes() == LATIN1_BYTES
+    assert (out / "data" / "table.bin").read_bytes() == BINARY_BYTES
+    assert (out / "src" / "table.f90").read_bytes() == BINARY_BYTES
 
 
 def test_the_files_are_the_ones_the_baseline_holds(tmp_path):

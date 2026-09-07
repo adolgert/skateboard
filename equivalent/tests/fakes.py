@@ -646,6 +646,62 @@ class FakeBuilder:
         }, timed)
 
 
+# The reviewed original an onboarding is compared against: a program
+# preserved outside the submitted tree, with the runs and outputs a person
+# said the two have to agree on. It lives here rather than in one test
+# because both the component's own tests and the onboarding dispatch have
+# to be judged against the same reviewed contract.
+def reference(tmp_path):
+    root = tmp_path / "original"
+    root.mkdir()
+    (root / "Makefile").write_text("original:\n\t$(FC) $(FFLAGS) kernel.f90 -o original\n")
+    (root / "kernel.f90").write_text("program original\nprint *, 42\nend program\n")
+    path = tmp_path / "reference.yaml"
+    path.write_text(yaml.safe_dump({
+        "version": 1, "provenance": "reviewed pristine upstream revision 123",
+        "source": {"root": "original", "patterns": ["*.f90"]},
+        "build": {"makefile": "Makefile", "target": "original", "executable": "original"},
+        "runs": [{"name": "odd-grid", "original_args": ["13", "7"],
+                  "candidate_args": ["13", "7"], "outputs": [
+                      {"original": "answer.npy", "candidate": "field.npy", "comparison": "array_exact"}]}],
+    }))
+    return path
+
+
+# The reviewed original is built in a workspace of its own, so what it
+# runs is not one of the executables the region's build produced. The
+# fake says so with a different digest, because a check that measures
+# another program is exactly what the gateway's cohort rule has to let
+# through knowingly.
+ORIGINAL_EXECUTABLE_IDENTITY = "c" * 64
+
+
+def reference_builder(*, wrong_candidate=False, drift=False, incomplete=False,
+                      value=42.0) -> FakeBuilder:
+    """Both programs may be internally repeatable while disagreeing with one another."""
+
+    def builds(request):
+        return built(request, sha256=(
+            ORIGINAL_EXECUTABLE_IDENTITY if "-original-" in request["attempt_id"]
+            else EXECUTABLE_IDENTITY["sha256"]
+        ))
+
+    def timed_runs(request):
+        original = "-original-" in request["attempt_id"]
+        value_written = value if original or not wrong_candidate else -value
+        written = [
+            {name: base64.b64encode(
+                npy.encode(np.array([value_written + (i if drift else 0)]))).decode()
+             for name in request["outputs"]}
+            for i in range(request["repeats"])
+        ]
+        if incomplete:
+            written = written[:1]
+        return TimeResponse(ok=True, outputs=written, runs_s=[0.1] * len(written))
+
+    return FakeBuilder(build=builds, time=timed_runs)
+
+
 class FakeOracle:
     def __init__(self):
         self.compare_calls = []

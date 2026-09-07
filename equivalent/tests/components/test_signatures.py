@@ -67,6 +67,6 @@ def test_every_check_is_reachable_from_the_handler_table():
 
 
 def test_every_action_with_a_component_has_a_check_and_every_check_a_row():
-    dispatchable = {row.name for row in ACTION_TABLE if row.component is not None}
+    dispatchable = {row.name for row in ACTION_TABLE if row.dispatchable}
 
     assert set(HANDLERS) == dispatchable

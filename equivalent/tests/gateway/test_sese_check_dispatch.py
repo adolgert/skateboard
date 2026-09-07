@@ -4,7 +4,6 @@ test_run.py already covers refusal/duplicate logic against
 synthetic claims recorded directly on the store; these tests exercise the
 real analyzer dispatch end to end, through the HTTP layer.
 """
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -13,14 +12,11 @@ from equivalent.region.current import frozen_for_allow_globs
 from equivalent.tree import init_baseline_repo
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
-from equivalent.tests.gateway.conftest import region_config
+from equivalent.tests.gateway.conftest import SPEC_PATH, region_config
 from equivalent.tests.fakes import write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
-STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
-BASELINE_STRATEGY_PATH = STRATEGY_PATH.parent / "cpu_reference.yaml"
-SPEC_PATH = "notes/regions/ch04-step.sese.yaml"
 
 CLEAN_SOURCE = """\
 module mod_kernel

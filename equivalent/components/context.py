@@ -120,6 +120,14 @@ class CheckResult:
     # every claim is about the candidate tree; a baseline timing is about
     # the baseline.
     subject_kind: str = "tree"
+    # Whether this verdict measured an executable that is not the region's
+    # own build. A check that builds and runs a program of its own -- the
+    # reviewed original the onboarded harness is compared against -- names
+    # binaries the current build claim never named, and the gateway would
+    # otherwise read those as a build that has moved out from under the
+    # claim. The check that knows it built something else says so here,
+    # rather than the gateway keeping a list of which checks those are.
+    measures_other_binaries: bool = False
 
 
 def failed(detail: dict, reasons) -> CheckResult:

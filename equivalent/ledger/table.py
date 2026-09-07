@@ -21,11 +21,13 @@ from dataclasses import dataclass
 
 from equivalent.ledger.acceptance import (
     ACCEPTANCE_REQUIREMENTS,
+    CONDITIONAL_REQUIREMENTS,
     ONBOARDING,
     ONBOARDING_REQUIREMENTS,
     PORTING,
     acceptance_requirements,
 )
+from equivalent.ledger.subjects import Subject
 
 # The row that names a phase's whole requirement list rather than an
 # action to dispatch. The porting one is the only row whose preconditions
@@ -71,11 +73,23 @@ CONFIG_KEY_SPECS = {
 }
 
 
+# The subjects one request has to hand, by the names a row's `requires`
+# and a check's answer call them. Written here, once, because a request
+# resolves all three before it decides anything and three readers -- the
+# precondition gate, the duplicate lookup, and the claim a check's
+# verdict is filed as -- each look one of them up by name. A name only
+# one of them knew would file a claim against a subject the gate never
+# checked.
+REQUEST_SUBJECT_KINDS = ("tree", "frozen", "baseline_tree")
+
+
 @dataclass(frozen=True)
 class ActionRow:
     name: str
     emits: tuple  # tuple[str, ...] -- predicate types this action can produce
-    requires: tuple  # tuple[tuple[str, str], ...] -- (predicate_type, subject_kind) pairs
+    # (predicate_type, subject_kind) pairs, each subject_kind one of
+    # REQUEST_SUBJECT_KINDS above.
+    requires: tuple
     deterministic: bool
     # None only for the row that names a phase's whole requirement list --
     # "accept" and "onboarded" -- which has nothing to dispatch to.
@@ -99,6 +113,16 @@ class ActionRow:
     # here so the answer is one sentence written once, rather than a
     # raise inside every branch of a dispatch.
     needs: tuple = ()
+
+    @property
+    def dispatchable(self) -> bool:
+        """Whether this row is an action to run rather than a whole list.
+
+        Every row but the one per phase that names the phase's entire
+        requirement list has a component to dispatch to. Readers ask this
+        rather than each spelling out what a missing component means.
+        """
+        return self.component is not None
 
 
 ACTION_TABLE = (
@@ -182,6 +206,67 @@ ACTION_TABLE = (
         True, None, ONBOARDING,
     ),
 )
+
+
+# Which subject a predicate type's own claim is filed against. Read from
+# what the rows and the two phases' requirement lists already say, rather
+# than a third hand-written copy: a baseline timing is about the baseline
+# tree, and everything else about the candidate. A predicate nothing
+# requires yet falls back to "tree".
+SUBJECT_KIND_OF = {
+    **{
+        predicate_type: subject_kind
+        for row in ACTION_TABLE for predicate_type, subject_kind in row.requires
+    },
+    **{
+        req.predicate_type: req.subject_kind
+        for req in (*ACCEPTANCE_REQUIREMENTS, *CONDITIONAL_REQUIREMENTS, *ONBOARDING_REQUIREMENTS)
+    },
+}
+
+
+def subject_kind_of(predicate_type: str) -> str:
+    """Which of a request's subjects a claim of this type is filed against."""
+    return SUBJECT_KIND_OF.get(predicate_type, "tree")
+
+
+def subjects_by_kind(*, tree: str, frozen: str, baseline_tree: str) -> dict:
+    """One request's three subjects, under the names everything looks them up by.
+
+    The hashes come from the caller, which is the one thing that knows
+    what is current; naming them is this module's, because the names are
+    what the rows are written in.
+    """
+    return {
+        "tree": Subject(kind="tree", sha256=tree),
+        "frozen": Subject(kind="frozen", sha256=frozen),
+        # A baseline timing is a claim about the pristine baseline, so it
+        # is filed against that tree rather than the candidate.
+        "baseline_tree": Subject(kind="tree", sha256=baseline_tree),
+    }
+
+
+def _subject_kinds_are_declared() -> None:
+    """No row and no requirement may name a subject a request cannot resolve.
+
+    Checked when this module is imported, because a kind nobody can
+    resolve is not a wrong answer at the point of use -- it is a lookup
+    that fails in the middle of a request that has already run a check.
+    """
+    unknown = sorted({
+        kind for kind in SUBJECT_KIND_OF.values() if kind not in REQUEST_SUBJECT_KINDS
+    } | {
+        kind for row in ACTION_TABLE for _, kind in row.requires
+        if kind not in REQUEST_SUBJECT_KINDS
+    })
+    if unknown:
+        raise RuntimeError(
+            f"the action table names subject kinds {unknown}, which a request has no "
+            f"subject for; it has {list(REQUEST_SUBJECT_KINDS)}"
+        )
+
+
+_subject_kinds_are_declared()
 
 
 def rows_for(phase: str) -> tuple:

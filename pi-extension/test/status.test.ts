@@ -1,6 +1,48 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { renderStatus, type StatusBody } from "../src/status.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * The gateway's own word for each finished phase, read out of its
+ * source. The extension keeps a copy of this map as its fallback for a
+ * gateway that does not send the word, and a copy that drifts would
+ * print the wrong word for a finished region.
+ */
+function gatewayFinishedWords(): Record<string, string> {
+  const source = readFileSync(
+    path.join(__dirname, "..", "..", "equivalent", "ledger", "acceptance.py"),
+    "utf8",
+  );
+  const phases: Record<string, string> = {};
+  for (const [, name, value] of source.matchAll(/^([A-Z_]+) = "([^"]+)"$/gm)) {
+    phases[name] = value;
+  }
+  const entry = source.match(/^FINISHED_WORD = \{(.+)\}$/m);
+  if (!entry) throw new Error("no FINISHED_WORD map in the gateway's acceptance.py");
+  const words: Record<string, string> = {};
+  for (const [, name, word] of entry[1].matchAll(/([A-Z_]+): "([^"]+)"/g)) {
+    const phase = phases[name];
+    if (!phase) throw new Error(`no phase name for ${name} in the gateway's acceptance.py`);
+    words[phase] = word;
+  }
+  return words;
+}
+
+function body(fields: Partial<StatusBody> = {}): StatusBody {
+  return {
+    tree: "T4",
+    frozen: "F1",
+    phase: "porting",
+    accepted: false,
+    rows: [],
+    ...fields,
+  };
+}
 
 describe("renderStatus", () => {
   it("prints each present claim's verdict and claim id, and ACCEPTED when accepted", () => {
@@ -56,16 +98,37 @@ describe("renderStatus", () => {
     expect(line).not.toContain("missing");
   });
 
-  it("says ONBOARDED for a region that is bringing a code in, not ACCEPTED", () => {
-    const body: StatusBody = {
-      tree: "T4",
-      frozen: "F1",
-      phase: "onboarding",
-      accepted: true,
-      rows: [{ predicateType: "manifest/valid", status: "present", verdict: "pass", claim_id: "c-1" }],
-    };
-    const text = renderStatus(body);
+  it("uses the word the gateway sent for a finished region", () => {
+    const text = renderStatus(body({ phase: "onboarding", accepted: true, finished_word: "ONBOARDED" }));
+
     expect(text.trim().endsWith("ONBOARDED")).toBe(true);
     expect(text).not.toContain("ACCEPTED");
+  });
+
+  it("falls back to its own word for a gateway that sends none", () => {
+    expect(renderStatus(body({ phase: "onboarding", accepted: true })).trim().endsWith("ONBOARDED"))
+      .toBe(true);
+    expect(renderStatus(body({ phase: "porting", accepted: false })).trim().endsWith("not accepted"))
+      .toBe(true);
+  });
+
+  it("keeps that fallback in step with the word the gateway would send", () => {
+    const words = gatewayFinishedWords();
+    expect(Object.keys(words).length).toBeGreaterThan(0);
+
+    for (const [phase, word] of Object.entries(words)) {
+      expect(renderStatus(body({ phase, accepted: true })).trim().endsWith(word)).toBe(true);
+    }
+  });
+
+  it("prints the reason acceptance is withheld above the rows, and nothing when there is none", () => {
+    const note = "Advisory only: nobody could confirm the executables.";
+    const withNote = renderStatus(body({
+      note,
+      rows: [{ predicateType: "gpu/executed", status: "missing", producing_action: "run_replay" }],
+    }));
+
+    expect(withNote.split("\n")[0]).toBe(note);
+    expect(renderStatus(body())).not.toContain("Advisory");
   });
 });

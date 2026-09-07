@@ -82,19 +82,30 @@ def current_build_claim(store, phase: str, tree: Subject, core_materials=()):
     return claim if claim is not None and claim.predicate.verdict == "pass" else None
 
 
+def dependent_materials(core_materials=(), cohort=()) -> tuple[Subject, ...]:
+    """The context a claim that rests on a build has to have been reached under.
+
+    The caller's own context plus every executable the current build
+    named. When there is no such build the sentinel stands in and nothing
+    matches it: a claim about executables nobody holds any more is not
+    evidence about the code as it stands. Said once here because the
+    status computation and the gateway's /run gate both ask it, and two
+    answers would let a request dispatch on evidence status calls stale.
+    """
+    return (*core_materials, *(cohort or (NO_CURRENT_BUILD,)))
+
+
 def required_materials_by_predicate(
     store, requirements, phase: str, tree: Subject, core_materials=(),
 ) -> dict[str, tuple[Subject, ...]]:
     """Material context for each dependent predicate in status/promotion.
 
     Foundation claims predate the executable cohort and continue to use the
-    caller's core context. Every later claim must contain all identities from
-    the current passing build. The sentinel makes dependent legacy evidence
-    stale when no usable build cohort exists.
+    caller's core context; every later claim is judged by the rule above.
     """
     build_claim = current_build_claim(store, phase, tree, core_materials)
     cohort = binary_materials(build_claim.predicate.detail) if build_claim else ()
-    dependent = (*core_materials, *(cohort or (NO_CURRENT_BUILD,)))
+    dependent = dependent_materials(core_materials, cohort)
     return {
         requirement.predicate_type: dependent
         for requirement in requirements

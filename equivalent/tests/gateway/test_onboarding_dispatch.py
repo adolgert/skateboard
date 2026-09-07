@@ -5,27 +5,26 @@ stand-in builder, so what is under test here is the dispatch: the
 refusal before the evidence exists, the claims, the materials they name,
 and what `status` says when all of them have passed.
 """
-from pathlib import Path
+from dataclasses import replace
 
 from fastapi.testclient import TestClient
 
 from equivalent.cli import render
 from equivalent.gateway.app import create_app
+from equivalent.gateway.dispatch import HANDLERS
 from equivalent.tree import init_baseline_repo
 from equivalent.ledger.table import rows_for
 from equivalent.ledger.acceptance import ONBOARDING
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
 from equivalent.tests.gateway.conftest import ONBOARDING_STRATEGY_PATH, region_config
-from equivalent.tests.fakes import write_program, write_tree
-from equivalent.tests.components.test_original_check import reference, reference_builder
+from equivalent.tests.fakes import reference, reference_builder, write_program, write_tree
 
 TOKEN = "test-token"
 # Every action of the onboarding phase that has something to dispatch to,
 # read from the gateway's own table rather than listed again here.
-ONBOARDING_ACTIONS = [row.name for row in rows_for(ONBOARDING) if row.component is not None]
+ONBOARDING_ACTIONS = [row.name for row in rows_for(ONBOARDING) if row.dispatchable]
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
-STRATEGY_DIR = Path(__file__).resolve().parents[2] / "strategy" / "files"
 REGION = "tsunami:onboarding"
 
 
@@ -265,3 +264,60 @@ def test_a_workspace_lost_to_a_restart_is_rebuilt_by_the_phases_own_build(tmp_pa
 
     assert "error" not in body
     assert len(builder.build_calls) == builds_before + 2
+
+
+def _through(client, last_action):
+    """Every onboarding action up to, but not including, this one."""
+    for action in ONBOARDING_ACTIONS[:ONBOARDING_ACTIONS.index(last_action)]:
+        _run(client, action)
+
+
+def test_a_verdict_that_names_a_binary_no_build_of_this_region_made_is_refused(
+    tmp_path, monkeypatch,
+):
+    # Every claim after the build is about the executables the current
+    # build claim named, so that a pass cannot quietly be about a program
+    # built some other way. The original comparison is the one check that
+    # is allowed to name another binary, and only because it says it
+    # built one; take that declaration away and the same verdict must not
+    # be filed.
+    client, cfg, store, _ = _client(tmp_path)
+    original = HANDLERS["harness_original"]
+
+    def undeclared(ctx, config):
+        from dataclasses import replace as replace_result
+
+        return replace_result(original.check(ctx, config), measures_other_binaries=False)
+
+    monkeypatch.setitem(HANDLERS, "harness_original", replace(original, check=undeclared))
+    _through(client, "harness_original")
+
+    body = _run(client, "harness_original")
+
+    assert "does not match the current passing build claim" in body["error"]
+    assert "harness/original" not in [claim.predicateType for claim in store.all_claims()]
+    # And nothing it packed was kept: bytes in the ledger that no claim
+    # names read as a comparison somebody made.
+    assert [p for p in (store.region_dir / "artifacts").iterdir() if p.is_file()] == []
+
+
+def test_a_check_answering_about_a_subject_the_request_has_not_got_is_an_error(
+    tmp_path, monkeypatch,
+):
+    # A check and the table disagreeing about what a verdict is about is
+    # a mistake in the code, but the session still reads an answer that
+    # says what happened rather than a crash.
+    client, _, store, _ = _client(tmp_path)
+    manifest_check = HANDLERS["manifest_check"]
+
+    def elsewhere(ctx, config):
+        from dataclasses import replace as replace_result
+
+        return replace_result(manifest_check.check(ctx, config), subject_kind="somewhere_else")
+
+    monkeypatch.setitem(HANDLERS, "manifest_check", replace(manifest_check, check=elsewhere))
+
+    body = _run(client, "manifest_check")
+
+    assert "somewhere_else" in body["error"]
+    assert store.all_claims() == []

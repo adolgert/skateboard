@@ -62,11 +62,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import re
 
 import yaml
 
 from equivalent.ledger.acceptance import ONBOARDING, PHASES, PORTING
+from equivalent.ledger.subjects import is_digest
 from equivalent.manifest.layout import DATASETS_DIR
 from equivalent.manifest.schema import Manifest, load_manifest
 from equivalent.reference.schema import load_reference
@@ -226,9 +226,7 @@ def _load_region(
 
     phase = raw["phase"]
     for key in ("executor_identity", "oracle_identity"):
-        if raw.get(key) is not None and (
-            not isinstance(raw[key], str) or re.fullmatch(r"[0-9a-f]{64}", raw[key]) is None
-        ):
+        if raw.get(key) is not None and not is_digest(raw[key]):
             raise ValueError(f"{region_where}: {key} must be a lowercase SHA-256 identity")
     if phase not in PHASES:
         raise ValueError(

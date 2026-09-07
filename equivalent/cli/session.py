@@ -34,7 +34,7 @@ from equivalent.ledger.store import LedgerStore
 # Nothing here is hand-listed, so a new row in the table is a new tool
 # name here on the same day.
 GATEWAY_TOOL_NAMES = frozenset(
-    {row.name for row in ACTION_TABLE if row.component is not None}
+    {row.name for row in ACTION_TABLE if row.dispatchable}
     | {"submit", "status", "claim"}
 )
 

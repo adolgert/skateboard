@@ -31,6 +31,19 @@ SUBJECT_KINDS = (
 EVIDENCE_POLICY_VERSION = 2
 
 
+def is_digest(value) -> bool:
+    """Whether this is a digest, written the one way everything writes one.
+
+    Sixty-four lowercase hexadecimal characters and nothing else. A
+    subject, a builder's executor identity, an oracle's identity, and a
+    reviewed pin in a deployment file are all the same kind of name for
+    the same kind of thing, so they are all held to this. Anything else
+    is a value nobody may treat as naming a file or a service, and the
+    caller says what it is going to do about that.
+    """
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
 @dataclass(frozen=True)
 class Subject:
     kind: str
@@ -39,7 +52,7 @@ class Subject:
     def __post_init__(self):
         if self.kind not in SUBJECT_KINDS:
             raise ValueError(f"unknown subject kind: {self.kind!r}")
-        if not isinstance(self.sha256, str) or re.fullmatch(r"[0-9a-f]{64}", self.sha256) is None:
+        if not is_digest(self.sha256):
             raise ValueError("subject sha256 must be exactly 64 lowercase hexadecimal characters")
 
     def to_dict(self) -> dict:

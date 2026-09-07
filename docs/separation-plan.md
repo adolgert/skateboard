@@ -540,6 +540,58 @@ Layout recommendations from the cross-cutting review, adopted:
 relative-import blind spot and its three looser-than-needed rows are
 fixed with it.
 
+## Step 4 as run
+
+- **Wave 1** — commit `421e6ed`, three agents in parallel (ledger and
+  below; components and the wire; services). Decisions taken: the glob
+  rule lives in `ledger/subjects.glob_matches` (re-exported by
+  `manifest/schema`) so `strategy` need not import `manifest`; the
+  policy subject is plain sha256 of the tolerance bytes, on both sides,
+  which invalidates policy materials on ledgers written before it;
+  `FOUNDATION_PREDICATES` stays written out and is pinned to the table
+  by a test; `check_keys` for the three loaders is `ledger/loading.py`;
+  the attempt-id functions are `components/workspaces.py` (they name a
+  builder directory, so neither `tree.py` nor `names.py`); `Provenance`
+  is `components/phase.py`; `backend.py` was completed rather than
+  deleted, with `regression.check_holdout` the one stated exception
+  that withholds the diagnostic; `build_verdict` takes a `Recipe` so the
+  reviewed original's build goes through it; the oracle answers are
+  trimmed to what is read; `ReplayTarget` is a model `BuildTarget`
+  extends, because typing the mutate request's target as `BuildTarget`
+  would have required a role the gateway does not send; `Bands` values
+  stay untyped so an integer `ulp` is not widened to a float. Behavior
+  changes: `compute_status` derives per-predicate materials itself, so
+  a ledger only reads as finished when its build claim names an
+  executable every dependent claim carries; `program_regression` with
+  a missing declared output fails at the measurement; `property_check`
+  no longer re-checks `max_examples` (the table gates it);
+  `original_check` keeps no artifacts on failure; `harness_timing`'s
+  `outputs` key is now name→digest with the declared list under
+  `declared_outputs`; `time_run` copies the tree per repetition under
+  both policies. Removed the `Tree.materialized` alias after both
+  callers switched to `Tree.directory`.
+
+- **Wave 2** — the gateway and the pi extension, in parallel.
+  `_post_run` is fifteen lines over a frozen `RunContext` and ten
+  module-level functions (resolve, restore, what is missing, what is
+  already filed, the context a check sees, the cohort rule before
+  anything is kept, record, dispatch-keep-record); `app.py` grew from
+  819 to 955 lines because the context's fields and the functions'
+  docstrings are written out. The backend-availability check runs
+  before a lost build is restored. `RunRequest` forbids unknown fields
+  (answered 400, the gateway's own mapping of validation errors).
+  `CheckResult.measures_other_binaries` replaces the hardcoded
+  `harness/original`. `ledger/table.py` owns the request subject kinds
+  and checks at import that every row names one; `dispatch._parity`
+  also checks `needs` against the component's backend prefix and each
+  handler's subject kind against the table. `ledger/evidence.py`
+  `dependent_materials` serves both `/run` and `/status`. One
+  `is_digest` in `ledger/subjects.py`. `ActionRow.dispatchable` at all
+  eight sites. The extension renders `note` and uses the gateway's
+  `finished_word`, with its fallback map checked against
+  `ledger/acceptance.py`'s source (so the extension's tests now need
+  the Python tree beside them).
+
 ## Appendix — The review findings, verbatim anchors
 
 Findings marked **[dissolves in 2x]** are expected to disappear as a

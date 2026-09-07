@@ -1,13 +1,19 @@
-from pathlib import Path
 from dataclasses import replace
 
 from fastapi.testclient import TestClient
 
 from equivalent.gateway.app import config_hash, create_app
+from equivalent.gateway.dispatch import HANDLERS
 from equivalent.region.evidence import evidence_materials_for
 from equivalent.region.current import current_tree_and_frozen
 from equivalent.tree import init_baseline_repo
-from equivalent.ledger.table import ACTION_TABLE, CONFIG_KEY_SPECS
+from equivalent.ledger.table import (
+    ACTION_TABLE,
+    CONFIG_KEY_SPECS,
+    REQUEST_SUBJECT_KINDS,
+    subject_kind_of,
+    subjects_by_kind,
+)
 from equivalent.ledger.acceptance import PHASES
 from equivalent.ledger.predicates import PREDICATE_TYPES
 from equivalent.ledger.records import Predicate
@@ -15,14 +21,11 @@ from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
-from equivalent.tests.gateway.conftest import region_config
+from equivalent.tests.gateway.conftest import SPEC_PATH, STRATEGY_PATH, region_config
 from equivalent.tests.fakes import write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
-SPEC_PATH = "notes/regions/ch04-step.sese.yaml"
-STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
-BASELINE_STRATEGY_PATH = STRATEGY_PATH.parent / "cpu_reference.yaml"
 
 
 def _seed(root, with_makefile=False):
@@ -236,8 +239,8 @@ def test_every_row_references_real_predicate_types_and_agrees_with_the_registry_
             assert predicate_type in PREDICATE_TYPES
         for predicate_type, subject_kind in row.requires:
             assert predicate_type in PREDICATE_TYPES
-            assert subject_kind in ("tree", "frozen", "baseline_tree")
-        if row.component is None:
+            assert subject_kind in REQUEST_SUBJECT_KINDS
+        if not row.dispatchable:
             # The one row per phase that names the whole requirement list
             # has nothing to dispatch to.
             assert row.name in ("accept", "onboarded")
@@ -444,3 +447,87 @@ def test_a_build_claim_that_names_no_executable_is_an_error_not_a_refusal(tmp_pa
 
     assert response.status_code == 503
     assert "names no executable" in response.json()["detail"]
+
+
+def test_a_body_with_a_field_the_endpoint_does_not_have_is_rejected(tmp_path):
+    # A misspelled "config" that was quietly dropped would run the action
+    # with its defaults and report a success nobody asked for, so an
+    # unknown field is the caller's mistake and is named as one. Nothing
+    # about it reaches the region's request log: no action ever ran.
+    client, cfg, store = _client(tmp_path)
+
+    r = client.post(
+        "/run",
+        json={"action": "sese_check", "region": cfg.region_id, "configuration": {"repeats": 5}},
+        headers=HEADERS,
+    )
+
+    assert r.status_code == 400
+    assert "configuration" in r.json()["detail"]
+    assert store.all_requests() == []
+
+
+def _passing_claim(store, cfg, predicate_type, detail):
+    tree_sha, _ = _current(cfg, store)
+    return store.record_claim(
+        [Subject(kind="tree", sha256=tree_sha)], predicate_type,
+        Predicate(tool="t", version="0.1", configHash="cfg", verdict="pass", detail=detail),
+        evidence_materials_for(cfg), "sess-0",
+    )
+
+
+def test_a_lost_build_that_no_configured_builder_could_remake_is_reported_plainly(
+    tmp_path, monkeypatch,
+):
+    # A gateway with no builder cannot ask whether the executables are
+    # still there, so the build reads as lost. What it must not do is
+    # dispatch a rebuild at a client it has not got: it answers that the
+    # backend is not configured, files no claim, and runs no check.
+    def never(ctx, config):
+        raise AssertionError("no check may run without the backend it needs")
+
+    monkeypatch.setitem(HANDLERS, "build_replay", replace(HANDLERS["build_replay"], check=never))
+    client, cfg, store = _client(tmp_path)
+    _submit_spec_only(client, cfg)
+    _passing_claim(store, cfg, "sese/verified", {"allow_globs": [SPEC_PATH]})
+    _passing_claim(store, cfg, "build/replay", {
+        "attempt_id": "att-1", "targets": {"replay": {"executable": "replay", "sha256": "e" * 64}},
+    })
+
+    body = client.post(
+        "/run", json={"action": "run_replay", "region": cfg.region_id, "config": {}},
+        headers=HEADERS,
+    ).json()
+
+    assert body == {"error": "builder not configured"}
+    assert [claim.predicateType for claim in store.all_claims()] == [
+        "sese/verified", "build/replay",
+    ]
+    assert store.all_requests()[-1].outcome == "error"
+
+
+def test_every_action_files_its_claims_against_the_subject_its_row_records():
+    # The gateway looks for a repeat of a request under the subject the
+    # table records for the predicate, and files the new claim under the
+    # subject the check's own answer names. The two disagreeing would
+    # file a claim the duplicate lookup could never find again, so every
+    # handler declares which subject it files against.
+    for row in ACTION_TABLE:
+        if not row.dispatchable:
+            continue
+        declared = HANDLERS[row.name].subject_kind
+        assert declared in REQUEST_SUBJECT_KINDS
+        for predicate_type in row.emits:
+            assert subject_kind_of(predicate_type) == declared
+    # The one measurement that is not about the candidate tree.
+    assert HANDLERS["time_baseline"].subject_kind == "baseline_tree"
+
+
+def test_a_request_resolves_a_subject_for_every_kind_the_rows_name():
+    subjects = subjects_by_kind(tree="a" * 64, frozen="b" * 64, baseline_tree="c" * 64)
+
+    assert set(subjects) == set(REQUEST_SUBJECT_KINDS)
+    # The baseline is a tree like any other; only the name it is looked
+    # up by says which tree it is.
+    assert subjects["baseline_tree"].kind == "tree"
+    assert subjects["baseline_tree"].sha256 == "c" * 64

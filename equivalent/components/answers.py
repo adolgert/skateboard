@@ -24,17 +24,13 @@ spellings drift apart.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import asdict, dataclass, field, fields
 from typing import ClassVar, Protocol
 
+from equivalent.ledger.subjects import is_digest
 from equivalent.ledger.vocabulary import FAIL, PASS
 
 from .errors import ComponentError
-
-# What a digest field has to look like before anything is allowed to
-# believe it names a file: a claim's material is built out of one.
-DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
 def whole_number(kind: str, name: str, value, *, optional: bool = False):
@@ -104,7 +100,9 @@ class Answer:
                 )
         for name in self.DIGESTS:
             value = getattr(self, name)
-            if not isinstance(value, str) or DIGEST.fullmatch(value) is None:
+            # A claim's material is built out of one of these, so a field
+            # that is not a digest is an answer nobody may believe.
+            if not is_digest(value):
                 raise ComponentError(
                     f"the {self.SPEAKER}'s {self.KIND} answer gives no {name}: {value!r}"
                 )

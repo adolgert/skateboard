@@ -192,6 +192,11 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     if not detail["problems"] and all(run[PASS] for run in detail["runs"]):
         return CheckResult(
             verdict=PASS, detail=detail, materials=materials, stores=tuple(kept),
+            # The reviewed original was built here, in a workspace of its
+            # own: this verdict names a binary the region's build never
+            # produced, and saying so is what keeps that from reading as
+            # a build that moved.
+            measures_other_binaries=True,
         )
     return CheckResult(
         verdict=FAIL, detail=detail,
@@ -201,4 +206,5 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
               for run in detail["runs"] if not run[PASS]),
         ]),
         materials=materials,
+        measures_other_binaries=True,
     )

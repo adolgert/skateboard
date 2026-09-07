@@ -15,6 +15,7 @@ at first.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable, Mapping, Union
 
 from equivalent.components import (
     build_replay,
@@ -35,15 +36,32 @@ from equivalent.components import (
     sese_check,
     timing,
 )
-from equivalent.ledger.table import ACTION_TABLE
+from equivalent.components.context import CheckContext, CheckResult
+from equivalent.ledger.table import ACTION_TABLE, SUBJECT_KIND_OF
+
+# The context the gateway resolved and the settings the session asked
+# for, in; a verdict out.
+Check = Callable[[CheckContext, dict], Union[CheckResult, Mapping[str, CheckResult]]]
 
 
 @dataclass(frozen=True)
 class Handler:
-    """One action's check, and the tool name its claims are filed under."""
+    """One action's check, and the tool name its claims are filed under.
 
-    check: object
+    A row that emits one predicate answers with one CheckResult. A row
+    that emits several -- sanitize is the only one -- answers with a
+    mapping keyed by predicate type, and the gateway files one claim per
+    entry of it, all in the one dispatch.
+    """
+
+    check: Check
     tool: str
+    # Which of the request's subjects this action's claims are filed
+    # against, which is the kind its check names in every result it
+    # returns. The gateway looks for a repeat of a request under this
+    # subject before it dispatches, so a check filing against another
+    # would never find its own earlier claim and would run again forever.
+    subject_kind: str = "tree"
 
 
 HANDLERS = {
@@ -57,7 +75,7 @@ HANDLERS = {
     "regression_holdout": Handler(regression.check_holdout, "oracle"),
     "program_regression": Handler(program_regression.check, "builder"),
     "time_port": Handler(timing.check_port, "builder"),
-    "time_baseline": Handler(timing.check_baseline, "builder"),
+    "time_baseline": Handler(timing.check_baseline, "builder", subject_kind="baseline_tree"),
 
     # Onboarding.
     "manifest_check": Handler(manifest_check.check, "manifest_check"),
@@ -73,8 +91,17 @@ HANDLERS = {
 
 
 def _parity() -> None:
-    """Every dispatchable row has a check, and every check has a row."""
-    dispatchable = {row.name for row in ACTION_TABLE if row.component is not None}
+    """Every dispatchable row has a check, and every check has a row.
+
+    Two more things are held to the row while we are here. A row whose
+    component names a backend must declare that backend in `needs`, or
+    the gateway would dispatch to a client it has not got instead of
+    answering that it is not configured. And the subject a handler files
+    against must be the subject the table says that predicate's claims
+    live under, or the duplicate lookup would search where the claim
+    never went.
+    """
+    dispatchable = {row.name for row in ACTION_TABLE if row.dispatchable}
     without_handler = sorted(dispatchable - set(HANDLERS))
     without_row = sorted(set(HANDLERS) - dispatchable)
     if without_handler or without_row:
@@ -82,6 +109,22 @@ def _parity() -> None:
             f"the action table and the handler table disagree: {without_handler} name a "
             f"component and have no check, {without_row} have a check and no row"
         )
+    undeclared = sorted(
+        f"{row.name} reaches the {backend} but does not declare it"
+        for row in ACTION_TABLE if row.dispatchable
+        for backend in ("builder", "oracle")
+        if row.component.startswith(f"{backend}:") and backend not in row.needs
+    )
+    misfiled = sorted(
+        f"{row.name} files {predicate_type} against {HANDLERS[row.name].subject_kind}, "
+        f"which the table records under {SUBJECT_KIND_OF[predicate_type]}"
+        for row in ACTION_TABLE if row.dispatchable
+        for predicate_type in row.emits
+        if predicate_type in SUBJECT_KIND_OF
+        and SUBJECT_KIND_OF[predicate_type] != HANDLERS[row.name].subject_kind
+    )
+    if undeclared or misfiled:
+        raise RuntimeError("; ".join((*undeclared, *misfiled)))
 
 
 _parity()

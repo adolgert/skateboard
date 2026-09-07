@@ -5,7 +5,6 @@ this environment).
 """
 import base64
 from functools import partial
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -16,7 +15,7 @@ from equivalent.components.program_outputs import program_variable
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
-from equivalent.tests.gateway.conftest import region_config
+from equivalent.tests.gateway.conftest import SPEC_PATH, STRATEGY_PATH, region_config
 from equivalent.tests.fakes import (
     EXECUTABLE_IDENTITY,
     FakeBuilder,
@@ -32,9 +31,6 @@ from equivalent.tests.fakes import (
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
-STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
-BASELINE_STRATEGY_PATH = STRATEGY_PATH.parent / "cpu_reference.yaml"
-SPEC_PATH = "notes/regions/ch04-step.sese.yaml"
 
 CLEAN_SOURCE = """\
 module mod_kernel

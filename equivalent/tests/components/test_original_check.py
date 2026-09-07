@@ -1,51 +1,8 @@
 """Onboarding must agree with a reference it did not create itself."""
-import base64
-
-import numpy as np
 import pytest
-import yaml
 
-from equivalent.capture import npy
 from equivalent.components import original_check
-from equivalent.components.answers import TimeResponse
-from equivalent.tests.fakes import FakeBuilder
-
-
-def reference(tmp_path):
-    root = tmp_path / "original"
-    root.mkdir()
-    (root / "Makefile").write_text("original:\n\t$(FC) $(FFLAGS) kernel.f90 -o original\n")
-    (root / "kernel.f90").write_text("program original\nprint *, 42\nend program\n")
-    path = tmp_path / "reference.yaml"
-    path.write_text(yaml.safe_dump({
-        "version": 1, "provenance": "reviewed pristine upstream revision 123",
-        "source": {"root": "original", "patterns": ["*.f90"]},
-        "build": {"makefile": "Makefile", "target": "original", "executable": "original"},
-        "runs": [{"name": "odd-grid", "original_args": ["13", "7"],
-                  "candidate_args": ["13", "7"], "outputs": [
-                      {"original": "answer.npy", "candidate": "field.npy", "comparison": "array_exact"}]}],
-    }))
-    return path
-
-
-def reference_builder(*, wrong_candidate=False, drift=False, incomplete=False,
-                      value=42.0) -> FakeBuilder:
-    """Both programs may be internally repeatable while disagreeing with one another."""
-
-    def timed_runs(request):
-        original = "-original-" in request["attempt_id"]
-        value_written = value if original or not wrong_candidate else -value
-        written = [
-            {name: base64.b64encode(
-                npy.encode(np.array([value_written + (i if drift else 0)]))).decode()
-             for name in request["outputs"]}
-            for i in range(request["repeats"])
-        ]
-        if incomplete:
-            written = written[:1]
-        return TimeResponse(ok=True, outputs=written, runs_s=[0.1] * len(written))
-
-    return FakeBuilder(time=timed_runs)
+from equivalent.tests.fakes import reference, reference_builder
 
 
 def check(harness, builder, path):
