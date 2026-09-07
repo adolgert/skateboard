@@ -4,7 +4,7 @@
 # Trust role: this is the only witness to what a build actually did. The
 # Makefile came in with the submission, so the builder cannot know its
 # command lines in advance; instead every compiler invocation passes
-# through here and is written down before it runs. contract.py reads that
+# through here and is written down before it runs. compile_log.py reads that
 # log to say whether the strategy's flags reached every compile and
 # whether anything outside the submitted tree was compiled. A shim that
 # missed an invocation, or wrote it inaccurately, would let a build that

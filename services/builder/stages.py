@@ -16,10 +16,14 @@ intact, runs `make` on the makefile the code's manifest names, and hands
 the Makefile the strategy's compiler as a logging shim. Nothing here
 knows a source file name, a module order, or a program name -- those all
 come from the tree and the manifest.
+
+Every stage is handed a workspace rather than an attempt id: where the
+files are, who owns them while a job runs, what proves an executable is
+the one that was built, and how a submitted command is run all live
+there, so a stage is left with only its own question to answer.
 """
 import base64
 import glob
-import hashlib
 import json
 import multiprocessing
 import os
@@ -29,19 +33,25 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import contract, executor, mutate as mutants
+from . import compile_log, mutate as mutants
+from .contract import (
+    BuildResponse, CaptureResponse, MutateResponse, PropertiesResponse,
+    RunResponse, SanitizeResponse, TimeResponse,
+)
+from .workspace import WORK_ROOT, DisposableJobs, ExecutionFailed, Workspace, path_inside
 
 HARNESS = "/opt/harness"  # baked, trusted: npy_io.f90, fc-shim
-WORK_ROOT = "/work"  # one workspace per attempt, rebuilt from scratch each build
 
-# Production leaves this unset and therefore always uses DockerJobExecutor.
-# Unit tests replace it with executor.local_run explicitly; it is not selected
-# by an environment switch and cannot become a deployment fallback.
-_JOB_RUNNER = None
-_DOCKER_EXECUTOR = None
+# How a submitted command is run when a caller does not say. None means the
+# production policy: a fresh disposable container per command, the
+# supervisor owning the files, and protected evidence of what executed.
+# Unit tests replace it with the in-process policy explicitly; it is not
+# selected by an environment switch and cannot become a deployment fallback.
+POLICY = None
 
 # The capture format on disk: one file per variable in the case directory,
 # <variable>.npy going in and <variable>.out.npy coming out. Each file says
@@ -100,163 +110,26 @@ CASE_FILE = "case.json"
 CASES_FILE = "cases.json"
 
 
-def _workspace(attempt_id, work_root):
-    safe = re.sub(r"[^A-Za-z0-9._-]", "_", attempt_id)
-    if safe != attempt_id or safe in ("", ".", "..", ".artifacts"):
-        # ``@`` cannot occur on the unchanged path above.  Reserving it for
-        # encoded names prevents an attacker from supplying the sanitized name
-        # of another attempt directly and landing in the same workspace.
-        digest = hashlib.sha256(str(attempt_id).encode()).hexdigest()
-        safe = f"@{(safe or 'attempt')[:80]}-{digest}"
-    return os.path.join(work_root, safe)
+# The deployed policy, kept for the life of the process so the immutable
+# job image is resolved once rather than once per request.
+_PRODUCTION = None
 
 
-def _tree_dir(attempt_id, work_root):
-    return os.path.join(_workspace(attempt_id, work_root), "tree")
+def _production_policy(work_root=WORK_ROOT) -> DisposableJobs:
+    global _PRODUCTION
+    if _PRODUCTION is None or _PRODUCTION.work_root != os.path.abspath(str(work_root)):
+        _PRODUCTION = DisposableJobs(work_root)
+    return _PRODUCTION
 
 
-def write_tree(tree_dir, tree) -> str:
-    """Write the submitted files under `tree_dir`, directories and all.
-
-    `tree` is [{"path": str, "b64": str}] -- the whole tracked tree, not a
-    filtered source list, because a code's build reads namelists, include
-    files, and data the harness has no way to recognize. Paths are
-    relative to the tree root and may not climb out of it: a path that
-    would write outside the workspace is refused by name rather than
-    written somewhere surprising.
-    """
-    tree_dir = os.path.abspath(tree_dir)
-    for entry in tree:
-        path = entry["path"]
-        if os.path.isabs(path) or not path or ".." in path.replace("\\", "/").split("/"):
-            raise ValueError(f"tree path {path!r} does not stay inside the tree")
-        destination = os.path.join(tree_dir, path)
-        os.makedirs(os.path.dirname(destination), exist_ok=True)
-        with open(destination, "wb") as out:
-            out.write(base64.b64decode(entry["b64"]))
-    return tree_dir
-
-
-def _job_executor(work_root=WORK_ROOT):
-    global _DOCKER_EXECUTOR
-    if _JOB_RUNNER is not None:
-        return None
-    if work_root != WORK_ROOT:
-        raise executor.IsolationUnavailable(
-            "a non-production work root requires an explicitly injected test job runner"
-        )
-    if _DOCKER_EXECUTOR is None:
-        _DOCKER_EXECUTOR = executor.DockerJobExecutor(work_root=work_root)
-    return _DOCKER_EXECUTOR
-
-
-def _run(cmd, cwd=None, env=None, timeout=300, *, work_root=WORK_ROOT, gpu=False):
-    runner = _JOB_RUNNER
-    result = (
-        runner(cmd, cwd=cwd, env=env, timeout=timeout, profile_gpu=False, gpu=gpu)
-        if runner is not None
-        else _job_executor(work_root).run(cmd, cwd=cwd, env=env, timeout=timeout, gpu=gpu)
-    )
-    return result.returncode, result.stdout, result.stderr
-
-
-def _run_audited(cmd, cwd=None, env=None, timeout=300, *, work_root=WORK_ROOT, gpu=False):
-    runner = _JOB_RUNNER
-    result = (
-        runner(cmd, cwd=cwd, env=env, timeout=timeout, audit_exec=True, gpu=gpu)
-        if runner is not None
-        else _job_executor(work_root).run(
-            cmd, cwd=cwd, env=env, timeout=timeout, audit_exec=True, gpu=gpu,
-        )
-    )
-    return result.returncode, result.stdout, result.stderr, result.evidence
-
-
-def _run_profiled(cmd, cwd=None, env=None, timeout=300, *, work_root=WORK_ROOT):
-    runner = _JOB_RUNNER
-    result = (
-        runner(cmd, cwd=cwd, env=env, timeout=timeout, profile_gpu=True)
-        if runner is not None
-        else _job_executor(work_root).run(
-            cmd, cwd=cwd, env=env, timeout=timeout, profile_gpu=True,
-        )
-    )
-    return result.returncode, result.stdout, result.stderr, result.evidence
+def workspace_for(attempt_id, *, work_root=WORK_ROOT, policy=None) -> Workspace:
+    """The one workspace an attempt owns, under the policy this service runs."""
+    return Workspace(work_root, attempt_id, policy or POLICY or _production_policy(work_root))
 
 
 def isolation_status() -> dict:
     """Deployment readiness; absence of the boundary makes health fail closed."""
-    try:
-        if _JOB_RUNNER is not None:
-            return {"ok": True, "backend": "injected-test-runner"}
-        return _job_executor().probe()
-    except Exception as exc:
-        return {"ok": False, "backend": "docker", "error": str(exc)}
-
-
-def _artifact_file(attempt_id, work_root):
-    name = os.path.basename(_workspace(attempt_id, work_root)) + ".json"
-    return os.path.join(work_root, ".artifacts", name)
-
-
-def _sha256_file(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _write_artifacts(attempt_id, targets, work_root):
-    records = {}
-    tree_dir = _tree_dir(attempt_id, work_root)
-    for target in targets:
-        path = _in_tree(tree_dir, target["executable"])
-        if path is None or not os.path.isfile(path) or os.path.islink(path):
-            continue
-        records[target["executable"]] = {
-            "sha256": _sha256_file(path), "size": os.path.getsize(path),
-            "role": target["role"],
-        }
-    directory = os.path.dirname(_artifact_file(attempt_id, work_root))
-    os.makedirs(directory, mode=0o700, exist_ok=True)
-    destination = _artifact_file(attempt_id, work_root)
-    temporary = destination + ".new"
-    execution = isolation_status() if _JOB_RUNNER is None else {
-        "executor_identity": "explicit-local-test-runner", "image_id": None,
-    }
-    with open(temporary, "w", encoding="utf-8") as out:
-        json.dump({
-            "attempt_id": attempt_id, "executables": records,
-            "executor_identity": execution.get("executor_identity"),
-            "image_id": execution.get("image_id"),
-        }, out, sort_keys=True)
-    os.replace(temporary, destination)
-    return records
-
-
-def artifact_identities(attempt_id, *, work_root=WORK_ROOT) -> dict:
-    try:
-        with open(_artifact_file(attempt_id, work_root), encoding="utf-8") as source:
-            record = json.load(source)
-    except (OSError, ValueError):
-        return {"ok": False, "attempt_id": attempt_id, "executables": {}}
-    valid = {}
-    tree_dir = _tree_dir(attempt_id, work_root)
-    for relative, identity in record.get("executables", {}).items():
-        path = _in_tree(tree_dir, relative)
-        matches = bool(
-            path and os.path.isfile(path) and not os.path.islink(path)
-            and os.path.getsize(path) == identity.get("size")
-            and _sha256_file(path) == identity.get("sha256")
-        )
-        valid[relative] = {**identity, "verified": matches}
-    return {
-        "ok": bool(valid) and all(item["verified"] for item in valid.values()),
-        "attempt_id": attempt_id, "executables": valid,
-        "executor_identity": record.get("executor_identity"),
-        "image_id": record.get("image_id"),
-    }
+    return (POLICY or _production_policy()).status()
 
 
 def _read_log(path: str) -> str:
@@ -295,83 +168,83 @@ def build_env(compiler, flags, link_flags, log_path, harness_dir=HARNESS) -> dic
         "LDFLAGS": " ".join(link_flags),
         "HARNESS": harness_dir,
     }
-    module_flag = contract.module_flag(compiler)
+    module_flag = compile_log.module_flag(compiler)
     if module_flag is not None:
         env["MODFLAG"] = module_flag
     return env
 
 
-def _prepare_job_files(workspace, *, include_tree=False):
-    """Give the fixed unprivileged job uid ownership of this attempt only."""
-    if _JOB_RUNNER is not None:
-        return
-    workspace = os.path.abspath(workspace)
-    protected_parent = os.path.isdir(os.path.join(workspace, "tree"))
-    for root, directories, files in os.walk(workspace):
-        if not include_tree and os.path.basename(root) == "tree" and os.path.dirname(root) == workspace:
-            directories[:] = []
-            continue
-        if not include_tree and root == workspace and "tree" in directories:
-            directories.remove("tree")
-        if protected_parent and root == workspace:
-            os.chown(root, 0, 0, follow_symlinks=False)
-            os.chmod(root, 0o555)
-        else:
-            os.chown(root, 65532, 65532, follow_symlinks=False)
-        for name in directories:
-            os.chown(os.path.join(root, name), 65532, 65532, follow_symlinks=False)
-        for name in files:
-            os.chown(os.path.join(root, name), 65532, 65532, follow_symlinks=False)
+@dataclass
+class Made:
+    """One `make` invocation and what the compiler was observed to do in it."""
+
+    command: list
+    returncode: int
+    output: str
+    compiles: list = field(default_factory=list)
+    audit: dict = field(default_factory=dict)
+    # Evidence that was required and was not there. A build whose account
+    # of itself is missing is a failed build, not a quiet success.
+    problem: str | None = None
 
 
-def _freeze_tree(tree_dir, identities):
-    """After build, submitted jobs can read code and execute bound binaries only."""
-    if _JOB_RUNNER is not None:
-        return
-    executables = {os.path.normpath(name) for name in identities}
-    for root, directories, files in os.walk(tree_dir):
-        os.chown(root, 0, 0, follow_symlinks=False)
-        os.chmod(root, 0o555)
-        for name in directories:
-            path = os.path.join(root, name)
-            os.chown(path, 0, 0, follow_symlinks=False)
-            if not os.path.islink(path):
-                os.chmod(path, 0o555)
-        for name in files:
-            path = os.path.join(root, name)
-            relative = os.path.relpath(path, tree_dir)
-            os.chown(path, 0, 0, follow_symlinks=False)
-            if not os.path.islink(path):
-                os.chmod(path, 0o555 if relative in executables else 0o444)
+def _observed_compiler_log(evidence, compiler, cwd):
+    """The protected observer's account of the compile, in the shim's own format.
+
+    Reading execve records rather than the shim's log removes the
+    writable log file as a trust root: what is reported is what the
+    kernel saw the configured compiler run with.
+    """
+    if not evidence or evidence.get("ok") is not True:
+        return "", {}, "protected compiler execution evidence was unavailable"
+    compiler_path = shutil.which(compiler)
+    if compiler_path is None:
+        return "", {}, f"configured compiler '{compiler}' is not installed"
+    compiler_real = os.path.realpath(compiler_path)
+    observed = [
+        entry["argv"] for entry in evidence.get("executions", [])
+        if isinstance(entry, dict) and entry.get("argv")
+        and os.path.realpath(entry.get("path", "")) == compiler_real
+    ]
+    if not observed:
+        return "", {}, f"protected exec tracing observed no invocation of '{compiler_real}'"
+    log = "\n".join(json.dumps({"argv": argv[1:], "cwd": cwd}) for argv in observed)
+    return log, {
+        "protected": True,
+        "collector": "strace/execve",
+        "observed_executions": len(evidence.get("executions", [])),
+        "compiler_invocations": len(observed),
+    }, None
 
 
-def _identity_matches(path, identity):
-    return bool(
-        identity and os.path.isfile(path) and not os.path.islink(path)
-        and os.path.getsize(path) == identity.get("size")
-        and _sha256_file(path) == identity.get("sha256")
+def _make(workspace, *, cwd, makefile, targets, env, timeout, compiler, flags,
+          source_patterns, harness_dir, log_path, what) -> Made:
+    """Run a code's own makefile, and read back what the compiler was asked to do.
+
+    The one place a submitted build is invoked. The tree's build and each
+    mutant's build come through here together, so a mutant is built,
+    watched and read the same way the tree was -- a mutant built some
+    other way would say nothing about the build a port faces.
+    """
+    command = ["make", "-f", makefile, *targets]
+    job = workspace.execute(
+        command, cwd=cwd, env=env, timeout=timeout, mode="audited", what=what,
     )
+    if workspace.policy.audited:
+        log, audit, problem = _observed_compiler_log(job.evidence, compiler, cwd)
+    else:
+        log, problem = _read_log(log_path), None
+        audit = {"protected": False, "collector": "explicit-local-test-runner/fc-shim"}
+    made = Made(command, job.returncode, job.stdout + job.stderr, audit=audit, problem=problem)
+    if problem is None:
+        made.compiles = compile_log.compile_records(
+            log, cwd, flags, source_patterns, harness_dir=harness_dir,
+        )
+    return made
 
 
-def _writable_copy(path):
-    """Make a disposable copied tree usable as an application work directory."""
-    if _JOB_RUNNER is not None:
-        return
-    for root, directories, files in os.walk(path):
-        os.chmod(root, 0o755)
-        for name in directories:
-            child = os.path.join(root, name)
-            if not os.path.islink(child):
-                os.chmod(child, 0o755)
-        for name in files:
-            child = os.path.join(root, name)
-            if not os.path.islink(child):
-                mode = os.stat(child).st_mode
-                os.chmod(child, 0o755 if mode & 0o111 else 0o644)
-
-
-def build(attempt_id, tree, makefile, targets, compiler, flags, link_flags, source_patterns,
-          *, harness_dir=HARNESS, work_root=WORK_ROOT, timeout=BUILD_TIMEOUT_S) -> dict:
+def build(workspace, tree, makefile, targets, compiler, flags, link_flags, source_patterns,
+          *, harness_dir=HARNESS, timeout=BUILD_TIMEOUT_S) -> BuildResponse:
     """Build the submitted tree with its own makefile, and say what that did.
 
     `targets` is [{"role", "target", "executable"}] straight from the
@@ -385,84 +258,42 @@ def build(attempt_id, tree, makefile, targets, compiler, flags, link_flags, sour
     the shim log would have nothing to prove. In the environment, a
     Makefile that ignores FFLAGS wins -- and is then visible.
     """
-    workspace = _workspace(attempt_id, work_root)
-    shutil.rmtree(workspace, ignore_errors=True)
-    tree_dir = write_tree(os.path.join(workspace, "tree"), tree)
-    log_path = os.path.join(workspace, LOG_NAME)
+    workspace.reset()
+    tree_dir = workspace.write_tree(tree)
+    log_path = workspace.path(LOG_NAME)
 
-    makefile_path = _in_tree(tree_dir, makefile)
+    makefile_path = workspace.in_tree(makefile)
     if makefile_path is None or not os.path.isfile(makefile_path):
-        return {
-            "ok": False, "stage": "build", "targets": {}, "compiles": [],
-            "log_tail": f"the makefile '{makefile}' is not a regular file inside the tree",
-        }
+        return BuildResponse.failure(
+            f"the makefile '{makefile}' is not a regular file inside the tree"
+        )
     for target in targets:
-        if _in_tree(tree_dir, target["executable"]) is None:
-            return {
-                "ok": False, "stage": "build", "targets": {}, "compiles": [],
-                "log_tail": f"target executable '{target['executable']}' leaves the tree",
-            }
+        if workspace.in_tree(target["executable"]) is None:
+            return BuildResponse.failure(
+                f"target executable '{target['executable']}' leaves the tree"
+            )
 
     env = build_env(compiler, flags, link_flags, log_path, harness_dir)
     # The protected exec observer records the compiler itself.  Giving make
     # the real compiler also removes the writable fc.jsonl shim as a trust root.
-    if _JOB_RUNNER is None:
+    if workspace.policy.audited:
         env["FC"] = compiler
-    command = ["make", "-f", makefile, *[t["target"] for t in targets]]
-    _prepare_job_files(workspace, include_tree=True)
+    workspace.prepare_job_files(include_tree=True)
     try:
-        rc, out, err, audit = _run_audited(
-            command, cwd=tree_dir, env=env, timeout=timeout, work_root=work_root,
+        made = _make(
+            workspace, cwd=tree_dir, makefile=makefile,
+            targets=[t["target"] for t in targets], env=env, timeout=timeout,
+            compiler=compiler, flags=flags, source_patterns=source_patterns,
+            harness_dir=harness_dir, log_path=log_path, what="the build",
         )
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False, "stage": "build", "targets": {}, "compiles": [],
-            "log_tail": f"the build did not finish within {timeout} seconds",
-        }
-    output = out + err
+    except ExecutionFailed as exc:
+        return BuildResponse.failure(str(exc))
+    if made.problem is not None:
+        return BuildResponse.failure(made.problem)
 
-    if _JOB_RUNNER is None:
-        if not audit or audit.get("ok") is not True:
-            return {
-                "ok": False, "stage": "build", "targets": {}, "compiles": [],
-                "log_tail": "protected compiler execution evidence was unavailable",
-            }
-        compiler_path = shutil.which(compiler)
-        if compiler_path is None:
-            return {
-                "ok": False, "stage": "build", "targets": {}, "compiles": [],
-                "log_tail": f"configured compiler '{compiler}' is not installed",
-            }
-        compiler_real = os.path.realpath(compiler_path)
-        observed = [
-            entry["argv"] for entry in audit.get("executions", [])
-            if isinstance(entry, dict) and entry.get("argv")
-            and os.path.realpath(entry.get("path", "")) == compiler_real
-        ]
-        if not observed:
-            return {
-                "ok": False, "stage": "build", "targets": {}, "compiles": [],
-                "log_tail": f"protected exec tracing observed no invocation of '{compiler_real}'",
-            }
-        protected_log = "\n".join(json.dumps({"argv": argv[1:], "cwd": tree_dir}) for argv in observed)
-        compiler_audit = {
-            "protected": True,
-            "collector": "strace/execve",
-            "observed_executions": len(audit.get("executions", [])),
-            "compiler_invocations": len(observed),
-        }
-    else:
-        protected_log = _read_log(log_path)
-        compiler_audit = {
-            "protected": False,
-            "collector": "explicit-local-test-runner/fc-shim",
-        }
-    compiles = contract.compile_records(
-        protected_log, tree_dir, flags, source_patterns, harness_dir=harness_dir,
-    )
     built = {}
     for target in targets:
-        path = _in_tree(tree_dir, target["executable"])
+        path = workspace.in_tree(target["executable"])
         built[target["role"]] = {
             "executable": target["executable"],
             "built": bool(
@@ -470,41 +301,43 @@ def build(attempt_id, tree, makefile, targets, compiler, flags, link_flags, sour
                 and os.access(path, os.X_OK)
             ),
         }
-    result = {
-        "stage": "build",
-        "command": command,
-        "targets": built,
-        "compiles": compiles,
-        "compiler_audit": compiler_audit,
-        "flags": list(flags),
-        "link_flags": list(link_flags),
-        "flags_reached_every_compile": contract.flags_reached_every_compile(compiles),
-        "compiled_only_tree_source": contract.compiled_only_tree_source(compiles),
-        "minfo_excerpt": _accel_lines(output),
-    }
+    result = BuildResponse(
+        command=made.command,
+        targets=built,
+        compiles=made.compiles,
+        compiler_audit=made.audit,
+        flags=list(flags),
+        link_flags=list(link_flags),
+        flags_reached_every_compile=compile_log.flags_reached_every_compile(made.compiles),
+        compiled_only_tree_source=compile_log.compiled_only_tree_source(made.compiles),
+        minfo_excerpt=_accel_lines(made.output),
+    )
 
-    if rc != 0:
-        return {**result, "ok": False, "log_tail": output[-4000:]}
+    if made.returncode != 0:
+        result.log_tail = made.output[-4000:]
+        return result
 
     missing = sorted(role for role, target in built.items() if not target["built"])
     if missing:
         # make said it succeeded and the executable is not there: almost
         # always a manifest naming a different file than the rule writes.
         named = ", ".join(f"{role} -> {built[role]['executable']}" for role in missing)
-        return {
-            **result, "ok": False, "missing_targets": missing,
-            "log_tail": f"make succeeded but left no executable for: {named}\n{output[-3000:]}",
-        }
-    identities = _write_artifacts(attempt_id, targets, work_root)
-    _freeze_tree(tree_dir, identities)
+        result.missing_targets = missing
+        result.log_tail = (
+            f"make succeeded but left no executable for: {named}\n{made.output[-3000:]}"
+        )
+        return result
+
+    identities = workspace.write_artifacts(targets)
+    workspace.freeze_tree(identities)
     for target in built.values():
         target.update(identities[target["executable"]])
-    artifact_record = artifact_identities(attempt_id, work_root=work_root)
-    return {
-        **result, "ok": True, "log_tail": output[-2000:],
-        "executor_identity": artifact_record.get("executor_identity"),
-        "image_id": artifact_record.get("image_id"),
-    }
+    record = workspace.artifact_identities()
+    result.ok = True
+    result.log_tail = made.output[-2000:]
+    result.executor_identity = record.executor_identity
+    result.image_id = record.image_id
+    return result
 
 
 def _notify_env(base, notify, mandatory):
@@ -587,105 +420,73 @@ def _read_outputs(cdir):
     return outputs
 
 
-def _executable(attempt_id, executable, work_root):
-    """A built executable only while its supervisor-held identity still matches."""
-    tree_dir = _tree_dir(attempt_id, work_root)
-    path = _in_tree(tree_dir, executable)
-    if path is None or not os.path.isfile(path) or os.path.islink(path):
-        return tree_dir, None, None
-    # Explicit local test runners construct tiny fixture trees without going
-    # through build().  Production always requires the protected sidecar.
-    if _JOB_RUNNER is not None:
-        identity = {"sha256": _sha256_file(path), "size": os.path.getsize(path)}
-        return tree_dir, path, identity
-    artifact_record = artifact_identities(attempt_id, work_root=work_root)
-    identity = artifact_record.get("executables", {}).get(executable)
-    if not identity or not identity.get("verified"):
-        return tree_dir, None, None
-    answer = {k: identity[k] for k in ("sha256", "size", "role") if k in identity}
-    answer["executor_identity"] = artifact_record.get("executor_identity")
-    return tree_dir, path, answer
-
-
 # net_jail (unshare -n) is defense-in-depth. It needs CAP_SYS_ADMIN, which the
 # builder container does not hold by default, and build_net is already
 # internal: true (no internet, no route to the oracle) -- so we leave it off
 # tonight and turn it on as later hardening once the container has the cap.
-def run(attempt_id, executable, cases, notify=None, mandatory=False,
-        *, work_root=WORK_ROOT, net_jail=False, timeout=REPLAY_TIMEOUT_S) -> dict:
+def run(workspace, executable, cases, notify=None, mandatory=False,
+        *, timeout=REPLAY_TIMEOUT_S) -> RunResponse:
     """Replay every case through the executable the code's manifest names.
 
     `cases` is {name: {variable: b64 npy}}. The driver is called as
     `<executable> <case_dir>` -- the one contract a replay driver has --
     and whatever `<variable>.out.npy` files it leaves come back.
     """
-    tree_dir, replay, identity = _executable(attempt_id, executable, work_root)
+    replay, identity = workspace.executable(executable)
     if replay is None:
-        return {
-            "ok": False, "stage": "run",
-            "log_tail": f"the tree holds no executable '{executable}'; build it first",
-        }
+        return RunResponse.failure(
+            f"the tree holds no executable '{executable}'; build it first"
+        )
 
     env = _notify_env(os.environ, notify, mandatory)
+    profiled = notify in ("acc", "omp")
     outputs = {}
     total_kernels = 0
     launched_at = set()
     log_tail = ""
     for name, arrs in cases.items():
         if not _plain_name(name):
-            return {
-                "ok": False, "stage": "run", "case": str(name),
-                "log_tail": f"case name {name!r} is not a plain name",
-            }
-        cdir = _write_case(os.path.join(_workspace(attempt_id, work_root), "cases", name), arrs)
-        _prepare_job_files(_workspace(attempt_id, work_root))
+            return RunResponse.failure(
+                f"case name {name!r} is not a plain name", case=str(name),
+            )
+        cdir = _write_case(workspace.path("cases", name), arrs)
+        workspace.prepare_job_files()
         try:
-            if notify in ("acc", "omp"):
-                rc, out, err, profile = _run_profiled(
-                    [replay, cdir], cwd=tree_dir, env=env, timeout=timeout,
-                    work_root=work_root,
-                )
-            else:
-                rc, out, err = _run(
-                    [replay, cdir], cwd=tree_dir, env=env, timeout=timeout,
-                    work_root=work_root, gpu=True,
-                )
-                profile = {"ok": True, "kernels_launched": 0, "kernel_names": []}
-        except executor.IsolationUnavailable as exc:
-            return {"ok": False, "stage": "run", "case": name, "log_tail": str(exc)}
-        if rc != 0:
-            return {"ok": False, "stage": "run", "case": name, "log_tail": (out + err)[-2000:]}
-        if not _identity_matches(replay, identity):
-            return {
-                "ok": False, "stage": "run", "case": name,
-                "log_tail": "the executable changed while it was being measured",
-            }
-        if notify in ("acc", "omp") and (not profile or not profile.get("ok")):
-            return {
-                "ok": False, "stage": "run", "case": name,
-                "log_tail": (profile or {}).get("error", "protected nsys evidence was unavailable"),
-            }
-        kernels = int(profile.get("kernels_launched", 0))
-        launches = [("nsys", name, "0") for name in profile.get("kernel_names", [])]
-        total_kernels += kernels
-        launched_at.update(launches)
-        log_tail = err[-1500:]
+            job = workspace.execute(
+                [replay, cdir], cwd=workspace.tree_dir, env=env, timeout=timeout,
+                mode="profiled" if profiled else "plain", gpu=True,
+                what=f"the replay of case '{name}'",
+            )
+        except ExecutionFailed as exc:
+            return RunResponse.failure(str(exc), case=name)
+        profile = job.evidence if profiled else {
+            "ok": True, "kernels_launched": 0, "kernel_names": [],
+        }
+        if job.returncode != 0:
+            return RunResponse.failure((job.stdout + job.stderr)[-2000:], case=name)
+        if not workspace.matches(replay, identity):
+            return RunResponse.failure(
+                "the executable changed while it was being measured", case=name,
+            )
+        if profiled and (not profile or not profile.get("ok")):
+            return RunResponse.failure(
+                (profile or {}).get("error", "protected nsys evidence was unavailable"),
+                case=name,
+            )
+        total_kernels += int(profile.get("kernels_launched", 0))
+        launched_at.update(("nsys", kernel, "0") for kernel in profile.get("kernel_names", []))
+        log_tail = job.stderr[-1500:]
         try:
             outputs[name] = _read_outputs(cdir)
         except ValueError as exc:
-            return {"ok": False, "stage": "run", "case": name, "log_tail": str(exc)}
+            return RunResponse.failure(str(exc), case=name)
 
-    return {
-        "ok": True, "stage": "run", "outputs": outputs,
-        "kernels_launched": total_kernels,
-        # Where the launches came from, one entry per distinct source line
-        # across every case, so the claim says what ran and not only how
-        # much of it ran.
-        "launches": [list(where) for where in sorted(launched_at)],
-        "profiler": "nsys/CUPTI_ACTIVITY_KIND_KERNEL" if notify in ("acc", "omp") else None,
-        "executable_identity": identity,
-        "log_tail": log_tail,
-    }
+    return RunResponse(
+        ok=True, outputs=outputs, kernels_launched=total_kernels,
+        launches=[list(where) for where in sorted(launched_at)],
+        profiler="nsys/CUPTI_ACTIVITY_KIND_KERNEL" if profiled else None,
+        executable_identity=identity, log_tail=log_tail,
+    )
 
 
 def _plain_name(name) -> bool:
@@ -725,8 +526,8 @@ def _read_captured_case(case_dir):
     return case
 
 
-def capture(attempt_id, executable, args=(), run_name="capture", *, work_root=WORK_ROOT,
-            timeout=CAPTURE_TIMEOUT_S) -> dict:
+def capture(workspace, executable, args=(), run_name="capture",
+            *, timeout=CAPTURE_TIMEOUT_S) -> CaptureResponse:
     """Run the code's own capture program and return the dataset it wrote.
 
     The contract is one line: `<executable> <args...> <outdir>`, where the
@@ -739,37 +540,30 @@ def capture(attempt_id, executable, args=(), run_name="capture", *, work_root=WO
     crash -- the program ran and produced no dataset -- so it comes back
     as `ok: false` saying that, for the gateway to turn into a verdict.
     """
-    tree_dir, program, identity = _executable(attempt_id, executable, work_root)
+    program, identity = workspace.executable(executable)
     if program is None:
-        return {
-            "ok": False, "stage": "capture", "cases": {},
-            "stdout_tail": f"the tree holds no executable '{executable}'; build it first",
-        }
+        return CaptureResponse.failure(
+            f"the tree holds no executable '{executable}'; build it first"
+        )
 
     safe_run = re.sub(r"[^A-Za-z0-9._-]", "_", run_name)
-    outdir = os.path.join(_workspace(attempt_id, work_root), "captures", safe_run)
+    outdir = workspace.path("captures", safe_run)
     shutil.rmtree(outdir, ignore_errors=True)
     os.makedirs(outdir, exist_ok=True)
 
+    workspace.prepare_job_files()
     try:
-        _prepare_job_files(_workspace(attempt_id, work_root))
-        rc, out, err = _run(
-            [program, *args, outdir], cwd=tree_dir, timeout=timeout, work_root=work_root,
-            gpu=True,
+        job = workspace.execute(
+            [program, *args, outdir], cwd=workspace.tree_dir, timeout=timeout,
+            gpu=True, what="the capture run",
         )
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False, "stage": "capture", "cases": {},
-            "stdout_tail": f"the capture run did not finish within {timeout} seconds",
-        }
-    tail = (out + err)[-2000:]
-    if rc != 0:
-        return {"ok": False, "stage": "capture", "cases": {}, "stdout_tail": tail}
-    if not _identity_matches(program, identity):
-        return {
-            "ok": False, "stage": "capture", "cases": {},
-            "stdout_tail": "the executable changed while it was being measured",
-        }
+    except ExecutionFailed as exc:
+        return CaptureResponse.failure(str(exc))
+    tail = (job.stdout + job.stderr)[-2000:]
+    if job.returncode != 0:
+        return CaptureResponse.failure(tail)
+    if not workspace.matches(program, identity):
+        return CaptureResponse.failure("the executable changed while it was being measured")
 
     cases = {}
     for name in sorted(os.listdir(outdir)):
@@ -779,25 +573,19 @@ def capture(attempt_id, executable, args=(), run_name="capture", *, work_root=WO
         try:
             cases[name] = _read_captured_case(case_dir)
         except (OSError, ValueError) as exc:
-            return {
-                "ok": False, "stage": "capture", "cases": {},
-                "stdout_tail": f"case '{name}': {exc}\n{tail}",
-            }
+            return CaptureResponse.failure(f"case '{name}': {exc}\n{tail}")
 
     if not cases:
-        return {
-            "ok": False, "stage": "capture", "cases": {},
-            "stdout_tail": f"the capture run wrote no case directory (a directory holding "
-                           f"{CASE_FILE}) into the output directory it was given\n{tail}",
-        }
-    return {
-        "ok": True, "stage": "capture", "cases": cases, "stdout_tail": tail,
-        "executable_identity": identity,
-    }
+        return CaptureResponse.failure(
+            f"the capture run wrote no case directory (a directory holding "
+            f"{CASE_FILE}) into the output directory it was given\n{tail}"
+        )
+    return CaptureResponse(
+        ok=True, cases=cases, stdout_tail=tail, executable_identity=identity,
+    )
 
 
-def sanitize(attempt_id, executable, cases, tools, *, work_root=WORK_ROOT,
-             timeout=SANITIZE_TIMEOUT_S) -> dict:
+def sanitize(workspace, executable, cases, tools, *, timeout=SANITIZE_TIMEOUT_S) -> SanitizeResponse:
     """Run every tool over every case, against the manifest's replay executable.
 
     The caller chooses how many cases to send; whether that is one or all
@@ -806,12 +594,11 @@ def sanitize(attempt_id, executable, cases, tools, *, work_root=WORK_ROOT,
     the cases and a tool fails if it failed on any of them, so a caller
     that asks for more cases gets a stricter verdict, not more verdicts.
     """
-    tree_dir, replay, identity = _executable(attempt_id, executable, work_root)
+    replay, identity = workspace.executable(executable)
     if replay is None:
-        return {
-            "ok": False, "stage": "sanitize", "per_tool": {},
-            "log_tail": f"the tree holds no executable '{executable}'; build it first",
-        }
+        return SanitizeResponse.failure(
+            f"the tree holds no executable '{executable}'; build it first"
+        )
 
     per_tool = {}
     for tool in tools:
@@ -821,23 +608,31 @@ def sanitize(attempt_id, executable, cases, tools, *, work_root=WORK_ROOT,
         last_log = ""
         unavailable = None
         for name, arrs in cases.items():
-            cdir = _write_case(os.path.join(_workspace(attempt_id, work_root), "san", name), arrs)
+            cdir = _write_case(workspace.path("san", name), arrs)
             cmd = ["compute-sanitizer", "--tool", tool, "--error-exitcode", "1", replay, cdir]
+            workspace.prepare_job_files()
             try:
-                _prepare_job_files(_workspace(attempt_id, work_root))
-                rc, out, err = _run(
-                    cmd, cwd=tree_dir, timeout=timeout, work_root=work_root, gpu=True,
+                job = workspace.execute(
+                    cmd, cwd=workspace.tree_dir, timeout=timeout, gpu=True,
+                    what=f"the {tool} sanitizer on case '{name}'",
                 )
-            except FileNotFoundError:
-                unavailable = "compute-sanitizer not found"
+            except ExecutionFailed as exc:
+                # A tool that could not be run at all did not pass and did
+                # not fail; the gateway is told which of the two it is.
+                if exc.unavailable:
+                    unavailable = str(exc)
+                    break
+                failed = True
+                failing_log = str(exc)
                 break
-            errors += len(re.findall(r"========= ERROR|Invalid|race", out + err))
-            if not _identity_matches(replay, identity):
+            output = job.stdout + job.stderr
+            errors += len(re.findall(r"========= ERROR|Invalid|race", output))
+            if not workspace.matches(replay, identity):
                 failed = True
                 failing_log = "the executable changed while it was being measured"
                 break
-            last_log = (out + err)[-1500:]
-            if rc != 0 and not failed:
+            last_log = output[-1500:]
+            if job.returncode != 0 and not failed:
                 failed = True
                 failing_log = last_log
         if unavailable is not None:
@@ -846,10 +641,10 @@ def sanitize(attempt_id, executable, cases, tools, *, work_root=WORK_ROOT,
             # The log of the first case that failed, so the reader sees the
             # failure rather than whatever the last case happened to print.
             per_tool[tool] = {"ok": not failed, "errors": errors, "log_tail": failing_log or last_log}
-    return {
-        "ok": bool(per_tool) and all(t.get("ok") is True for t in per_tool.values()),
-        "stage": "sanitize", "per_tool": per_tool, "executable_identity": identity,
-    }
+    return SanitizeResponse(
+        ok=bool(per_tool) and all(t.get("ok") is True for t in per_tool.values()),
+        per_tool=per_tool, executable_identity=identity,
+    )
 
 
 def _write_dataset(directory, cases):
@@ -901,29 +696,8 @@ def pytest_counts(text) -> dict:
     return counts
 
 
-def _in_tree(tree_dir, relative):
-    """The absolute path of a file the manifest named, or None if it left the tree.
-
-    A properties module is a path out of the code's own manifest, so it
-    gets the same treatment as a submitted tree path: one that climbs out
-    of the tree, or is absolute, names a file this service will not run.
-    """
-    if not isinstance(relative, (str, os.PathLike)) or os.path.isabs(relative):
-        return None
-    tree_dir = os.path.abspath(tree_dir)
-    path = os.path.normpath(os.path.join(tree_dir, relative))
-    if path != tree_dir and not path.startswith(tree_dir + os.sep):
-        return None
-    real_root = os.path.realpath(tree_dir)
-    real_path = os.path.realpath(path)
-    if real_path != real_root and not real_path.startswith(real_root + os.sep):
-        return None
-    return path
-
-
-def properties(attempt_id, executable, module, cases, seed, max_examples,
-               *, work_root=WORK_ROOT, harness_dir=HARNESS,
-               timeout=PROPERTIES_TIMEOUT_S) -> dict:
+def properties(workspace, executable, module, cases, seed, max_examples,
+               *, harness_dir=HARNESS, timeout=PROPERTIES_TIMEOUT_S) -> PropertiesResponse:
     """Run the code's own module of invariants against its replay binary.
 
     The module is a pytest file inside the tree, named by the code's
@@ -937,30 +711,22 @@ def properties(attempt_id, executable, module, cases, seed, max_examples,
     what it was: the same seed searches the same way, and a different one
     is a different search rather than a repeat.
     """
-    tree_dir, replay, identity = _executable(attempt_id, executable, work_root)
+    drawn = {"seed": seed, "max_examples": max_examples}
+    replay, identity = workspace.executable(executable)
     if replay is None:
-        return {
-            "ok": False, "stage": "properties", "seed": seed, "max_examples": max_examples,
-            "passed": 0, "failed": 0, "errors": 0, "skipped": 0,
-            "deselected": 0, "xfailed": 0, "xpassed": 0,
-            "collected": 0, "executed": 0,
-            "log_tail": f"the tree holds no executable '{executable}'; build it first",
-        }
+        return PropertiesResponse.failure(
+            f"the tree holds no executable '{executable}'; build it first", **drawn,
+        )
 
-    module_path = _in_tree(tree_dir, module)
+    module_path = workspace.in_tree(module)
     if module_path is None or not os.path.isfile(module_path):
         where = "does not stay inside the tree" if module_path is None else "is not in the tree"
-        return {
-            "ok": False, "stage": "properties", "seed": seed, "max_examples": max_examples,
-            "passed": 0, "failed": 0, "errors": 0, "skipped": 0,
-            "deselected": 0, "xfailed": 0, "xpassed": 0,
-            "collected": 0, "executed": 0,
-            "log_tail": f"the properties module '{module}' {where}",
-        }
+        return PropertiesResponse.failure(
+            f"the properties module '{module}' {where}", **drawn,
+        )
 
-    workspace = _workspace(attempt_id, work_root)
-    cases_dir = _write_dataset(os.path.join(workspace, "property_cases"), cases)
-    scratch = os.path.join(workspace, "property_scratch")
+    cases_dir = _write_dataset(workspace.path("property_cases"), cases)
+    scratch = workspace.path("property_scratch")
     shutil.rmtree(scratch, ignore_errors=True)
     os.makedirs(scratch, exist_ok=True)
 
@@ -978,66 +744,50 @@ def properties(attempt_id, executable, module, cases, seed, max_examples,
     # -p no:cacheprovider: the tree is a submission, not a checkout, and a
     # .pytest_cache written into it would be a file nobody sent.
     command = [PYTHON, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--tb=short", module_path]
-    _prepare_job_files(workspace)
+    workspace.prepare_job_files()
+    audited = workspace.policy.audited
     try:
-        if _JOB_RUNNER is None:
-            rc, out, err, audit = _run_audited(
-                command, cwd=tree_dir, env=env, timeout=timeout,
-                work_root=work_root, gpu=True,
-            )
-        else:
-            rc, out, err = _run(
-                command, cwd=tree_dir, env=env, timeout=timeout,
-                work_root=work_root, gpu=True,
-            )
-            audit = None
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False, "stage": "properties", "seed": seed, "max_examples": max_examples,
-            "passed": 0, "failed": 0, "errors": 0, "skipped": 0,
-            "deselected": 0, "xfailed": 0, "xpassed": 0,
-            "collected": 0, "executed": 0,
-            "log_tail": f"the property run did not finish within {timeout} seconds",
-        }
+        job = workspace.execute(
+            command, cwd=workspace.tree_dir, env=env, timeout=timeout, gpu=True,
+            mode="audited" if audited else "plain", what="the property run",
+        )
+    except ExecutionFailed as exc:
+        return PropertiesResponse.failure(str(exc), **drawn)
 
-    output = out + err
+    output = job.stdout + job.stderr
+    counts = pytest_counts(output)
     replays_observed = None
-    if _JOB_RUNNER is None:
-        if not audit or audit.get("ok") is not True:
-            return {
-                "ok": False, "stage": "properties", "seed": seed,
-                "max_examples": max_examples, **pytest_counts(output),
-                "log_tail": "protected replay execution evidence was unavailable",
-            }
-        replay_job_path = "/job/tree/" + os.path.relpath(replay, tree_dir).replace(os.sep, "/")
+    if audited:
+        if not job.evidence or job.evidence.get("ok") is not True:
+            return PropertiesResponse.failure(
+                "protected replay execution evidence was unavailable", **drawn, **counts,
+            )
+        replay_job_path = "/job/tree/" + os.path.relpath(
+            replay, workspace.tree_dir,
+        ).replace(os.sep, "/")
         replays_observed = sum(
-            1 for entry in audit.get("executions", [])
+            1 for entry in job.evidence.get("executions", [])
             if isinstance(entry, dict) and entry.get("path") == replay_job_path
         )
         if replays_observed == 0:
-            return {
-                "ok": False, "stage": "properties", "seed": seed,
-                "max_examples": max_examples, **pytest_counts(output),
-                "replays_observed": 0, "executable_identity": identity,
-                "log_tail": "protected exec tracing observed no replay invocation",
-            }
-    if not _identity_matches(replay, identity):
-        return {
-            "ok": False, "stage": "properties", "seed": seed,
-            "max_examples": max_examples, **pytest_counts(output),
-            "executable_identity": identity,
-            "log_tail": "the executable changed while it was being measured",
-        }
-    return {
-        "ok": rc == 0, "stage": "properties", "seed": seed, "max_examples": max_examples,
-        **pytest_counts(output),
-        "replays_observed": replays_observed,
-        "counts_source": "pytest summary emitted by the submitted property process",
-        "executable_identity": identity,
+            return PropertiesResponse.failure(
+                "protected exec tracing observed no replay invocation",
+                **drawn, **counts, replays_observed=0, executable_identity=identity,
+            )
+    if not workspace.matches(replay, identity):
+        return PropertiesResponse.failure(
+            "the executable changed while it was being measured",
+            **drawn, **counts, executable_identity=identity,
+        )
+    return PropertiesResponse(
+        ok=job.returncode == 0, **drawn, **counts,
+        replays_observed=replays_observed,
+        counts_source="pytest summary emitted by the submitted property process",
+        executable_identity=identity,
         # Long enough to hold Hypothesis's minimized falsifying example,
         # which is the whole value of a failed property run.
-        "log_tail": output[-4000:],
-    }
+        log_tail=output[-4000:],
+    )
 
 
 def _output_arrays(case_dir) -> dict:
@@ -1073,56 +823,85 @@ def score_mutant(job) -> dict:
     """Build one mutant, replay every case through it, and say what happened.
 
     Runs in a worker process, so everything it needs is in `job` and
-    everything it answers with is in the returned row -- including which
-    job runner to run its commands with, since a worker that was started
-    rather than forked inherits nothing from this module. The mutant's
-    directory is a copy of the tree that already built, so `make` rebuilds
-    only what the changed file forces -- and it is removed again unless
-    the verdict is one a person has to read the source of.
+    everything it answers with is in the returned row -- including the
+    workspace, which carries the policy the commands are run under, since
+    a worker that was started rather than forked inherits nothing from
+    this module. The mutant is built through the same make invocation the
+    tree was, watched the same way, and its executable is identified
+    before the first case and reidentified after each, so a verdict is
+    about the binary that was built. Its directory is a copy of the tree
+    that already built, so `make` rebuilds only what the changed file
+    forces -- and it is removed again unless the verdict is one a person
+    has to read the source of.
     """
-    global _JOB_RUNNER
-    _JOB_RUNNER = job["runner"]
+    workspace = job["workspace"]
     mutant = job["mutant"]
     mutant_dir = job["mutant_dir"]
     deadline = time.monotonic() + job["timeout"]
     try:
         shutil.rmtree(mutant_dir, ignore_errors=True)
-        shutil.copytree(job["tree_dir"], mutant_dir, symlinks=True)
+        shutil.copytree(workspace.tree_dir, mutant_dir, symlinks=True)
         _write_mutated(mutant_dir, mutant)
-        _prepare_job_files(os.path.dirname(os.path.dirname(mutant_dir)))
+        workspace.prepare_job_files()
 
-        command = ["make", "-f", job["makefile"], job["target"]]
         try:
-            rc, out, err = _run(
-                command, cwd=mutant_dir, env=job["env"], timeout=_remaining(deadline),
-                work_root=job["work_root"],
+            made = _make(
+                workspace, cwd=mutant_dir, makefile=job["makefile"],
+                targets=[job["target"]], env=job["env"], timeout=_remaining(deadline),
+                compiler=job["compiler"], flags=job["flags"],
+                source_patterns=job["source_patterns"], harness_dir=job["harness_dir"],
+                log_path=job["log_path"], what="the mutant's build",
             )
-        except subprocess.TimeoutExpired:
+        except ExecutionFailed as exc:
             mutant.status = mutants.BUILD_FAIL
-            mutant.note = f"the mutant's build did not finish within {job['timeout']} seconds"
+            mutant.note = (
+                f"the mutant's build did not finish within {job['timeout']} seconds"
+                if exc.timed_out else str(exc)
+            )
             return mutant.as_result()
         replay = os.path.join(mutant_dir, job["executable"])
-        if rc != 0 or not os.path.exists(replay):
+        if made.problem is not None:
             mutant.status = mutants.BUILD_FAIL
-            mutant.note = _last_line(out + err) or "make left no executable"
+            mutant.note = made.problem
             return mutant.as_result()
+        if made.returncode != 0 or not os.path.isfile(replay):
+            mutant.status = mutants.BUILD_FAIL
+            mutant.note = _last_line(made.output) or "make left no executable"
+            return mutant.as_result()
+        if not compile_log.flags_reached_every_compile(made.compiles):
+            # A mutant built with other flags than the port faces is not a
+            # statement about this gate, so it is not scored as one.
+            mutant.status = mutants.BUILD_FAIL
+            mutant.note = "the strategy's flags did not reach the mutant's compiles"
+            return mutant.as_result()
+        identity = workspace.identity_of(replay)
 
         for name in job["cases"]:
             case_dir = os.path.join(mutant_dir, "cases", name)
             shutil.rmtree(case_dir, ignore_errors=True)
             shutil.copytree(os.path.join(job["inputs_root"], name), case_dir)
             try:
-                rc, out, err = _run(
+                replayed = workspace.execute(
                     [replay, case_dir], cwd=mutant_dir, timeout=_remaining(deadline),
-                    work_root=job["work_root"], gpu=True,
+                    gpu=True, what=f"the mutant's replay of case '{name}'",
                 )
-            except subprocess.TimeoutExpired:
+            except ExecutionFailed as exc:
                 mutant.status = mutants.RUNTIME_FAIL
-                mutant.note = f"case '{name}': the replay did not finish in time"
+                mutant.note = (
+                    f"case '{name}': the replay did not finish in time"
+                    if exc.timed_out else f"case '{name}': {exc}"
+                )
                 return mutant.as_result()
-            if rc != 0:
+            if replayed.returncode != 0:
                 mutant.status = mutants.RUNTIME_FAIL
-                mutant.note = f"case '{name}': exit {rc}: {_last_line(out + err)}"
+                mutant.note = (
+                    f"case '{name}': exit {replayed.returncode}: "
+                    f"{_last_line(replayed.stdout + replayed.stderr)}"
+                )
+                return mutant.as_result()
+            if not workspace.matches(replay, identity):
+                mutant.status = mutants.RUNTIME_FAIL
+                mutant.note = f"case '{name}': the mutant changed while it was being measured"
                 return mutant.as_result()
 
             try:
@@ -1149,13 +928,6 @@ def _last_line(text) -> str:
     return lines[-1][:200] if lines else ""
 
 
-def _refused(reason: str) -> dict:
-    return {
-        "ok": False, "stage": "mutate", "generated": 0, "scored": 0,
-        "results": [], "counts": {}, "kept_dirs": [], "log_tail": reason,
-    }
-
-
 def _mutation_corpus(workspace, cases) -> tuple:
     """The cases laid out on disk once: inputs to replay, outputs to score against.
 
@@ -1168,9 +940,9 @@ def _mutation_corpus(workspace, cases) -> tuple:
     # the directories it kept for a reader: they belong to a run whose
     # answer has already been read, and keeping them would make it look
     # as though this run had produced them.
-    shutil.rmtree(os.path.join(workspace, "mutants"), ignore_errors=True)
-    inputs_root = os.path.join(workspace, "mutants", ".inputs")
-    refs_root = os.path.join(workspace, "mutants", ".refs")
+    shutil.rmtree(workspace.path("mutants"), ignore_errors=True)
+    inputs_root = workspace.path("mutants", ".inputs")
+    refs_root = workspace.path("mutants", ".refs")
     for name, case in cases.items():
         _write_case(os.path.join(inputs_root, name), case.get("inputs", {}))
         reference = os.path.join(refs_root, name)
@@ -1181,9 +953,10 @@ def _mutation_corpus(workspace, cases) -> tuple:
     return inputs_root, refs_root
 
 
-def mutate(attempt_id, makefile, replay_target, files, cases, bands, compiler, flags,
-           link_flags, source_patterns, *, jobs=None, limit=None, work_root=WORK_ROOT,
-           harness_dir=HARNESS, timeout=MUTATE_TIMEOUT_S, ceiling=MUTATE_CEILING_S) -> dict:
+def mutate(workspace, makefile, replay_target, files, cases, bands, compiler, flags,
+           link_flags, source_patterns, *, jobs=None, limit=None,
+           harness_dir=HARNESS, timeout=MUTATE_TIMEOUT_S,
+           ceiling=MUTATE_CEILING_S) -> MutateResponse:
     """Score every mutant of the region's own files against the captured answers.
 
     This is the harness asking about itself: if a port of this region were
@@ -1207,25 +980,23 @@ def mutate(attempt_id, makefile, replay_target, files, cases, bands, compiler, f
     like any other. Reading the survivors is the point: some are
     equivalent code, and some are region the captured inputs never reach.
 
-    Returns {ok, generated, scored, results, counts, kept_dirs}. Each
-    result is one mutant and its verdict; the directories of the two
+    Each result is one mutant and its verdict; the directories of the two
     verdicts a person has to read the source of are kept and named.
     """
-    workspace = _workspace(attempt_id, work_root)
-    tree_dir = _tree_dir(attempt_id, work_root)
-    if not os.path.isdir(tree_dir):
-        return _refused(
-            f"there is no built tree for attempt '{attempt_id}'; build it before mutating it"
+    if not os.path.isdir(workspace.tree_dir):
+        return MutateResponse.failure(
+            f"there is no built tree for attempt '{workspace.attempt_id}'; "
+            f"build it before mutating it"
         )
 
     generated = []
     for relative in files:
-        path = _in_tree(tree_dir, relative)
+        path = workspace.in_tree(relative)
         if path is None or not os.path.isfile(path):
             where = "does not stay inside the tree" if path is None else "is not in the tree"
-            return _refused(f"the region file '{relative}' {where}")
-        if not contract.is_tree_source(relative, source_patterns):
-            return _refused(
+            return MutateResponse.failure(f"the region file '{relative}' {where}")
+        if not compile_log.is_tree_source(relative, source_patterns):
+            return MutateResponse.failure(
                 f"the region file '{relative}' is not one this code calls its own source, "
                 f"so mutating it would say nothing about a port of it"
             )
@@ -1234,52 +1005,54 @@ def mutate(attempt_id, makefile, replay_target, files, cases, bands, compiler, f
 
     todo = generated[: int(limit)] if limit else list(generated)
     if not todo:
-        return {
-            "ok": True, "stage": "mutate", "generated": len(generated), "scored": 0,
-            "results": [], "counts": {}, "kept_dirs": [],
-            "log_tail": "no mutant was generated from the region's files",
-        }
+        return MutateResponse(
+            ok=True, generated=len(generated),
+            log_tail="no mutant was generated from the region's files",
+        )
 
     inputs_root, refs_root = _mutation_corpus(workspace, cases)
-    env = build_env(
-        compiler, flags, link_flags, os.path.join(workspace, "mutants", ".fc.jsonl"), harness_dir,
-    )
-    if _JOB_RUNNER is None:
-        env["FC"] = compiler
-    payloads = [
-        {
+    payloads = []
+    for mutant in todo:
+        # One shim log per mutant: mutants are built at the same time, and
+        # a log they shared would say that some other mutant's compile was
+        # this one's.
+        log_path = workspace.path("mutants", f"{mutant.mid}.fc.jsonl")
+        env = build_env(compiler, flags, link_flags, log_path, harness_dir)
+        if workspace.policy.audited:
+            env["FC"] = compiler
+        payloads.append({
             "mutant": mutant,
-            "runner": _JOB_RUNNER,
-            "tree_dir": tree_dir,
-            "mutant_dir": os.path.join(workspace, "mutants", mutant.mid),
+            "workspace": workspace,
+            "mutant_dir": workspace.path("mutants", mutant.mid),
             "makefile": makefile,
             "target": replay_target["target"],
             "executable": replay_target["executable"],
             "env": env,
+            "log_path": log_path,
+            "compiler": compiler,
+            "flags": list(flags),
+            "source_patterns": list(source_patterns),
+            "harness_dir": harness_dir,
             "inputs_root": inputs_root,
             "refs_root": refs_root,
             "cases": sorted(cases),
             "bands": bands,
             "timeout": timeout,
-            "work_root": work_root,
-        }
-        for mutant in todo
-    ]
+        })
 
     workers = int(jobs) if jobs else min(DEFAULT_MUTATE_JOBS, os.cpu_count() or 1)
     results = _score_all(payloads, workers, ceiling)
     counts = {}
     for row in results:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
-    return {
-        "ok": True, "stage": "mutate", "generated": len(generated), "scored": len(results),
-        "results": results, "counts": counts,
-        "kept_dirs": [
-            os.path.join(workspace, "mutants", row["id"]) for row in results
+    return MutateResponse(
+        ok=True, generated=len(generated), scored=len(results),
+        results=results, counts=counts,
+        kept_dirs=[
+            workspace.path("mutants", row["id"]) for row in results
             if row["status"] in mutants.KEEP_DIRECTORY
         ],
-    }
-
+    )
 
 
 def _score_all(payloads, workers: int, ceiling) -> list:
@@ -1321,8 +1094,8 @@ def _score_all(payloads, workers: int, ceiling) -> list:
     return rows
 
 
-def time_run(attempt_id, executable, args=(), env=None, outputs=(), repeats=5,
-             budget_s=300, expected_outputs=None, *, work_root=WORK_ROOT) -> dict:
+def time_run(workspace, executable, args=(), env=None, outputs=(), repeats=5,
+             budget_s=300, expected_outputs=None) -> TimeResponse:
     """Time the code's own program at the size its manifest declares.
 
     The arguments, the environment, the files the run is expected to
@@ -1337,24 +1110,19 @@ def time_run(attempt_id, executable, args=(), env=None, outputs=(), repeats=5,
     question a single collection at the end cannot answer.
     """
     if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats < 1:
-        return {
-            "ok": False, "stage": "time", "runs_s": [], "outputs": [],
-            "log_tail": "timing repeats must be a positive integer",
-        }
-    tree_dir, program, identity = _executable(attempt_id, executable, work_root)
+        return TimeResponse.failure("timing repeats must be a positive integer")
+    program, identity = workspace.executable(executable)
     if program is None:
-        return {
-            "ok": False, "stage": "time",
-            "log_tail": f"the tree holds no executable '{executable}'; build it first",
-        }
+        return TimeResponse.failure(
+            f"the tree holds no executable '{executable}'; build it first"
+        )
 
     run_env = {**os.environ, **{str(k): str(v) for k, v in (env or {}).items()}}
     if expected_outputs is not None and set(expected_outputs) != set(outputs):
-        return {
-            "ok": False, "stage": "time", "runs_s": [], "outputs": [],
-            "log_tail": "expected timing outputs do not exactly match the declared outputs",
-            "executable_identity": identity,
-        }
+        return TimeResponse.failure(
+            "expected timing outputs do not exactly match the declared outputs",
+            executable_identity=identity,
+        )
     # honest timing wants exclusive GPU
     gpu_excl = _gpu_exclusive()
     runs = []
@@ -1365,87 +1133,76 @@ def time_run(attempt_id, executable, args=(), env=None, outputs=(), repeats=5,
         # gives the application a fresh writable copy as its working directory.
         # This supports ordinary relative input/config files and arbitrary
         # scratch output without granting write access to the measured binary.
-        if _JOB_RUNNER is None:
-            run_dir = os.path.join(
-                _workspace(attempt_id, work_root), "timing", f"run-{repetition + 1:04d}",
-            )
+        if workspace.policy.owns_files:
+            run_dir = workspace.path("timing", f"run-{repetition + 1:04d}")
             shutil.rmtree(run_dir, ignore_errors=True)
-            shutil.copytree(tree_dir, run_dir, symlinks=True)
-            _prepare_job_files(_workspace(attempt_id, work_root))
-            _writable_copy(run_dir)
+            shutil.copytree(workspace.tree_dir, run_dir, symlinks=True)
+            workspace.prepare_job_files()
+            workspace.writable_copy(run_dir)
         else:
-            run_dir = tree_dir
+            run_dir = workspace.tree_dir
         # A file left by an earlier run, or by an earlier attempt, would
         # otherwise be collected as if this run had written it.
         for relative in outputs:
-            path = _in_tree(run_dir, relative)
+            path = path_inside(run_dir, relative)
             if path is None:
-                return {
-                    "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
-                    "log_tail": f"declared timing output '{relative}' leaves the tree",
-                }
-            if run_dir == tree_dir and (
+                return TimeResponse.failure(
+                    f"declared timing output '{relative}' leaves the tree",
+                    runs_s=runs, outputs=collected,
+                )
+            if run_dir == workspace.tree_dir and (
                 os.path.samefile(path, program) if os.path.exists(path) else path == program
             ):
-                return {
-                    "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
-                    "log_tail": f"declared timing output '{relative}' is the measured executable",
-                }
+                return TimeResponse.failure(
+                    f"declared timing output '{relative}' is the measured executable",
+                    runs_s=runs, outputs=collected,
+                )
             if os.path.lexists(path):
                 os.unlink(path)
 
         t0 = time.monotonic()
         try:
-            rc, out, err = _run(
+            # Relative application paths resolve in the disposable copy;
+            # the executable path still names the frozen original.
+            job = workspace.execute(
                 [program, *args], cwd=run_dir, env=run_env, timeout=budget_s,
-                # Relative application paths resolve in the disposable copy;
-                # the executable path still names the frozen original.
-                work_root=work_root, gpu=True,
+                gpu=True, what="a timing run",
             )
-        except subprocess.TimeoutExpired:
-            return {
-                "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
-                "log_tail": f"a timing run exceeded the declared budget of {budget_s} seconds",
-            }
+        except ExecutionFailed as exc:
+            return TimeResponse.failure(str(exc), runs_s=runs, outputs=collected)
         runs.append(time.monotonic() - t0)
-        last = (out + err)[-1500:]
-        if rc != 0:
-            return {
-                "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
-                "log_tail": last,
-            }
-        if not _identity_matches(program, identity):
-            return {
-                "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
-                "log_tail": "the executable changed while it was being measured",
-                "executable_identity": identity,
-            }
+        last = (job.stdout + job.stderr)[-1500:]
+        if job.returncode != 0:
+            return TimeResponse.failure(last, runs_s=runs, outputs=collected)
+        if not workspace.matches(program, identity):
+            return TimeResponse.failure(
+                "the executable changed while it was being measured",
+                runs_s=runs, outputs=collected, executable_identity=identity,
+            )
 
         this_run = {}
         for relative in outputs:
-            path = _in_tree(run_dir, relative)
+            path = path_inside(run_dir, relative)
             if path is None or os.path.islink(path) or not os.path.isfile(path):
-                return {
-                    "ok": False, "stage": "time", "runs_s": runs, "outputs": collected,
-                    "log_tail": f"run {len(runs)} wrote no '{relative}', which the "
-                                f"manifest declares",
-                }
+                return TimeResponse.failure(
+                    f"run {len(runs)} wrote no '{relative}', which the manifest declares",
+                    runs_s=runs, outputs=collected,
+                )
             with open(path, "rb") as f:
                 written = f.read()
             this_run[relative] = base64.b64encode(written).decode()
             if expected_outputs is not None and this_run[relative] != expected_outputs.get(relative):
-                return {
-                    "ok": False, "stage": "time", "runs_s": runs,
-                    "outputs": [*collected, this_run],
-                    "log_tail": f"run {len(runs)} wrote unexpected bytes to '{relative}'",
-                    "executable_identity": identity,
-                }
+                return TimeResponse.failure(
+                    f"run {len(runs)} wrote unexpected bytes to '{relative}'",
+                    runs_s=runs, outputs=[*collected, this_run],
+                    executable_identity=identity,
+                )
         collected.append(this_run)
 
-    return {
-        "ok": True, "stage": "time", "runs_s": runs, "gpu_exclusive": gpu_excl,
-        "outputs": collected, "stdout_tail": last, "executable_identity": identity,
-    }
+    return TimeResponse(
+        ok=True, runs_s=runs, gpu_exclusive=gpu_excl, outputs=collected,
+        stdout_tail=last, executable_identity=identity,
+    )
 
 
 def _gpu_exclusive():

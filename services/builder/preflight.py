@@ -16,11 +16,10 @@ import base64
 from datetime import datetime, timezone
 import json
 import os
-import shutil
 import subprocess
 import time
 
-from . import executor, stages
+from . import contract, executor, stages
 
 
 ATTEMPT = "isolation-preflight"
@@ -32,7 +31,7 @@ def _encoded(path: str, contents: str) -> dict:
     return {"path": path, "b64": base64.b64encode(contents.encode()).decode()}
 
 
-def _real_cpu_build() -> dict:
+def _real_cpu_build(workspace) -> contract.BuildResponse:
     """Compile through the production stage and return reviewable evidence."""
     source = """program qualification
   implicit none
@@ -46,7 +45,7 @@ end program qualification
 \t$(FC) $(FFLAGS) -o replay src/main.f90 $(LDFLAGS)
 """
     return stages.build(
-        ATTEMPT,
+        workspace,
         [_encoded("src/main.f90", source), _encoded("Makefile", makefile)],
         "Makefile",
         [{"role": "replay", "target": "replay", "executable": "replay"}],
@@ -58,7 +57,7 @@ end program qualification
     )
 
 
-def _real_gpu_build() -> dict:
+def _real_gpu_build(workspace) -> contract.BuildResponse:
     """Build the kernel used to qualify protected profiler collection."""
     source = """program qualification_gpu
   implicit none
@@ -75,7 +74,7 @@ end program qualification_gpu
 \t$(FC) $(FFLAGS) -o gpu_probe src/gpu_probe.f90 $(LDFLAGS)
 """
     return stages.build(
-        GPU_ATTEMPT,
+        workspace,
         [_encoded("src/gpu_probe.f90", source), _encoded("Makefile", makefile)],
         "Makefile",
         [{"role": "gpu_probe", "target": "gpu_probe", "executable": "gpu_probe"}],
@@ -100,28 +99,27 @@ def qualify(*, require_gpu: bool = False) -> dict:
     checks: dict[str, bool] = {}
     evidence: dict[str, object] = {}
     errors: dict[str, str] = {}
-    workspace = stages._workspace(ATTEMPT, stages.WORK_ROOT)
-    other_workspace = stages._workspace(OTHER_ATTEMPT, stages.WORK_ROOT)
-    gpu_workspace = stages._workspace(GPU_ATTEMPT, stages.WORK_ROOT)
+    attempt = stages.workspace_for(ATTEMPT)
+    other = stages.workspace_for(OTHER_ATTEMPT)
+    gpu = stages.workspace_for(GPU_ATTEMPT)
 
-    # These two exact, fixed qualification attempts are disposable. No other
+    # These exact, fixed qualification attempts are disposable. No other
     # attempt or volume content is touched.
-    shutil.rmtree(workspace, ignore_errors=True)
-    shutil.rmtree(other_workspace, ignore_errors=True)
-    shutil.rmtree(gpu_workspace, ignore_errors=True)
+    for disposable in (attempt, other, gpu):
+        disposable.reset()
     try:
         jobs = executor.DockerJobExecutor(work_root=stages.WORK_ROOT)
         readiness = jobs.probe()
 
         try:
-            build = _real_cpu_build()
-            evidence["build"] = build
-            target = build.get("targets", {}).get("replay", {})
-            audit = build.get("compiler_audit", {})
+            build = _real_cpu_build(attempt)
+            evidence["build"] = build.to_dict()
+            target = build.targets.get("replay", {})
+            audit = build.compiler_audit
             checks["real_cpu_build"] = bool(
-                build.get("ok") is True
-                and build.get("flags_reached_every_compile") is True
-                and build.get("compiled_only_tree_source") is True
+                build.ok is True
+                and build.flags_reached_every_compile is True
+                and build.compiled_only_tree_source is True
                 and target.get("built") is True
                 and len(target.get("sha256", "")) == 64
             )
@@ -129,11 +127,11 @@ def qualify(*, require_gpu: bool = False) -> dict:
                 audit.get("protected") is True
                 and audit.get("collector") == "strace/execve"
                 and audit.get("compiler_invocations", 0) >= 1
-                and build.get("compiles")
+                and build.compiles
             )
             checks["artifact_bound_to_executor"] = bool(
-                build.get("image_id") == jobs.image_id()
-                and build.get("executor_identity") == readiness.get("executor_identity")
+                build.image_id == jobs.image_id()
+                and build.executor_identity == readiness.get("executor_identity")
             )
         except Exception as exc:  # preserve the other boundary observations
             errors["build"] = str(exc)
@@ -141,7 +139,7 @@ def qualify(*, require_gpu: bool = False) -> dict:
             checks["protected_compiler_audit"] = False
             checks["artifact_bound_to_executor"] = False
 
-        tree = os.path.join(workspace, "tree")
+        tree = attempt.tree_dir
         if checks["real_cpu_build"]:
             try:
                 ran = jobs.run([os.path.join(tree, "replay")], cwd=tree, env={}, timeout=30)
@@ -211,7 +209,7 @@ def qualify(*, require_gpu: bool = False) -> dict:
             checks["tree_harness_and_root_read_only"] = False
 
         try:
-            cases = os.path.join(workspace, "cases")
+            cases = attempt.path("cases")
             selected = os.path.join(cases, "case-a")
             hidden = os.path.join(cases, "case-b")
             os.makedirs(selected, exist_ok=True)
@@ -220,11 +218,11 @@ def qualify(*, require_gpu: bool = False) -> dict:
                 out.write("visible")
             with open(os.path.join(hidden, "hidden"), "w", encoding="utf-8") as out:
                 out.write("must stay hidden")
-            os.makedirs(os.path.join(other_workspace, "tree"), exist_ok=True)
-            other_secret = os.path.join(other_workspace, "tree", "other-attempt-secret")
+            os.makedirs(other.tree_dir, exist_ok=True)
+            other_secret = os.path.join(other.tree_dir, "other-attempt-secret")
             with open(other_secret, "w", encoding="utf-8") as out:
                 out.write("must stay hidden")
-            stages._prepare_job_files(workspace)
+            attempt.prepare_job_files()
             exact = jobs.run(
                 ["python3", "-c", (
                     "import pathlib,sys\n"
@@ -284,9 +282,9 @@ def qualify(*, require_gpu: bool = False) -> dict:
         }
         if gpu_checks["nvidia_driver_visible"] and gpu_checks["nsys_available_in_job"]:
             try:
-                gpu_build = _real_gpu_build()
-                evidence["gpu_build"] = gpu_build
-                gpu_tree = os.path.join(gpu_workspace, "tree")
+                gpu_build = _real_gpu_build(gpu)
+                evidence["gpu_build"] = gpu_build.to_dict()
+                gpu_tree = gpu.tree_dir
                 profiled = jobs.run(
                     [os.path.join(gpu_tree, "gpu_probe")], cwd=gpu_tree, env={},
                     timeout=120, profile_gpu=True,
@@ -298,26 +296,25 @@ def qualify(*, require_gpu: bool = False) -> dict:
                     "protected_result": profiled.evidence,
                 }
                 gpu_checks["protected_kernel_profile"] = bool(
-                    gpu_build.get("ok") is True
-                    and gpu_build.get("compiler_audit", {}).get("protected") is True
-                    and gpu_build.get("flags_reached_every_compile") is True
+                    gpu_build.ok is True
+                    and gpu_build.compiler_audit.get("protected") is True
+                    and gpu_build.flags_reached_every_compile is True
                     and profiled.returncode == 0
                     and profiled.evidence
                     and profiled.evidence.get("ok") is True
                     and profiled.evidence.get("kernels_launched", 0) >= 1
                 )
                 sanitized = stages.sanitize(
-                    GPU_ATTEMPT, "gpu_probe", {"probe": {}},
+                    gpu, "gpu_probe", {"probe": {}},
                     ["memcheck", "racecheck", "initcheck"], timeout=120,
                 )
-                evidence["gpu_sanitizers"] = sanitized
+                evidence["gpu_sanitizers"] = sanitized.to_dict()
                 gpu_checks["required_sanitizers"] = bool(
-                    sanitized.get("ok") is True
-                    and set(sanitized.get("per_tool", {}))
-                    == {"memcheck", "racecheck", "initcheck"}
+                    sanitized.ok is True
+                    and set(sanitized.per_tool) == {"memcheck", "racecheck", "initcheck"}
                     and all(
                         result.get("ok") is True and result.get("errors") == 0
-                        for result in sanitized.get("per_tool", {}).values()
+                        for result in sanitized.per_tool.values()
                     )
                 )
             except Exception as exc:
@@ -370,12 +367,10 @@ def qualify(*, require_gpu: bool = False) -> dict:
             "errors": {**errors, "qualification": str(exc)},
         }
     finally:
-        shutil.rmtree(workspace, ignore_errors=True)
-        shutil.rmtree(other_workspace, ignore_errors=True)
-        shutil.rmtree(gpu_workspace, ignore_errors=True)
-        for attempt in (ATTEMPT, OTHER_ATTEMPT, GPU_ATTEMPT):
+        for disposable in (attempt, other, gpu):
+            disposable.reset()
             try:
-                os.unlink(stages._artifact_file(attempt, stages.WORK_ROOT))
+                os.unlink(disposable.artifact_file)
             except FileNotFoundError:
                 pass
     return answer

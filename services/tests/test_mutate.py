@@ -21,7 +21,7 @@ import pytest
 
 from services.builder import mutate, stages
 
-HARNESS = Path(__file__).resolve().parents[3] / "services" / "builder" / "harness"
+HARNESS = Path(__file__).resolve().parents[1] / "builder" / "harness"
 
 needs_gfortran = pytest.mark.skipif(
     shutil.which("gfortran") is None or shutil.which("make") is None,
@@ -162,7 +162,7 @@ def test_every_mutant_says_where_it_came_from():
 # ------------------------------------------------------------ scoring, for real
 
 
-def _reference(tmp_path, cases: dict) -> dict:
+def _reference(attempt, cases: dict) -> dict:
     """Build the unmutated tree and replay the cases, for answers to score against.
 
     The reference is what this harness itself produces, which is what a
@@ -170,14 +170,14 @@ def _reference(tmp_path, cases: dict) -> dict:
     port would be.
     """
     built = stages.build(
-        "attempt-1", _tree_payload(TREE), "Makefile", [REPLAY_TARGET], "gfortran",
-        FLAGS, [], PATTERNS, harness_dir=HARNESS, work_root=tmp_path,
+        attempt, _tree_payload(TREE), "Makefile", [REPLAY_TARGET], "gfortran",
+        FLAGS, [], PATTERNS, harness_dir=HARNESS,
     )
-    assert built["ok"] is True, built["log_tail"]
-    replayed = stages.run("attempt-1", "replay", cases, work_root=tmp_path)
-    assert replayed["ok"] is True, replayed["log_tail"]
+    assert built.ok is True, built.log_tail
+    replayed = stages.run(attempt, "replay", cases)
+    assert replayed.ok is True, replayed.log_tail
     return {
-        name: {"inputs": cases[name], "outputs": replayed["outputs"][name]}
+        name: {"inputs": cases[name], "outputs": replayed.outputs[name]}
         for name in cases
     }
 
@@ -189,72 +189,71 @@ def _cases() -> dict:
     }
 
 
-def _mutate(tmp_path, bands, **kwargs) -> dict:
+def _mutate(attempt, bands, **kwargs) -> dict:
     cases = _cases()
-    scored = _reference(tmp_path, cases)
+    scored = _reference(attempt, cases)
     return stages.mutate(
-        "attempt-1", "Makefile", REPLAY_TARGET, ["src/mod_kernel.f90"], scored, bands,
-        "gfortran", FLAGS, [], PATTERNS,
-        jobs=2, work_root=tmp_path, harness_dir=HARNESS, **kwargs,
+        attempt, "Makefile", REPLAY_TARGET, ["src/mod_kernel.f90"], scored, bands,
+        "gfortran", FLAGS, [], PATTERNS, jobs=2, harness_dir=HARNESS, **kwargs,
     )
 
 
 def _by_line(result: dict, line: int, status: str) -> list:
-    return [r for r in result["results"] if r["line"] == line and r["status"] == status]
+    return [r for r in result.results if r["line"] == line and r["status"] == status]
 
 
 @needs_gfortran
-def test_a_mutant_the_bands_catch_is_killed_and_a_dead_line_survives(tmp_path):
-    result = _mutate(tmp_path, TIGHT)
+def test_a_mutant_the_bands_catch_is_killed_and_a_dead_line_survives(attempt):
+    result = _mutate(attempt, TIGHT)
 
-    assert result["ok"] is True
-    assert result["generated"] == result["scored"]
+    assert result.ok is True
+    assert result.generated == result.scored
     # The line that reaches the output: changing it changes the answer by
     # more than the bands allow.
     assert _by_line(result, LIVE_LINE, "KILLED")
     # The line that reaches nothing: the harness cannot see it change, and
     # no band would help, so it is a survivor for the person to read.
     assert _by_line(result, DEAD_LINE, "EQUIVALENT")
-    assert result["counts"]["KILLED"] == len(_by_line(result, LIVE_LINE, "KILLED"))
+    assert result.counts["KILLED"] == len(_by_line(result, LIVE_LINE, "KILLED"))
     # Nothing the bands let through.
-    assert result["counts"].get("GAP", 0) == 0
+    assert result.counts.get("GAP", 0) == 0
 
 
 @needs_gfortran
-def test_mutants_are_scored_in_workers_that_are_started_rather_than_forked(tmp_path, monkeypatch):
+def test_mutants_are_scored_in_workers_that_are_started_rather_than_forked(attempt, monkeypatch):
     # A started worker inherits nothing from this process, so a worker
     # that scores a mutant has to be handed its job runner rather than
     # find one already in the module it imports.
     monkeypatch.setattr(stages, "MUTATE_START_METHOD", "spawn")
 
-    result = _mutate(tmp_path, TIGHT)
+    result = _mutate(attempt, TIGHT)
 
-    assert result["ok"] is True
+    assert result.ok is True
     assert _by_line(result, LIVE_LINE, "KILLED")
     assert _by_line(result, DEAD_LINE, "EQUIVALENT")
-    assert not [r for r in result["results"] if "the scoring run failed" in r["note"]]
+    assert not [r for r in result.results if "the scoring run failed" in r["note"]]
 
 
 @needs_gfortran
-def test_widening_the_bands_absurdly_turns_a_kill_into_the_tolerance_blind_gap(tmp_path):
-    tight = _mutate(tmp_path, TIGHT)
-    killed = {r["id"] for r in tight["results"] if r["status"] == "KILLED"}
+def test_widening_the_bands_absurdly_turns_a_kill_into_the_tolerance_blind_gap(attempt):
+    tight = _mutate(attempt, TIGHT)
+    killed = {r["id"] for r in tight.results if r["status"] == "KILLED"}
 
-    wide = _mutate(tmp_path, ABSURD)
+    wide = _mutate(attempt, ABSURD)
 
     assert killed
     # The same mutants, changing the same numbers; all that moved is what
     # the policy calls acceptable, which is the whole point of the gap.
-    assert {r["id"] for r in wide["results"] if r["status"] == "GAP"} == killed
-    assert wide["counts"].get("KILLED", 0) == 0
+    assert {r["id"] for r in wide.results if r["status"] == "GAP"} == killed
+    assert wide.counts.get("KILLED", 0) == 0
 
 
 @needs_gfortran
-def test_a_survivor_keeps_its_directory_for_the_person_and_a_kill_does_not(tmp_path):
-    result = _mutate(tmp_path, TIGHT)
+def test_a_survivor_keeps_its_directory_for_the_person_and_a_kill_does_not(attempt):
+    result = _mutate(attempt, TIGHT)
 
-    kept = set(result["kept_dirs"])
-    survivors = {r["id"] for r in result["results"] if r["status"] == "EQUIVALENT"}
+    kept = set(result.kept_dirs)
+    survivors = {r["id"] for r in result.results if r["status"] == "EQUIVALENT"}
     assert survivors
     assert {Path(path).name for path in kept} == survivors
     for path in kept:
@@ -262,16 +261,16 @@ def test_a_survivor_keeps_its_directory_for_the_person_and_a_kill_does_not(tmp_p
 
 
 @needs_gfortran
-def test_a_limit_scores_only_the_first_mutants_and_says_how_many_there_were(tmp_path):
-    result = _mutate(tmp_path, TIGHT, limit=3)
+def test_a_limit_scores_only_the_first_mutants_and_says_how_many_there_were(attempt):
+    result = _mutate(attempt, TIGHT, limit=3)
 
-    assert result["scored"] == 3
-    assert result["generated"] > 3
-    assert len(result["results"]) == 3
+    assert result.scored == 3
+    assert result.generated > 3
+    assert len(result.results) == 3
 
 
 @needs_gfortran
-def test_a_mutant_that_does_not_compile_is_reported_rather_than_scored(tmp_path):
+def test_a_mutant_that_does_not_compile_is_reported_rather_than_scored(attempt):
     # The generator is regex-based and does not parse Fortran, so some
     # mutants are not Fortran at all. Each costs one compile and is
     # reported as what it is.
@@ -281,41 +280,41 @@ def test_a_mutant_that_does_not_compile_is_reported_rather_than_scored(tmp_path)
     )
     cases = _cases()
     stages.build(
-        "attempt-1", _tree_payload(broken), "Makefile", [REPLAY_TARGET], "gfortran",
-        FLAGS, [], PATTERNS, harness_dir=HARNESS, work_root=tmp_path,
+        attempt, _tree_payload(broken), "Makefile", [REPLAY_TARGET], "gfortran",
+        FLAGS, [], PATTERNS, harness_dir=HARNESS,
     )
-    replayed = stages.run("attempt-1", "replay", cases, work_root=tmp_path)
+    replayed = stages.run(attempt, "replay", cases)
     scored = {
-        name: {"inputs": cases[name], "outputs": replayed["outputs"][name]} for name in cases
+        name: {"inputs": cases[name], "outputs": replayed.outputs[name]} for name in cases
     }
 
     result = stages.mutate(
-        "attempt-1", "Makefile", REPLAY_TARGET, ["src/mod_kernel.f90"], scored, TIGHT,
-        "gfortran", FLAGS, [], PATTERNS,
-        jobs=2, work_root=tmp_path, harness_dir=HARNESS,
+        attempt, "Makefile", REPLAY_TARGET, ["src/mod_kernel.f90"], scored, TIGHT,
+        "gfortran", FLAGS, [], PATTERNS, jobs=2, harness_dir=HARNESS,
     )
 
-    assert result["ok"] is True
-    assert set(result["counts"]) <= set(mutate.STATUSES)
+    assert result.ok is True
+    assert set(result.counts) <= set(mutate.STATUSES)
 
 
-def test_a_file_the_tree_does_not_hold_is_refused_rather_than_mutated(tmp_path):
-    stages.write_tree(tmp_path / "attempt-1" / "tree", _tree_payload(TREE))
+def test_a_file_the_tree_does_not_hold_is_refused_rather_than_mutated(attempt):
+    attempt.write_tree(_tree_payload(TREE))
 
     result = stages.mutate(
-        "attempt-1", "Makefile", REPLAY_TARGET, ["../../escape.f90"], {}, TIGHT,
-        "gfortran", FLAGS, [], PATTERNS, work_root=tmp_path, harness_dir=HARNESS,
+        attempt, "Makefile", REPLAY_TARGET, ["../../escape.f90"], {}, TIGHT,
+        "gfortran", FLAGS, [], PATTERNS, harness_dir=HARNESS,
     )
 
-    assert result["ok"] is False
-    assert "escape.f90" in result["log_tail"]
+    assert result.ok is False
+    assert "escape.f90" in result.log_tail
 
 
 def test_a_tree_that_was_never_built_is_reported_rather_than_mutated(tmp_path):
     result = stages.mutate(
-        "attempt-2", "Makefile", REPLAY_TARGET, ["src/mod_kernel.f90"], {}, TIGHT,
-        "gfortran", FLAGS, [], PATTERNS, work_root=tmp_path, harness_dir=HARNESS,
+        stages.workspace_for("attempt-2", work_root=tmp_path), "Makefile", REPLAY_TARGET,
+        ["src/mod_kernel.f90"], {}, TIGHT, "gfortran", FLAGS, [], PATTERNS,
+        harness_dir=HARNESS,
     )
 
-    assert result["ok"] is False
-    assert "attempt-2" in result["log_tail"] or "tree" in result["log_tail"]
+    assert result.ok is False
+    assert "attempt-2" in result.log_tail or "tree" in result.log_tail

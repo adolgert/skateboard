@@ -4,7 +4,7 @@ import json
 import pytest
 
 from equivalent.manifest.schema import _matches as manifest_matches
-from services.builder import contract
+from services.builder import compile_log
 
 FLAGS = ["-O2", "-stdpar=gpu"]
 PATTERNS = ["src/*.f90", "harness/*.f90"]
@@ -31,7 +31,7 @@ def test_one_compile_reports_its_inputs_output_and_flags(tmp_path):
         "cwd": str(tree),
     })
 
-    records = contract.compile_records(log, tree, FLAGS, PATTERNS)
+    records = compile_log.compile_records(log, tree, FLAGS, PATTERNS)
 
     assert len(records) == 1
     assert records[0]["inputs"] == ["src/mod_kernel.f90"]
@@ -46,11 +46,11 @@ def test_a_compile_missing_one_strategy_flag_is_marked(tmp_path):
     tree = _tree(tmp_path, "src/mod_kernel.f90")
     log = _log({"argv": ["-O0", "-o", "replay", "src/mod_kernel.f90"], "cwd": str(tree)})
 
-    records = contract.compile_records(log, tree, FLAGS, PATTERNS)
+    records = compile_log.compile_records(log, tree, FLAGS, PATTERNS)
 
     assert records[0]["has_flags"] is False
-    assert contract.flags_reached_every_compile(records) is False
-    assert contract.compiles_without_flags(records) == [records[0]["argv"]]
+    assert compile_log.flags_reached_every_compile(records) is False
+    assert compile_log.compiles_without_flags(records) == [records[0]["argv"]]
 
 
 def test_a_source_file_from_outside_the_tree_is_named(tmp_path):
@@ -63,11 +63,11 @@ def test_a_source_file_from_outside_the_tree_is_named(tmp_path):
         "cwd": str(tree),
     })
 
-    records = contract.compile_records(log, tree, FLAGS, PATTERNS)
+    records = compile_log.compile_records(log, tree, FLAGS, PATTERNS)
 
     assert records[0]["outside"] == [str(elsewhere)]
-    assert contract.compiled_only_tree_source(records) is False
-    assert contract.files_outside_tree(records) == [str(elsewhere)]
+    assert compile_log.compiled_only_tree_source(records) is False
+    assert compile_log.files_outside_tree(records) == [str(elsewhere)]
 
 
 def test_a_file_under_the_harness_directory_is_not_outside(tmp_path):
@@ -83,10 +83,10 @@ def test_a_file_under_the_harness_directory_is_not_outside(tmp_path):
         "cwd": str(tree),
     })
 
-    records = contract.compile_records(log, tree, FLAGS, PATTERNS, harness_dir=harness)
+    records = compile_log.compile_records(log, tree, FLAGS, PATTERNS, harness_dir=harness)
 
     assert records[0]["outside"] == []
-    assert contract.compiled_only_tree_source(records) is True
+    assert compile_log.compiled_only_tree_source(records) is True
 
 
 def test_a_tree_file_the_patterns_do_not_cover_is_outside(tmp_path):
@@ -99,7 +99,7 @@ def test_a_tree_file_the_patterns_do_not_cover_is_outside(tmp_path):
         "cwd": str(tree),
     })
 
-    records = contract.compile_records(log, tree, FLAGS, PATTERNS)
+    records = compile_log.compile_records(log, tree, FLAGS, PATTERNS)
 
     assert records[0]["outside"] == ["scratch/experiment.f90"]
 
@@ -111,7 +111,7 @@ def test_two_sources_with_the_same_basename_are_both_recorded(tmp_path):
         "cwd": str(tree),
     })
 
-    records = contract.compile_records(log, tree, FLAGS, ["src/*.f90"])
+    records = compile_log.compile_records(log, tree, FLAGS, ["src/*.f90"])
 
     assert records[0]["inputs"] == ["src/a/x.f90", "src/b/x.f90"]
 
@@ -122,7 +122,7 @@ def test_a_path_is_resolved_against_the_directory_the_compile_ran_in(tmp_path):
         "argv": [*FLAGS, "-c", "mod_kernel.f90"], "cwd": str(tree / "src"),
     })
 
-    records = contract.compile_records(log, tree, FLAGS, PATTERNS)
+    records = compile_log.compile_records(log, tree, FLAGS, PATTERNS)
 
     assert records[0]["inputs"] == ["src/mod_kernel.f90"]
     assert records[0]["cwd"] == "src"
@@ -136,7 +136,7 @@ def test_an_argument_that_is_not_a_file_on_disk_is_not_an_input(tmp_path):
         "argv": [*FLAGS, "-o", "missing.f90", "src/mod_kernel.f90"], "cwd": str(tree),
     })
 
-    records = contract.compile_records(log, tree, FLAGS, PATTERNS)
+    records = compile_log.compile_records(log, tree, FLAGS, PATTERNS)
 
     assert records[0]["inputs"] == ["src/mod_kernel.f90"]
     assert records[0]["output"] == "missing.f90"
@@ -152,11 +152,11 @@ def test_a_link_step_with_no_source_does_not_decide_the_flag_question(tmp_path):
         {"argv": ["-o", "replay", "mod_kernel.o"], "cwd": str(tree)},
     )
 
-    records = contract.compile_records(log, tree, FLAGS, PATTERNS)
+    records = compile_log.compile_records(log, tree, FLAGS, PATTERNS)
 
     assert len(records) == 2
     assert records[1]["inputs"] == []
-    assert contract.flags_reached_every_compile(records) is True
+    assert compile_log.flags_reached_every_compile(records) is True
 
 
 def test_a_log_with_no_compile_at_all_reaches_no_flags(tmp_path):
@@ -164,17 +164,17 @@ def test_a_log_with_no_compile_at_all_reaches_no_flags(tmp_path):
     # builder handed it -- a build that proved nothing, not a clean one.
     tree = _tree(tmp_path, "src/mod_kernel.f90")
 
-    records = contract.compile_records("\n \n", tree, FLAGS, PATTERNS)
+    records = compile_log.compile_records("\n \n", tree, FLAGS, PATTERNS)
 
     assert records == []
-    assert contract.flags_reached_every_compile(records) is False
+    assert compile_log.flags_reached_every_compile(records) is False
 
 
 def test_an_uppercase_extension_is_still_fortran_source(tmp_path):
     tree = _tree(tmp_path, "src/MOD_KERNEL.F90")
     log = _log({"argv": [*FLAGS, "-c", "src/MOD_KERNEL.F90"], "cwd": str(tree)})
 
-    records = contract.compile_records(log, tree, FLAGS, PATTERNS)
+    records = compile_log.compile_records(log, tree, FLAGS, PATTERNS)
 
     assert records[0]["inputs"] == ["src/MOD_KERNEL.F90"]
     assert records[0]["outside"] == []
@@ -184,7 +184,7 @@ def test_a_malformed_log_line_is_reported_rather_than_ignored(tmp_path):
     tree = _tree(tmp_path, "src/mod_kernel.f90")
 
     with pytest.raises(ValueError):
-        contract.compile_records("this is not json\n", tree, FLAGS, PATTERNS)
+        compile_log.compile_records("this is not json\n", tree, FLAGS, PATTERNS)
 
 
 @pytest.mark.parametrize(
@@ -198,12 +198,12 @@ def test_a_malformed_log_line_is_reported_rather_than_ignored(tmp_path):
     ],
 )
 def test_the_module_directory_flag_is_looked_up_by_compiler_name(compiler, expected):
-    assert contract.module_flag(compiler) == expected
+    assert compile_log.module_flag(compiler) == expected
 
 
 # The same paths and patterns put to both copies of the source-pattern
 # rule. The builder image does not install the gateway's package, so
-# contract.py carries its own copy; this is what keeps the two the same
+# compile_log.py carries its own copy; this is what keeps the two the same
 # rule rather than two rules that happen to agree today.
 PATTERN_TABLE = [
     ("src/mod_kernel.f90", "src/*.f90"),
@@ -223,4 +223,4 @@ PATTERN_TABLE = [
 
 @pytest.mark.parametrize("path,pattern", PATTERN_TABLE)
 def test_the_builders_copy_of_the_pattern_rule_agrees_with_the_manifests(path, pattern):
-    assert contract._matches(path, pattern) == manifest_matches(path, pattern)
+    assert compile_log._matches(path, pattern) == manifest_matches(path, pattern)

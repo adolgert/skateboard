@@ -1,18 +1,28 @@
 """Adversarial checks for the boundary around submitted programs."""
 import base64
 import importlib.util
-import os
 from pathlib import Path
 
 import pytest
 
-from services.builder import executor, stages
+from services.builder import executor, stages, workspace
 
 _AUDIT_SPEC = importlib.util.spec_from_file_location(
-    "builder_audit_run", Path(__file__).resolve().parents[3] / "services/builder/audit-run.py",
+    "builder_audit_run", Path(__file__).resolve().parents[1] / "builder/audit-run.py",
 )
 audit_run = importlib.util.module_from_spec(_AUDIT_SPEC)
 _AUDIT_SPEC.loader.exec_module(audit_run)
+
+
+class ChecksIdentities(workspace.InProcessJobs):
+    """Commands still run here, but an executable must match the record kept for it.
+
+    That check is the production one, and it needs no container to
+    exercise: the supervisor writes what it built and refuses a file
+    whose bytes no longer answer to it.
+    """
+
+    audited = True
 
 
 def test_service_credentials_are_not_forwarded_to_jobs():
@@ -70,67 +80,84 @@ def test_job_without_an_attempt_directory_is_refused(tmp_path):
 
 
 def test_sanitized_attempt_cannot_collide_with_a_directly_supplied_id(tmp_path):
-    encoded = Path(stages._workspace("code:tree", tmp_path)).name
+    encoded = Path(workspace.attempt_directory(tmp_path, "code:tree")).name
     assert encoded.startswith("@")
-    assert stages._workspace(encoded, tmp_path) != stages._workspace("code:tree", tmp_path)
+    assert (
+        workspace.attempt_directory(tmp_path, encoded)
+        != workspace.attempt_directory(tmp_path, "code:tree")
+    )
 
 
-def test_artifact_identity_detects_executable_replacement(tmp_path, monkeypatch):
-    monkeypatch.setattr(stages, "_JOB_RUNNER", None)
-    tree = Path(stages._tree_dir("attempt-1", tmp_path))
+def test_artifact_identity_detects_executable_replacement(tmp_path):
+    attempt = stages.workspace_for("attempt-1", work_root=tmp_path, policy=ChecksIdentities())
+    tree = Path(attempt.tree_dir)
     tree.mkdir(parents=True)
     executable = tree / "replay"
     executable.write_bytes(b"first executable")
     executable.chmod(0o755)
-    stages._write_artifacts(
-        "attempt-1", [{"role": "replay", "executable": "replay"}], tmp_path,
-    )
+    attempt.write_artifacts([{"role": "replay", "executable": "replay"}])
 
-    assert stages.artifact_identities("attempt-1", work_root=tmp_path)["ok"] is True
+    assert attempt.artifact_identities().ok is True
     executable.write_bytes(b"replacement code")
-    assert stages.artifact_identities("attempt-1", work_root=tmp_path)["ok"] is False
-    assert stages._executable("attempt-1", "replay", tmp_path)[1] is None
+    assert attempt.artifact_identities().ok is False
+    assert attempt.executable("replay")[0] is None
 
 
-def test_timing_refuses_zero_repetitions_before_running(tmp_path, monkeypatch):
-    monkeypatch.setattr(stages, "_JOB_RUNNER", executor.local_run)
-    result = stages.time_run(
-        "attempt-1", "anything", repeats=0, work_root=tmp_path,
+def _without_evidence(cmd, **kwargs):
+    """A job that ran and left no protected account of what it executed."""
+    return executor.JobResult(0, "", "", None)
+
+
+def test_a_build_with_no_protected_account_of_the_compiler_is_a_failed_build(tmp_path):
+    # A build is a claim about which compiler ran with which flags. Where
+    # that claim rests on the observer, an absent observation is a failed
+    # build rather than a build nobody watched.
+    attempt = stages.workspace_for(
+        "attempt-1", work_root=tmp_path,
+        policy=ChecksIdentities(runner=_without_evidence),
     )
-    assert result["ok"] is False
-    assert result["runs_s"] == []
-    assert "positive integer" in result["log_tail"]
+    makefile = base64.b64encode(b"replay:\n\ttrue\n").decode()
+
+    result = stages.build(
+        attempt, [{"path": "Makefile", "b64": makefile}], "Makefile",
+        [{"role": "replay", "target": "replay", "executable": "replay"}],
+        "gfortran", [], [], [],
+    )
+
+    assert result.ok is False
+    assert "evidence was unavailable" in result.log_tail
 
 
-def test_timing_checks_each_run_against_parent_expected_bytes(tmp_path, monkeypatch):
-    monkeypatch.setattr(stages, "_JOB_RUNNER", executor.local_run)
-    tree = Path(stages._tree_dir("attempt-1", tmp_path))
+def test_timing_refuses_zero_repetitions_before_running(attempt):
+    result = stages.time_run(attempt, "anything", repeats=0)
+    assert result.ok is False
+    assert result.runs_s == []
+    assert "positive integer" in result.log_tail
+
+
+def test_timing_checks_each_run_against_parent_expected_bytes(attempt):
+    tree = Path(attempt.tree_dir)
     tree.mkdir(parents=True)
     program = tree / "timing"
     program.write_text("#!/bin/sh\nprintf wrong > result.dat\n")
     program.chmod(0o755)
     expected = {"result.dat": base64.b64encode(b"right").decode()}
     result = stages.time_run(
-        "attempt-1", "timing", outputs=["result.dat"], repeats=2,
-        expected_outputs=expected, work_root=tmp_path,
+        attempt, "timing", outputs=["result.dat"], repeats=2, expected_outputs=expected,
     )
-    assert result["ok"] is False
-    assert len(result["runs_s"]) == 1
-    assert "unexpected bytes" in result["log_tail"]
+    assert result.ok is False
+    assert len(result.runs_s) == 1
+    assert "unexpected bytes" in result.log_tail
 
 
-def test_program_stderr_is_not_accepted_as_gpu_profiler_evidence(tmp_path, monkeypatch):
-    tree = Path(stages._tree_dir("attempt-1", tmp_path))
+def test_program_stderr_is_not_accepted_as_gpu_profiler_evidence(attempt):
+    tree = Path(attempt.tree_dir)
     tree.mkdir(parents=True)
     replay = tree / "replay"
     replay.write_text(
         "#!/bin/sh\necho 'launch CUDA kernel file=fake.f90 function=fake line=1 device=0' >&2\n"
     )
     replay.chmod(0o755)
-    monkeypatch.setattr(stages, "_JOB_RUNNER", executor.local_run)
-    result = stages.run(
-        "attempt-1", "replay", {"case": {}}, notify="acc", mandatory=True,
-        work_root=tmp_path,
-    )
-    assert result["ok"] is False
-    assert "protected nsys evidence" in result["log_tail"]
+    result = stages.run(attempt, "replay", {"case": {}}, notify="acc", mandatory=True)
+    assert result.ok is False
+    assert "protected nsys evidence" in result.log_tail

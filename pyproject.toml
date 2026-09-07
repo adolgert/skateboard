@@ -39,4 +39,8 @@ exclude = ["equivalent.tests*"]
 # serialbox, KGen and others -- which carry their own suites and their own
 # dependencies, and the region harness's own tests need a built CoarseAIR
 # to run at all. Nothing this project depends on lives there.
-testpaths = ["equivalent"]
+testpaths = ["equivalent", "services"]
+# The services are not an installed package -- the builder image copies
+# them in -- so the repository root is what makes `services.builder`
+# importable from a test wherever pytest was started.
+pythonpath = ["."]
