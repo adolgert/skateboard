@@ -13,6 +13,7 @@ from equivalent.ledger.records import Predicate
 from equivalent.ledger.status import compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
+from equivalent.tests.fakes import build_claim_detail
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 
@@ -31,7 +32,7 @@ def _file_passing_claims(store, requirements, phase, tree, frozen):
         built = req.predicate_type == BUILD_PREDICATE[phase]
         predicate = Predicate(
             tool="t", version="0.1", configHash="cfg", verdict="pass",
-            detail={"targets": {"replay": {"sha256": BINARY.sha256}}} if built else {},
+            detail=build_claim_detail(phase, BINARY.sha256) if built else {},
         )
         store.record_claim(
             [subject], req.predicate_type, predicate,

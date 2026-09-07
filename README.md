@@ -24,6 +24,8 @@ each of those has a check that says whether it is right.
   claim observes, what invalidates it, and what still needs human review.
 - **[`docs/README.md`](docs/README.md)** — the documentation map, distinguishing
   current instructions from historical experiments and research plans.
+- **[`docs/code-map.md`](docs/code-map.md)** — where to change workflow policy,
+  checks, gateway orchestration, and builder execution.
 - **[`docs/pi-install.md`](docs/pi-install.md)** — from a fresh checkout to a
   running stack and a session.
 - **[`docs/pi-users-manual.md`](docs/pi-users-manual.md)** — what a porting

@@ -21,7 +21,7 @@ from equivalent.manifest.schema import (
     COMPLETING_FIELDS, REQUIRED_DATASETS, REQUIRED_FIELDS,
     REQUIRED_INTERFACE_FIELDS, REQUIRED_SOURCE_FIELDS,
 )
-from services.builder import stages
+from services.builder import case_io
 from services.builder.harness import harness_properties
 from services.oracle import app as oracle
 
@@ -58,7 +58,7 @@ def test_the_sealed_oracle_reads_the_manifest_keys_the_schema_requires():
 # the builder's stages, and the property library baked into the builder
 # image.
 @pytest.mark.parametrize(
-    "spelling", [oracle, stages, harness_properties],
+    "spelling", [oracle, case_io, harness_properties],
     ids=lambda module: module.__name__,
 )
 def test_every_copy_of_the_capture_format_spells_it_the_same_way(spelling):

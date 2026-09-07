@@ -1,7 +1,7 @@
-"""Builder service. Thin HTTP shim over stages.py.
+"""Builder service. Thin HTTP shim over the stage API.
 
-Trust role: routing only. Every command line lives in stages.py; this
-file turns a request body into a call and the answer into JSON, which
+Trust role: routing only. Every command line lives in a focused stage module;
+this file turns a request body into a call and the answer into JSON, which
 FastAPI validates against the response type the contract declares. What it
 must get right is that nothing it invents reaches stages.py -- the tree,
 the makefile, the targets, the compiler, the flags, and the executables

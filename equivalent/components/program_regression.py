@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from equivalent.ledger.artifacts import binary_artifacts
 from equivalent.ledger.subjects import Subject
 from equivalent.ledger.vocabulary import (
     EXECUTABLE_IDENTITY_KEY,
@@ -38,8 +39,10 @@ from equivalent.ledger.vocabulary import (
     PROGRAM_SET_KEY,
 )
 
-from .context import CheckContext, CheckResult
+from .context import CheckContext
+from .result import CheckResult
 from .errors import ComponentError
+from .names import TIMING_ROLE
 from .program_outputs import (
     comparison_reasons,
     compare_outputs,
@@ -100,9 +103,15 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         **rests_on, "per_var": per_var, "runs_s": resp.runs_s,
         EXECUTABLE_IDENTITY_KEY: resp.executable_identity,
     }
+    artifacts = binary_artifacts(
+        resp.executable_identity,
+        executable=manifest.build.targets[TIMING_ROLE].executable,
+    )
     if all(entry[PASS] for entry in per_var.values()):
-        return CheckResult(verdict=PASS, detail=detail, materials=materials)
+        return CheckResult(
+            verdict=PASS, detail=detail, materials=materials, binary_artifacts=artifacts,
+        )
     return CheckResult(
         verdict=FAIL, detail=detail, reasons=tuple(comparison_reasons(per_var)),
-        materials=materials,
+        materials=materials, binary_artifacts=artifacts,
     )

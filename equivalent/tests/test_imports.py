@@ -98,7 +98,8 @@ def _imported_top_level(source: str, package: tuple[str, ...]) -> set[str]:
         if isinstance(node, ast.Import):
             names = [alias.name for alias in node.names]
         elif isinstance(node, ast.ImportFrom):
-            names = [_absolute(node, package)]
+            base = _absolute(node, package)
+            names = [base, *(f"{base}.{alias.name}" for alias in node.names)]
         else:
             continue
         for name in names:
@@ -134,7 +135,8 @@ def _deploy_imports() -> dict[str, set[str]]:
             if isinstance(node, ast.Import):
                 raw = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom):
-                raw = [node.module or ""]
+                base = node.module or ""
+                raw = [base, *(f"{base}.{alias.name}" for alias in node.names)]
             else:
                 continue
             for name in raw:

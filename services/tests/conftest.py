@@ -1,7 +1,7 @@
 """Service-stage tests explicitly opt out of the production execution policy."""
 import pytest
 
-from services.builder import stages, workspace
+from services.builder import stage_runtime, stages, workspace
 
 
 @pytest.fixture(autouse=True)
@@ -12,7 +12,7 @@ def in_process_jobs(monkeypatch):
     which policy it wanted cannot reach the disposable-container one and
     start talking to a container daemon.
     """
-    monkeypatch.setattr(stages, "POLICY", workspace.InProcessJobs())
+    monkeypatch.setattr(stage_runtime, "POLICY", workspace.InProcessJobs())
 
 
 @pytest.fixture

@@ -23,6 +23,7 @@ from equivalent.region.deployment import load_gateway_config
 from equivalent.region.evidence import evidence_materials_for
 from equivalent.tree import Tree, baseline_commit, init_baseline_repo
 from equivalent.tests.fakes import (
+    build_claim_detail,
     fixture_arrays,
     keep_capture_set,
     in_tree_manifest,
@@ -59,7 +60,7 @@ def _program_case() -> dict:
 def _write_claims(store: LedgerStore, tree, details: dict, omit: str = "", materials=()) -> None:
     """One passing claim per onboarding requirement, in the order they are asked for."""
     binary = Subject(kind="binary", sha256="d" * 64)
-    details = {"harness/builds": {"targets": {"replay": {"sha256": binary.sha256}}}, **details}
+    details = {"harness/builds": build_claim_detail("onboarding", binary.sha256), **details}
     for requirement in requirements_for("onboarding"):
         if requirement.predicate_type == omit:
             continue

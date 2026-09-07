@@ -11,14 +11,15 @@ compiler's flags and quietly hard-codes another's is exactly what
 onboarding is meant to catch, and catching it once, early, is cheaper
 than discovering it when a port is already written.
 
-The verdict for each build comes from build_replay, not from a second
+The verdict for each build comes from building, not from a second
 copy of the same reasoning here.
 """
 from __future__ import annotations
 
 from equivalent.ledger.vocabulary import PASS
-from . import build_replay
-from .context import CheckContext, CheckResult, failed
+from . import building
+from .context import CheckContext
+from .result import CheckResult, failed
 
 
 def check(ctx: CheckContext, config: dict) -> CheckResult:
@@ -34,10 +35,10 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     """
     manifest = ctx.provenance.manifest()
     tree = ctx.tree.payload()
-    recipe = build_replay.Recipe.from_manifest(manifest)
+    recipe = building.Recipe.from_manifest(manifest)
 
     per_strategy = {
-        one.name: build_replay.build_verdict(
+        one.name: building.build_verdict(
             ctx.builder, ctx.provenance.attempt_id(one), tree, one, recipe,
         )
         for one in ctx.provenance.strategies()
@@ -54,5 +55,12 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         return failed(detail, [
             f"strategy '{name}': {reason}"
             for name in did_not_build for reason in per_strategy[name].reasons
-        ])
-    return CheckResult(verdict=PASS, detail=detail)
+        ], build_records=tuple(
+            record for result in per_strategy.values() for record in result.build_records
+        ))
+    return CheckResult(
+        verdict=PASS, detail=detail,
+        build_records=tuple(
+            record for result in per_strategy.values() for record in result.build_records
+        ),
+    )

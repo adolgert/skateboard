@@ -12,13 +12,12 @@ property of the gate as configured, not of a model of the gate.
 
 Background and the survey that motivated the design: [`docs/coverage-testing.md`](../../docs/coverage-testing.md).
 
-The operator tables and the generator here are also the harness's own: they are
-carried over, operator for operator, into `services/builder/mutate.py`, which
-runs inside the builder as the `harness_self_check` step of onboarding a code.
-That step asks the same question about a code being brought in, with the tree's
-own makefile and the bands the code proposes, and returns per-mutant verdicts
-rather than outputs. This tool is the standalone one: it runs on the host, with
-gfortran, and it is where a coverage prepass and a checked rebuild live.
+The operator tables and generator live once in
+`services/builder/mutation_source.py`. Both this command and the builder's
+`harness_self_check` import that dependency-free source. The builder asks the
+same question with the tree's own makefile and proposed bands and returns
+per-mutant verdicts. This standalone command runs on the host with gfortran and
+adds a coverage prepass and checked rebuild.
 
 ## Why not an existing tool
 

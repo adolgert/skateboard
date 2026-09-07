@@ -26,7 +26,8 @@ import yaml
 from equivalent.ledger.vocabulary import PASS
 from equivalent.manifest.schema import IN_TREE_MANIFEST, load_tree_manifest
 
-from .context import CheckContext, CheckResult, failed
+from .context import CheckContext
+from .result import CheckResult, failed
 from .names import bands
 
 # The declared types whose comparison consults a tolerance band, and what

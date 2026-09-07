@@ -36,8 +36,11 @@ from equivalent.capture import npy
 from equivalent.ledger.subjects import policy_subject
 
 from equivalent.ledger.vocabulary import CAPTURE_SET_KEY, FAIL, PASS, POLICY_KEY
-from . import backend, build_replay, harness_capture
-from .context import CheckContext, CheckResult, capture_set_materials
+from . import backend, building, harness_capture
+from equivalent.ledger.capture_sets import capture_set_materials
+
+from .context import CheckContext
+from .result import CheckResult
 from .errors import ComponentError, after_the_manifest_check_passed
 # The mutants are scored on the dataset the agent can see, within the
 # bands a port's own region outputs are judged by: a self-check is about
@@ -163,7 +166,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         )
     cases = ctx.sets.load(sets[VISIBLE])
     per_variable = bands_of(policy_bytes)
-    fortran = build_replay.fortran_of(ctx.baseline_strategy)
+    fortran = building.fortran_of(ctx.baseline_strategy)
     replay = manifest.build.targets[REPLAY_ROLE]
 
     resp = backend.mutate(

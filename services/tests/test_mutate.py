@@ -12,14 +12,17 @@ generator.
 from __future__ import annotations
 
 import base64
+import importlib.util
 import io
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from services.builder import mutate, stages
+from services.builder import mutate, mutation_source, stage_mutation, stages
 
 HARNESS = Path(__file__).resolve().parents[1] / "builder" / "harness"
 
@@ -97,6 +100,37 @@ def _tree_payload(files: dict) -> list:
 
 
 # ---------------------------------------------------------------- generate
+
+
+def test_service_uses_dependency_free_generator():
+    assert mutate.generate is mutation_source.generate
+
+
+def test_standalone_tool_imports_the_same_generator():
+    tool = Path(__file__).resolve().parents[2] / "tools" / "fmutate" / "fmutate.py"
+    spec = importlib.util.spec_from_file_location("fmutate_cli_test", tool)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(spec.name, None)
+
+    assert module.generate is mutation_source.generate
+
+
+def test_standalone_tool_finds_shared_generator_outside_checkout(tmp_path):
+    tool = Path(__file__).resolve().parents[2] / "tools" / "fmutate" / "fmutate.py"
+    completed = subprocess.run(
+        [sys.executable, str(tool), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "usage: fmutate.py" in completed.stdout
 
 
 def test_generate_changes_one_operator_at_a_time():
@@ -226,7 +260,7 @@ def test_mutants_are_scored_in_workers_that_are_started_rather_than_forked(attem
     # A started worker inherits nothing from this process, so a worker
     # that scores a mutant has to be handed its job runner rather than
     # find one already in the module it imports.
-    monkeypatch.setattr(stages, "MUTATE_START_METHOD", "spawn")
+    monkeypatch.setattr(stage_mutation, "MUTATE_START_METHOD", "spawn")
 
     result = _mutate(attempt, TIGHT)
 

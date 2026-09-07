@@ -27,7 +27,9 @@ import base64
 import hashlib
 
 from equivalent.capture import npy
+from equivalent.ledger.artifacts import binary_artifacts
 from equivalent.ledger.capture_sets import (
+    capture_set_materials,
     CAPTURED_PREDICATE,
     pack_capture_set,
     sets_named_by,
@@ -35,7 +37,8 @@ from equivalent.ledger.capture_sets import (
 
 from equivalent.ledger.vocabulary import CAPTURE_SET_KEY, EXECUTABLE_IDENTITY_KEY, PASS
 from . import backend
-from .context import CheckContext, CheckResult, capture_set_materials, failed
+from .context import CheckContext
+from .result import CheckResult, failed
 from .errors import ComponentError
 from .names import CAPTURE_ROLE, HOLDOUT, VISIBLE
 
@@ -151,6 +154,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     per_dataset = {}
     captured = {}
     executable_identity = None
+    measured_identities = []
     problems = []
     for name in sorted(manifest.datasets):
         resp = backend.capture(
@@ -159,6 +163,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
 
         cases = resp.cases if resp.ok else {}
         executable_identity = executable_identity or resp.executable_identity
+        measured_identities.append(resp.executable_identity)
         per_dataset[name] = {"cases": len(cases)}
         if not cases:
             problems.append(
@@ -188,7 +193,9 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
                 **described, "datasets": per_dataset, "problems": problems,
                 EXECUTABLE_IDENTITY_KEY: executable_identity,
             },
-            problems,
+            problems, binary_artifacts=binary_artifacts(
+                *measured_identities, executable=capture.executable,
+            ),
         )
 
     packed = []
@@ -203,4 +210,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     return CheckResult(
         verdict=PASS, detail=detail,
         materials=capture_set_materials(detail), stores=tuple(packed),
+        binary_artifacts=binary_artifacts(
+            *measured_identities, executable=capture.executable,
+        ),
     )

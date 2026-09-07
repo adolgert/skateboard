@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from equivalent.ledger.records import SCHEMA_VERSION
 from equivalent.ledger.subjects import Subject, hash_bytes
-from equivalent.ledger.vocabulary import EXECUTABLE_IDENTITY_KEY, TARGETS_KEY
+from equivalent.ledger.artifacts import build_binary_materials
 
 
 BUILD_PREDICATE = {"porting": "build/replay", "onboarding": "harness/builds"}
@@ -52,28 +52,6 @@ def claim_matches_context(claim, required_materials=()) -> bool:
     )
 
 
-def binary_materials(detail: dict) -> tuple[Subject, ...]:
-    """Executable identities retained anywhere in structured claim detail."""
-    digests = set()
-
-    def visit(value, key=None):
-        if isinstance(value, dict):
-            if key == EXECUTABLE_IDENTITY_KEY and isinstance(value.get("sha256"), str):
-                digests.add(value["sha256"])
-            if key == TARGETS_KEY:
-                for target in value.values() if isinstance(value, dict) else ():
-                    if isinstance(target, dict) and isinstance(target.get("sha256"), str):
-                        digests.add(target["sha256"])
-            for child_key, child in value.items():
-                visit(child, child_key)
-        elif isinstance(value, list):
-            for child in value:
-                visit(child)
-
-    visit(detail)
-    return tuple(Subject(kind="binary", sha256=digest) for digest in sorted(digests))
-
-
 def current_build_claim(store, phase: str, tree: Subject, core_materials=()):
     """The current passing build assertion for one candidate tree, if any."""
     claim = store.latest(
@@ -104,7 +82,10 @@ def required_materials_by_predicate(
     caller's core context; every later claim is judged by the rule above.
     """
     build_claim = current_build_claim(store, phase, tree, core_materials)
-    cohort = binary_materials(build_claim.predicate.detail) if build_claim else ()
+    cohort = (
+        build_binary_materials(BUILD_PREDICATE[phase], build_claim.predicate.detail)
+        if build_claim else ()
+    )
     dependent = dependent_materials(core_materials, cohort)
     return {
         requirement.predicate_type: dependent

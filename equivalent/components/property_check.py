@@ -26,11 +26,13 @@ from __future__ import annotations
 
 import random
 
+from equivalent.ledger.artifacts import binary_artifacts
 from equivalent.ledger.vocabulary import EXECUTABLE_IDENTITY_KEY, FAIL, PASS
 from equivalent.manifest.schema import Manifest
 
 from . import backend
-from .context import CheckContext, CheckResult
+from .context import CheckContext
+from .result import CheckResult
 from .errors import ComponentError
 from .names import REPLAY_ROLE
 
@@ -84,6 +86,7 @@ def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
     resp = backend.properties(
         builder, attempt_id, replay.executable, module, cases, drawn, examples,
     )
+    artifacts = binary_artifacts(resp.executable_identity, executable=replay.executable)
 
     problems = []
     if resp.seed != drawn:
@@ -143,13 +146,16 @@ def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
         detail[EXECUTABLE_IDENTITY_KEY] = resp.executable_identity
     if problems:
         detail["problems"] = problems
-        return CheckResult(verdict=FAIL, detail=detail, reasons=tuple(problems))
+        return CheckResult(
+            verdict=FAIL, detail=detail, reasons=tuple(problems), binary_artifacts=artifacts,
+        )
     if not successful:
         return CheckResult(
             verdict=FAIL, detail=detail,
             reasons=("the property run did not pass every test it collected",),
+            binary_artifacts=artifacts,
         )
-    return CheckResult(verdict=PASS, detail=detail)
+    return CheckResult(verdict=PASS, detail=detail, binary_artifacts=artifacts)
 
 
 def check(ctx: CheckContext, config: dict) -> CheckResult:

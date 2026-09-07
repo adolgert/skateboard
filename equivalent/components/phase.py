@@ -22,12 +22,11 @@ from typing import TYPE_CHECKING
 
 from equivalent.ledger.acceptance import ONBOARDING, PORTING
 from equivalent.ledger.evidence import BUILD_PREDICATE
-from equivalent.ledger.vocabulary import TARGETS_KEY
 from equivalent.manifest.schema import Manifest
 from equivalent.strategy.schema import Strategy
 
-from .context import CheckResult, failed
 from .errors import ComponentError, after_the_manifest_check_passed
+from .result import CheckResult, failed
 from .workspaces import attempt_id_for, attempt_id_for_strategy
 
 if TYPE_CHECKING:
@@ -37,10 +36,11 @@ if TYPE_CHECKING:
 class Provenance:
     """Where a build's description comes from, in one phase.
 
-    `build_predicate`, `build_entries` and `oracle_judges` are answered by
-    the class, so the gateway can ask them with only a region's phase in
-    hand; the rest are about the tree in one context and are answered by
-    an instance.
+    `build_predicate` and `oracle_judges` are answered by the class, so the
+    gateway can ask them with only a region's phase in hand; the rest are
+    about the tree in one context and are answered by an instance. Stored
+    build detail is decoded by ledger.artifacts, beside the evidence rule
+    that consumes it.
     """
 
     build_predicate: str
@@ -66,11 +66,6 @@ class Provenance:
         Named for a strategy where a build under two of them would
         otherwise share one workspace and read each other's object files.
         """
-        raise NotImplementedError
-
-    @staticmethod
-    def build_entries(detail: dict) -> list:
-        """The (workspace, targets) pairs one build claim's detail asserts."""
         raise NotImplementedError
 
     def build_target(self, manifest: Manifest, role: str, purpose: str, described=None):
@@ -125,14 +120,6 @@ class OnboardingProvenance(Provenance):
         one = self.ctx.baseline_strategy if strategy is None else strategy
         return attempt_id_for_strategy(self.ctx.region_id, self.ctx.tree.sha, one.name)
 
-    @staticmethod
-    def build_entries(detail: dict) -> list:
-        return [
-            (one.get("attempt_id"), one.get(TARGETS_KEY, {}))
-            for _, one in sorted(detail.get("strategies", {}).items())
-            if isinstance(one, dict)
-        ]
-
     def _no_target(self, message: str, described: dict) -> CheckResult:
         return failed({**described, "problems": [message]}, [message])
 
@@ -152,10 +139,6 @@ class PortingProvenance(Provenance):
     def attempt_id(self, strategy: Strategy | None = None) -> str:
         """One workspace per (region, tree): a port is built one way."""
         return attempt_id_for(self.ctx.region_id, self.ctx.tree.sha)
-
-    @staticmethod
-    def build_entries(detail: dict) -> list:
-        return [(detail.get("attempt_id"), detail.get(TARGETS_KEY, {}))]
 
     def _no_target(self, message: str, described: dict):
         raise ComponentError(message)

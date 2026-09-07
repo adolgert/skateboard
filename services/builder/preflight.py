@@ -20,6 +20,7 @@ import subprocess
 import time
 
 from . import contract, executor, stages
+from .workspace import WORK_ROOT
 
 
 ATTEMPT = "isolation-preflight"
@@ -357,7 +358,7 @@ def qualify(*, require_gpu: bool = False) -> dict:
     for disposable in (attempt, other, gpu):
         disposable.reset()
     try:
-        jobs = executor.DockerJobExecutor(work_root=stages.WORK_ROOT)
+        jobs = executor.DockerJobExecutor(work_root=WORK_ROOT)
         readiness = jobs.probe()
         answer["isolation"] = readiness
         tree = attempt.tree_dir

@@ -15,11 +15,13 @@ every one of them.
 """
 from __future__ import annotations
 
+from equivalent.ledger.artifacts import binary_artifacts
 from equivalent.ledger.vocabulary import EXECUTABLE_IDENTITY_KEY, PASS
 from equivalent.strategy.schema import Strategy
 
 from . import backend
-from .context import CheckContext, CheckResult, failed
+from .context import CheckContext
+from .result import CheckResult, failed
 from .errors import ComponentError
 from .names import REPLAY_ROLE
 
@@ -70,6 +72,7 @@ def check(ctx: CheckContext, config: dict) -> dict:
         )
 
     results = {}
+    artifacts = binary_artifacts(resp.executable_identity, executable=replay.executable)
     for tool in tools:
         t = resp.per_tool.get(tool)
         detail = {
@@ -91,7 +94,11 @@ def check(ctx: CheckContext, config: dict) -> dict:
         else:
             reason = None
         if reason is None:
-            results[PREDICATE.format(tool=tool)] = CheckResult(verdict=PASS, detail=detail)
+            results[PREDICATE.format(tool=tool)] = CheckResult(
+                verdict=PASS, detail=detail, binary_artifacts=artifacts,
+            )
         else:
-            results[PREDICATE.format(tool=tool)] = failed({**detail, "reason": reason}, [reason])
+            results[PREDICATE.format(tool=tool)] = failed(
+                {**detail, "reason": reason}, [reason], binary_artifacts=artifacts,
+            )
     return results

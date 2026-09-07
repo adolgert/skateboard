@@ -23,11 +23,13 @@ from __future__ import annotations
 import base64
 
 from equivalent.capture import npy
+from equivalent.ledger.artifacts import binary_artifacts
 from equivalent.ledger.vocabulary import EXECUTABLE_IDENTITY_KEY, PASS
 from equivalent.manifest.schema import Manifest
 
 from . import backend
-from .context import CheckContext, CheckResult, failed
+from .context import CheckContext
+from .result import CheckResult, failed
 from .errors import ComponentError
 from .names import REPLAY_ROLE
 
@@ -74,11 +76,12 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     )
 
     measured = {EXECUTABLE_IDENTITY_KEY: resp.executable_identity}
+    artifacts = binary_artifacts(resp.executable_identity, executable=replay.executable)
 
     if not resp.ok:
         return failed(
             {**measured, "log_tail": resp.log_tail},
-            ["the replay driver did not run to completion"],
+            ["the replay driver did not run to completion"], binary_artifacts=artifacts,
         )
 
     problems = _output_problems(manifest, resp.outputs)
@@ -87,14 +90,17 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
                 f"'{manifest.name}' declares, with the declared type and rank")
         return failed(
             {**measured, "outputs_rejected": problems, "hint": hint},
-            [*problems, hint],
+            [*problems, hint], binary_artifacts=artifacts,
         )
 
     kernels = resp.kernels_launched
     if kernels <= 0:
         hint = ("code compiled but no GPU kernel launched; loops must be do concurrent / "
                 "omp target for nvfortran to offload them")
-        return failed({**measured, "kernels_launched": 0, "hint": hint}, [hint])
+        return failed(
+            {**measured, "kernels_launched": 0, "hint": hint}, [hint],
+            binary_artifacts=artifacts,
+        )
     return CheckResult(
         verdict=PASS,
         detail={
@@ -105,4 +111,5 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
             "launches": resp.launches,
             "outputs": resp.outputs,
         },
+        binary_artifacts=artifacts,
     )

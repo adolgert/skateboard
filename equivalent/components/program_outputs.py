@@ -30,13 +30,15 @@ import math
 from pathlib import Path
 
 from equivalent.capture import compare, npy
+from equivalent.ledger.artifacts import binary_artifacts
 from equivalent.ledger.capture_sets import PROGRAM_SET, pack_program_set
 from equivalent.ledger.subjects import policy_subject
 from equivalent.ledger.vocabulary import PASS
 from equivalent.manifest.schema import Manifest
 
 from . import backend
-from .context import CheckContext, failed
+from .context import CheckContext
+from .result import failed
 from .errors import ComponentError
 from .names import FILE_BANDS, TIMING_ROLE, bands
 
@@ -159,6 +161,9 @@ def time_program(ctx: CheckContext, attempt_id: str, manifest: Manifest, repeats
             {**described, "runs_s": resp.runs_s, "log_tail": resp.log_tail},
             ["the timed program did not finish inside its budget, or did not write every "
              "file the manifest declares"],
+            binary_artifacts=binary_artifacts(
+                resp.executable_identity, executable=target.executable,
+            ),
         )
 
     durations = resp.runs_s
@@ -171,7 +176,12 @@ def time_program(ctx: CheckContext, attempt_id: str, manifest: Manifest, repeats
                    for run in runs)):
         problems = ["timing requires every requested repetition, positive finite durations, "
                     "and every declared output"]
-        return resp, failed({**described, "problems": problems}, problems)
+        return resp, failed(
+            {**described, "problems": problems}, problems,
+            binary_artifacts=binary_artifacts(
+                resp.executable_identity, executable=target.executable,
+            ),
+        )
     return resp, None
 
 

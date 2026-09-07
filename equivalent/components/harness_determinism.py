@@ -25,7 +25,8 @@ from __future__ import annotations
 import base64
 
 from equivalent.capture import npy
-from equivalent.ledger.capture_sets import pack_capture_set
+from equivalent.ledger.capture_sets import capture_set_materials, pack_capture_set
+from equivalent.ledger.artifacts import binary_artifacts
 
 from equivalent.ledger.vocabulary import (
     CAPTURE_SET_KEY,
@@ -34,7 +35,8 @@ from equivalent.ledger.vocabulary import (
     PASS,
 )
 from . import backend, harness_capture, harness_replay
-from .context import CheckContext, CheckResult, capture_set_materials
+from .context import CheckContext
+from .result import CheckResult
 from .errors import ComponentError
 from .names import CAPTURE_ROLE, REPLAY_ROLE, VISIBLE
 
@@ -88,6 +90,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
 
     differed = []
     per_dataset = {}
+    measured_identities = []
     for name in sorted(sets):
         entry = {CAPTURE_SET_KEY: sets[name]}
         dataset = manifest.datasets.get(name)
@@ -102,6 +105,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
             ctx.builder, attempt_id, capture.executable, dataset.args, f"{name}{AGAIN}",
         )
         cases = resp.cases if resp.ok else {}
+        measured_identities.append(resp.executable_identity)
         if not cases:
             entry["same"] = False
             entry["stdout_tail"] = resp.stdout_tail
@@ -131,6 +135,7 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         backend.replay(ctx.builder, attempt_id, replay.executable, cases),
         backend.replay(ctx.builder, attempt_id, replay.executable, cases),
     ]
+    measured_identities.extend(run.executable_identity for run in runs)
     replay_detail[EXECUTABLE_IDENTITY_KEY] = next(
         (run.executable_identity for run in runs if run.executable_identity), None,
     )
@@ -161,4 +166,14 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         detail=detail,
         reasons=tuple(differed),
         materials=capture_set_materials(detail),
+        binary_artifacts=(
+            *binary_artifacts(
+                *(identity for identity in measured_identities[:-2]),
+                executable=capture.executable,
+            ),
+            *binary_artifacts(
+                *(identity for identity in measured_identities[-2:]),
+                executable=replay.executable,
+            ),
+        ),
     )

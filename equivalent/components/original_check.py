@@ -11,6 +11,7 @@ import base64
 
 from equivalent.capture import npy
 from equivalent.capture.compare import compare_variable
+from equivalent.ledger.artifacts import binary_artifacts
 from equivalent.ledger.packed import PackedArtifact
 from equivalent.ledger.subjects import Subject, hash_bytes
 from equivalent.ledger.vocabulary import (
@@ -22,8 +23,9 @@ from equivalent.ledger.vocabulary import (
 from equivalent.reference.schema import load_reference
 
 from . import backend
-from .build_replay import Recipe, build_verdict
-from .context import CheckContext, CheckResult, failed
+from .building import Recipe, build_verdict
+from .context import CheckContext
+from .result import CheckResult, failed
 from .errors import ComponentError, after_the_manifest_check_passed
 from .names import TIMING_ROLE
 from .workspaces import attempt_id_for_tree
@@ -66,7 +68,8 @@ def _artifact(kept: list, encoded) -> tuple:
 
 
 def _one_run(builder, run: dict, original, candidate_executable: str,
-             reference_attempt: str, candidate_attempt: str, kept: list) -> tuple:
+             reference_attempt: str, candidate_attempt: str, kept: list,
+             measured: list) -> tuple:
     """One named run of both programs, compared output by output.
 
     Answers `(report, problem)`. The problem is not about one output but
@@ -86,6 +89,13 @@ def _one_run(builder, run: dict, original, candidate_executable: str,
         raise ComponentError(
             f"original comparison run {run['name']!r} could not finish: {exc}"
         ) from exc
+
+    measured.extend(binary_artifacts(
+        expected.executable_identity, executable=original.executable,
+    ))
+    measured.extend(binary_artifacts(
+        actual.executable_identity, executable=candidate_executable,
+    ))
 
     report = {"name": run["name"], "outputs": [], PASS: False,
               "original_runs_s": expected.runs_s,
@@ -177,13 +187,19 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         return CheckResult(
             verdict=FAIL, detail=detail,
             reasons=(*detail["problems"], *build.reasons), materials=materials,
+            binary_artifacts=tuple(
+                artifact for record in build.build_records
+                for artifact in record.binary_artifacts
+            ),
+            measures_other_binaries=True,
         )
 
     kept = []
+    measured_identities = []
     for run in original.runs:
         report, problem = _one_run(
             ctx.builder, run, original, candidate.executable,
-            reference_attempt, candidate_attempt, kept,
+            reference_attempt, candidate_attempt, kept, measured_identities,
         )
         detail["runs"].append(report)
         if problem is not None:
@@ -197,6 +213,11 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
             # produced, and saying so is what keeps that from reading as
             # a build that moved.
             measures_other_binaries=True,
+            binary_artifacts=(
+                *tuple(artifact for record in build.build_records
+                       for artifact in record.binary_artifacts),
+                *measured_identities,
+            ),
         )
     return CheckResult(
         verdict=FAIL, detail=detail,
@@ -207,4 +228,9 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         ]),
         materials=materials,
         measures_other_binaries=True,
+        binary_artifacts=(
+            *tuple(artifact for record in build.build_records
+                   for artifact in record.binary_artifacts),
+            *measured_identities,
+        ),
     )

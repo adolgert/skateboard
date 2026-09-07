@@ -30,12 +30,13 @@ import json
 import shutil
 import tempfile
 import weakref
+from dataclasses import dataclass
 from pathlib import Path
 
 from equivalent.capture import npy
 from equivalent.ledger.packed import PackedSet
 from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import hash_files
+from equivalent.ledger.subjects import Subject, hash_files, is_digest
 from equivalent.ledger.vocabulary import CAPTURE_SET_KEY
 
 # What a timing run's own outputs are stored as: one dataset holding one
@@ -51,6 +52,55 @@ PROGRAM_SET = "program"
 CAPTURED_PREDICATE = "harness/captured"
 
 
+@dataclass(frozen=True)
+class CaptureSetReference:
+    """One dataset and the content-addressed capture set it names."""
+
+    dataset: str
+    sha256: str
+
+    def __post_init__(self):
+        if not isinstance(self.dataset, str) or not self.dataset:
+            raise ValueError("capture-set dataset name must be a non-empty string")
+        if not is_digest(self.sha256):
+            raise ValueError("capture-set sha256 must be a lowercase SHA-256 digest")
+
+    @property
+    def subject(self) -> Subject:
+        return Subject(kind="capture_set", sha256=self.sha256)
+
+
+def decode_capture_sets(detail) -> tuple[CaptureSetReference, ...]:
+    """Decode the named ``datasets`` claim-detail layout.
+
+    Dataset entries without a capture-set key are valid failure diagnostics.
+    A present declaration must be completely well formed.
+    """
+    if not isinstance(detail, dict):
+        return ()
+    datasets = detail.get("datasets", {})
+    if not isinstance(datasets, dict):
+        raise ValueError("claim detail datasets must be an object")
+    if any(not isinstance(name, str) or not name for name in datasets):
+        raise ValueError("claim detail dataset names must be non-empty strings")
+    references = []
+    for name, entry in sorted(datasets.items()):
+        if not isinstance(entry, dict):
+            raise ValueError(f"claim detail dataset {name!r} must be an object")
+        if entry.get(CAPTURE_SET_KEY) is not None:
+            references.append(CaptureSetReference(name, entry[CAPTURE_SET_KEY]))
+    return tuple(references)
+
+
+def capture_set_materials(detail) -> tuple[Subject, ...]:
+    """Capture-set subjects in the named ``datasets`` claim-detail layout.
+
+    Only direct dataset entries count. Nested diagnostic keys with the same
+    spelling are not artifact declarations.
+    """
+    return tuple(reference.subject for reference in decode_capture_sets(detail))
+
+
 def sets_named_by(claim, where: str) -> dict:
     """The capture set each dataset was stored under, from one capture claim.
 
@@ -61,9 +111,8 @@ def sets_named_by(claim, where: str) -> dict:
     on the harness's side or a reason to refuse.
     """
     sets = {
-        name: entry[CAPTURE_SET_KEY]
-        for name, entry in claim.predicate.detail.get("datasets", {}).items()
-        if entry.get(CAPTURE_SET_KEY)
+        reference.dataset: reference.sha256
+        for reference in decode_capture_sets(claim.predicate.detail)
     }
     if not sets:
         raise ValueError(f"the {CAPTURED_PREDICATE} claim for {where} names no capture set")

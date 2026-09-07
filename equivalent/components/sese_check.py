@@ -23,7 +23,8 @@ import subprocess
 from pathlib import Path
 
 from equivalent.ledger.vocabulary import PASS
-from .context import CheckContext, CheckResult, failed
+from .context import CheckContext
+from .result import CheckResult, failed
 from .errors import ComponentError
 
 

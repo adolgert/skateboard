@@ -29,8 +29,6 @@ from pathlib import Path
 from typing import Mapping
 
 from equivalent.ledger.records import Claim
-from equivalent.ledger.subjects import Subject
-from equivalent.ledger.vocabulary import CAPTURE_SET_KEY, FAIL
 from equivalent.manifest.schema import Manifest
 from equivalent.strategy.schema import Strategy
 from equivalent.tree import Tree
@@ -38,6 +36,7 @@ from equivalent.tree import Tree
 from .answers import Builder, Oracle
 from .datasets import load_visible_cases
 from .errors import ComponentError
+from .phase import provenance_for
 
 
 @dataclass(frozen=True)
@@ -89,63 +88,4 @@ class CheckContext:
     @cached_property
     def provenance(self):
         """Where this request's checks get what a build is described by."""
-        # Asked for here rather than imported above: what a phase answers
-        # is written in terms of this record, so that module reads this
-        # one and not the other way about.
-        from .phase import provenance_for
-
         return provenance_for(self.phase)(self)
-
-
-@dataclass(frozen=True)
-class CheckResult:
-    """A verdict, and everything the gateway needs to file it.
-
-    `detail` is what goes into the claim, unchanged: what a ledger holds
-    on disk is not this module's to rename. `reasons` are the same
-    failure said in words for the session that asked, beside the claim in
-    the answer. `materials` are the formal things this verdict rests on
-    -- a tolerance policy, a capture set, a reference -- declared by the
-    check that knows them rather than fished out of the detail by the
-    gateway. `stores` are what the gateway should keep before it records:
-    a set that was packed and is not listed here is thrown away.
-    """
-
-    verdict: str
-    detail: dict
-    reasons: tuple = ()
-    materials: tuple = ()
-    stores: tuple = ()
-    # Which of the request's subjects the claim is filed against. Almost
-    # every claim is about the candidate tree; a baseline timing is about
-    # the baseline.
-    subject_kind: str = "tree"
-    # Whether this verdict measured an executable that is not the region's
-    # own build. A check that builds and runs a program of its own -- the
-    # reviewed original the onboarded harness is compared against -- names
-    # binaries the current build claim never named, and the gateway would
-    # otherwise read those as a build that has moved out from under the
-    # claim. The check that knows it built something else says so here,
-    # rather than the gateway keeping a list of which checks those are.
-    measures_other_binaries: bool = False
-
-
-def failed(detail: dict, reasons) -> CheckResult:
-    """A fail whose detail already holds the same words the session reads."""
-    return CheckResult(verdict=FAIL, detail=detail, reasons=tuple(reasons))
-
-
-def capture_set_materials(detail: dict) -> tuple:
-    """The capture sets a claim's own detail names, as materials.
-
-    The harness checks that read or write a dataset all name it the same
-    way in their detail, so they declare their materials the same way
-    here. A verdict reached against one set of captured arrays must not
-    read as a verdict against another, which is what putting them in
-    materials says.
-    """
-    return tuple(
-        Subject(kind="capture_set", sha256=entry[CAPTURE_SET_KEY])
-        for _, entry in sorted(detail.get("datasets", {}).items())
-        if entry.get(CAPTURE_SET_KEY)
-    )

@@ -15,7 +15,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  */
 function gatewayFinishedWords(): Record<string, string> {
   const source = readFileSync(
-    path.join(__dirname, "..", "..", "equivalent", "ledger", "acceptance.py"),
+    path.join(__dirname, "..", "..", "equivalent", "ledger", "workflow.py"),
     "utf8",
   );
   const phases: Record<string, string> = {};
@@ -23,11 +23,11 @@ function gatewayFinishedWords(): Record<string, string> {
     phases[name] = value;
   }
   const entry = source.match(/^FINISHED_WORD = \{(.+)\}$/m);
-  if (!entry) throw new Error("no FINISHED_WORD map in the gateway's acceptance.py");
+  if (!entry) throw new Error("no FINISHED_WORD map in the gateway's workflow.py");
   const words: Record<string, string> = {};
   for (const [, name, word] of entry[1].matchAll(/([A-Z_]+): "([^"]+)"/g)) {
     const phase = phases[name];
-    if (!phase) throw new Error(`no phase name for ${name} in the gateway's acceptance.py`);
+    if (!phase) throw new Error(`no phase name for ${name} in the gateway's workflow.py`);
     words[phase] = word;
   }
   return words;

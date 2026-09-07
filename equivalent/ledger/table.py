@@ -21,13 +21,13 @@ from dataclasses import dataclass
 
 from equivalent.ledger.acceptance import (
     ACCEPTANCE_REQUIREMENTS,
-    CONDITIONAL_REQUIREMENTS,
     ONBOARDING,
     ONBOARDING_REQUIREMENTS,
     PORTING,
     acceptance_requirements,
 )
 from equivalent.ledger.subjects import Subject
+from equivalent.ledger.workflow import ACTIONS, SUBJECT_KIND_OF
 
 # The row that names a phase's whole requirement list rather than an
 # action to dispatch. The porting one is the only row whose preconditions
@@ -125,104 +125,30 @@ class ActionRow:
         return self.component is not None
 
 
+def _action_rows(phase: str) -> tuple[ActionRow, ...]:
+    return tuple(
+        ActionRow(
+            name=action.name, emits=action.emits,
+            requires=tuple((name, SUBJECT_KIND_OF[name]) for name in action.requires),
+            deterministic=action.deterministic, component=action.component,
+            phase=action.phase, config_keys=action.config_keys, needs=action.needs,
+        )
+        for action in ACTIONS if action.phase == phase
+    )
+
+
 ACTION_TABLE = (
-    # Porting: one region of a code that has already been brought in.
-    ActionRow("sese_check", ("sese/verified",), (), True, "analyzer:check_sese", PORTING),
-    ActionRow("build_replay", ("build/replay",), (("sese/verified", "tree"),), True,
-              "builder:/v1/build", PORTING, needs=("builder",)),
-    ActionRow("run_replay", ("gpu/executed",), (("build/replay", "tree"),), True,
-              "builder:/v1/run", PORTING, needs=("builder",)),
-    ActionRow(
-        "sanitize", ("sanitize/memcheck", "sanitize/racecheck", "sanitize/initcheck"),
-        (("gpu/executed", "tree"),), True, "builder:/v1/sanitize", PORTING,
-        needs=("builder",),
-    ),
-    ActionRow(
-        # The outputs this compares are the ones the run claim recorded,
-        # so that claim is a precondition and not only the sanitizers'.
-        "regression_visible", ("regression/visible",),
-        (("sanitize/memcheck", "tree"), ("sanitize/racecheck", "tree"),
-         ("sanitize/initcheck", "tree"), ("gpu/executed", "tree")), True,
-        "oracle:/v1/compare", PORTING, needs=("oracle",),
-    ),
-    ActionRow(
-        "property_check", ("regression/property",),
-        (("regression/visible", "tree"),), True, "builder:/v1/properties", PORTING,
-        config_keys=("seed", "max_examples"), needs=("builder",),
-    ),
-    ActionRow(
-        "regression_holdout", ("regression/holdout",),
-        (("regression/visible", "tree"),), True, "oracle:/v1/compare", PORTING,
-        needs=("builder", "oracle"),
-    ),
-    ActionRow(
-        # The baseline's own timing left the program outputs this compares
-        # against, and that claim is filed against the baseline tree.
-        "program_regression", ("program/regression",),
-        (("regression/holdout", "tree"), ("timing/baseline", "baseline_tree")), True,
-        "builder:/v1/time", PORTING, needs=("builder",),
-    ),
-    ActionRow("time_port", ("timing/port",), (("program/regression", "tree"),), False,
-              "builder:/v1/time", PORTING, config_keys=("repeats",), needs=("builder",)),
-    ActionRow("time_baseline", ("timing/baseline",), (), False, "builder:/v1/time", PORTING,
-              config_keys=("repeats",), needs=("builder",)),
+    *_action_rows(PORTING),
     ActionRow(
         "accept", (), tuple((r.predicate_type, r.subject_kind) for r in ACCEPTANCE_REQUIREMENTS),
         True, None, PORTING,
     ),
-
-    # Onboarding: bringing a code in, in the order one step's evidence
-    # becomes the next step's precondition.
-    ActionRow("manifest_check", ("manifest/valid",), (), True, "gateway:manifest_check", ONBOARDING),
-    ActionRow("harness_build", ("harness/builds",), (("manifest/valid", "tree"),), True,
-              "builder:/v1/build", ONBOARDING, needs=("builder",)),
-    ActionRow("harness_capture", ("harness/captured",), (("harness/builds", "tree"),), True,
-              "builder:/v1/capture", ONBOARDING, needs=("builder",)),
-    ActionRow("harness_replay", ("harness/replays",), (("harness/captured", "tree"),), True,
-              "builder:/v1/run", ONBOARDING, needs=("builder",)),
-    # The three rows below replay, mutate, or search against the sets the
-    # capture claim named, so each of them names that claim too rather
-    # than resting on the replay claim's own precondition.
-    ActionRow("harness_determinism", ("harness/deterministic",),
-              (("harness/replays", "tree"), ("harness/captured", "tree")),
-              True, "builder:/v1/capture", ONBOARDING, needs=("builder",)),
-    ActionRow("harness_timing", ("harness/times",), (("harness/builds", "tree"),), True,
-              "builder:/v1/time", ONBOARDING, needs=("builder",)),
-    ActionRow(
-        "harness_original", ("harness/original",),
-        (("harness/builds", "tree"), ("harness/times", "tree")), True,
-        "builder:/v1/build+/v1/time", ONBOARDING, needs=("builder",),
-    ),
-    ActionRow("harness_self_check", ("harness/self_check",),
-              (("harness/replays", "tree"), ("harness/captured", "tree")),
-              True, "builder:/v1/mutate", ONBOARDING, config_keys=("limit",),
-              needs=("builder",)),
-    ActionRow("harness_property", ("harness/properties",),
-              (("harness/replays", "tree"), ("harness/captured", "tree")),
-              True, "builder:/v1/properties", ONBOARDING,
-              config_keys=("seed", "max_examples"), needs=("builder",)),
+    *_action_rows(ONBOARDING),
     ActionRow(
         "onboarded", (), tuple((r.predicate_type, r.subject_kind) for r in ONBOARDING_REQUIREMENTS),
         True, None, ONBOARDING,
     ),
 )
-
-
-# Which subject a predicate type's own claim is filed against. Read from
-# what the rows and the two phases' requirement lists already say, rather
-# than a third hand-written copy: a baseline timing is about the baseline
-# tree, and everything else about the candidate. A predicate nothing
-# requires yet falls back to "tree".
-SUBJECT_KIND_OF = {
-    **{
-        predicate_type: subject_kind
-        for row in ACTION_TABLE for predicate_type, subject_kind in row.requires
-    },
-    **{
-        req.predicate_type: req.subject_kind
-        for req in (*ACCEPTANCE_REQUIREMENTS, *CONDITIONAL_REQUIREMENTS, *ONBOARDING_REQUIREMENTS)
-    },
-}
 
 
 def subject_kind_of(predicate_type: str) -> str:

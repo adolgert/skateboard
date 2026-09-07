@@ -22,7 +22,7 @@ from equivalent.ledger.records import Claim, Predicate, RequestLogLine
 from equivalent.ledger.status import compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
-from equivalent.tests.fakes import write_program
+from equivalent.tests.fakes import build_claim_detail, write_program
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 GOLDEN_DIR = Path(__file__).parent / "golden"
@@ -57,7 +57,7 @@ def _sample_requests():
 # The executable a build in these ledgers produced. A claim that rests on
 # a build only counts as current evidence when it names that executable.
 BINARY = Subject(kind="binary", sha256="e" * 64)
-BUILT = {"targets": {"replay": {"sha256": BINARY.sha256}}}
+BUILT = build_claim_detail(PORTING, BINARY.sha256)
 
 
 def _claim(claim_id, ts, predicate_type, subject_kind, sha256, verdict, session_id,

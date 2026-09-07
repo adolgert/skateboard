@@ -17,7 +17,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from services.builder import compile_log, executor, stages, workspace
+from services.builder import (
+    compile_log,
+    executor,
+    stage_build,
+    stage_sanitizer,
+    stages,
+    workspace,
+)
 
 HARNESS = Path(__file__).resolve().parents[1] / "builder" / "harness"
 
@@ -207,11 +214,11 @@ def test_the_protected_observer_reports_the_compiles_the_shim_log_reports(attemp
     assert result.ok is True
     logged = [
         json.loads(line) for line in
-        Path(attempt.path(stages.LOG_NAME)).read_text().splitlines() if line.strip()
+        Path(attempt.path(stage_build.LOG_NAME)).read_text().splitlines() if line.strip()
     ]
     assert logged
 
-    observed, audit, problem = stages._observed_compiler_log(
+    observed, audit, problem = stage_build._observed_compiler_log(
         {"ok": True, "executions": [
             {"path": shutil.which("gfortran"), "argv": ["gfortran", *entry["argv"]]}
             for entry in logged
@@ -228,7 +235,7 @@ def test_the_protected_observer_reports_the_compiles_the_shim_log_reports(attemp
 
 
 def test_a_build_the_observer_saw_no_compiler_in_is_not_a_reported_build():
-    observed, audit, problem = stages._observed_compiler_log(
+    observed, audit, problem = stage_build._observed_compiler_log(
         {"ok": True, "executions": [{"path": "/bin/sh", "argv": ["sh", "-c", "true"]}]},
         "gfortran", "/tmp",
     )
@@ -728,11 +735,13 @@ def test_properties_reports_the_replay_executable_when_it_is_missing(attempt):
 def test_a_sanitizer_error_count_is_the_one_on_its_own_summary_line(summary, count):
     # The summary line itself contains the word ERROR, so counting
     # occurrences of the word would call a clean run one error.
-    assert stages.sanitizer_errors(summary) == count
+    assert stage_sanitizer.sanitizer_errors(summary) == count
 
 
 def test_a_sanitizer_that_wrote_no_summary_has_counted_nothing():
-    assert stages.sanitizer_errors("========= COMPUTE-SANITIZER\nkilled\n") is None
+    assert stage_sanitizer.sanitizer_errors(
+        "========= COMPUTE-SANITIZER\nkilled\n"
+    ) is None
 
 
 def _sanitizer_saying(summary, returncode=0):

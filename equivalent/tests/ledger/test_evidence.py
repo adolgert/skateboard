@@ -1,10 +1,10 @@
 """Which build a later claim has to have been reached on top of."""
 from equivalent.ledger.acceptance import ACCEPTANCE_REQUIREMENTS, PORTING
+from equivalent.ledger.artifacts import build_binary_materials, decode_build_records
 from equivalent.ledger.evidence import (
     BUILD_PREDICATE,
     FOUNDATION_PREDICATES,
     NO_CURRENT_BUILD,
-    binary_materials,
     required_materials_by_predicate,
 )
 from equivalent.ledger.records import Predicate
@@ -64,9 +64,45 @@ def test_the_cohort_is_read_out_of_what_a_passing_build_really_answered():
         "targets": [{"role": "replay", "target": "replay", "executable": "replay"}],
     })
 
-    cohort = binary_materials({"targets": answer.targets})
+    cohort = build_binary_materials(
+        "build/replay", {"attempt_id": "attempt", "targets": answer.targets},
+    )
 
     assert [subject.sha256 for subject in cohort] == [answer.targets["replay"]["sha256"]]
+
+
+def test_incidental_nested_artifact_keys_do_not_become_build_evidence():
+    detail = {
+        "attempt_id": "attempt",
+        "targets": {"replay": {
+            "executable": "replay", "sha256": "3" * 64, "size": 10,
+        }},
+        "diagnostic": {
+            "targets": {"spoof": {
+                "executable": "spoof", "sha256": "4" * 64, "size": 20,
+            }},
+            "executable_identity": {"sha256": "5" * 64},
+        },
+    }
+
+    assert build_binary_materials("build/replay", detail) == (
+        Subject(kind="binary", sha256="3" * 64),
+    )
+
+
+def test_a_partly_malformed_onboarding_build_is_not_restorable():
+    detail = {"strategies": {
+        "cpu_reference": {
+            "attempt_id": "one",
+            "targets": {"replay": {
+                "executable": "replay", "sha256": "3" * 64, "size": 10,
+            }},
+        },
+        "stdpar_managed": "diagnostic text is not a build entry",
+    }}
+
+    assert decode_build_records("harness/builds", detail) == ()
+    assert build_binary_materials("harness/builds", detail) == ()
 
 
 def _emitted_without_a_build() -> set:

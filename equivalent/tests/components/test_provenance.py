@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import pytest
 
-from equivalent.components import backend, build_replay, harness_build, harness_replay, run_replay
+from equivalent.components import backend, building, build_replay, harness_build, harness_replay, run_replay
 from equivalent.components.phase import provenance_for
+from equivalent.ledger.artifacts import decode_build_records
 from equivalent.components.errors import ComponentError
 from equivalent.components.names import TIMING_ROLE
 from equivalent.manifest.schema import load_manifest
@@ -74,16 +75,22 @@ def test_the_two_phases_file_a_build_under_the_predicate_each_reads_it_by():
 
 
 def test_a_build_claims_detail_is_read_back_the_way_that_phase_wrote_it():
-    porting = provenance_for("porting").build_entries(
-        {"attempt_id": "one", "targets": {"replay": {"sha256": "a"}}},
+    porting = decode_build_records("build/replay",
+        {"attempt_id": "one", "targets": {"replay": {
+            "executable": "replay", "sha256": "a" * 64, "size": 1,
+        }}},
     )
-    onboarding = provenance_for("onboarding").build_entries({"strategies": {
-        "cpu_reference": {"attempt_id": "one", "targets": {"replay": {"sha256": "a"}}},
-        "stdpar_managed": {"attempt_id": "two", "targets": {"replay": {"sha256": "b"}}},
+    onboarding = decode_build_records("harness/builds", {"strategies": {
+        "cpu_reference": {"attempt_id": "one", "targets": {"replay": {
+            "executable": "replay", "sha256": "a" * 64, "size": 1,
+        }}},
+        "stdpar_managed": {"attempt_id": "two", "targets": {"replay": {
+            "executable": "replay", "sha256": "b" * 64, "size": 1,
+        }}},
     }})
 
-    assert [attempt for attempt, _ in porting] == ["one"]
-    assert [attempt for attempt, _ in onboarding] == ["one", "two"]
+    assert [record.attempt_id for record in porting] == ["one"]
+    assert [record.attempt_id for record in onboarding] == ["one", "two"]
 
 
 def _without_timing_target(manifest):
@@ -119,6 +126,7 @@ def test_both_phases_build_through_the_one_shared_build_verdict(harness, tmp_pat
         asked.append(strategy.name)
         raise AssertionError("stop here: what is being asked is who called")
 
+    monkeypatch.setattr(building, "build_verdict", record)
     monkeypatch.setattr(build_replay, "build_verdict", record)
     porting = _promoted(harness)
     onboarding = _onboarding(Harness(tmp_path / "onboarding"))

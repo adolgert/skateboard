@@ -434,13 +434,21 @@ are summarized here; the appendix ids say what each first-round finding
 became.
 
 **Overall.** All five agree the separation is now real: zero violating
-import edges and zero module cycles across 210 files (recomputed by AST
-walk, agreeing with `tests/test_imports.py`); every check is
+import edges and zero module cycles across 210 files (the historical review's
+reported count); every check is
 `check(ctx, config)`; the store has one client; the builder wire has
 two typed spellings with a parity test. What remains is of three kinds:
 a rule stated in one place and honored differently in another; a thin
 layer of unfinished adoption of the new objects; and the clarity items
 Step 2 was not meant to pass through.
+
+The package-layer test cited in that review does not check cycles within a
+package. The September 7 follow-up found a delayed `context`/`phase` module
+cycle and separated the result types to remove it. The current
+`tests/test_module_imports.py` checks runtime imports at module granularity,
+including imports inside functions and excluding type-only annotations.
+See [the code map](code-map.md) for current implementation owners; line
+references in this historical plan refer to the commits named here.
 
 **Reconciled against the appendix.** Dissolved: G2, G3, G5, G6, G9,
 G10, G11, G15; C1, C4, C5, C7, C9, C13, C15; L2, L3, L7, L8, L14; S1,

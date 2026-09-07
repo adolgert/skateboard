@@ -15,6 +15,7 @@ from equivalent.ledger.evidence import BUILD_PREDICATE, FOUNDATION_PREDICATES
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
+from equivalent.tests.fakes import build_claim_detail
 
 # The executable the build in these ledgers produced. A claim that rests
 # on a build only counts when it names that executable, so a ledger that
@@ -58,7 +59,7 @@ def _all_passing_claims(tree, frozen, phase=PORTING):
             f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", req.subject_kind, sha,
             req.predicate_type, "pass",
             detail=(
-                {"targets": {"replay": {"sha256": BINARY["sha256"]}}}
+                build_claim_detail(phase, BINARY["sha256"])
                 if req.predicate_type == BUILD_PREDICATE[phase] else None
             ),
             materials=() if req.predicate_type in FOUNDATION_PREDICATES else (BINARY,),

@@ -2,7 +2,8 @@ from dataclasses import replace
 
 from fastapi.testclient import TestClient
 
-from equivalent.gateway.app import config_hash, create_app
+from equivalent.gateway.app import create_app
+from equivalent.gateway.run import config_hash
 from equivalent.gateway.dispatch import HANDLERS
 from equivalent.region.evidence import evidence_materials_for
 from equivalent.region.current import current_tree_and_frozen

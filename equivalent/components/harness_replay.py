@@ -35,7 +35,11 @@ from equivalent.ledger.vocabulary import (
     PASS,
 )
 from . import backend, harness_capture
-from .context import CheckContext, CheckResult, capture_set_materials
+from equivalent.ledger.capture_sets import capture_set_materials
+from equivalent.ledger.artifacts import binary_artifacts
+
+from .context import CheckContext
+from .result import CheckResult
 from .names import REPLAY_ROLE
 
 
@@ -103,12 +107,14 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     disagreed = []
     reasons = []
     executable_identity = None
+    measured_identities = []
     for name in sorted(sets):
         cases = ctx.sets.load(sets[name])
         resp = backend.replay(ctx.builder, attempt_id, replay.executable, wire_inputs(cases))
 
         entry = {"cases": len(cases), CAPTURE_SET_KEY: sets[name]}
         executable_identity = executable_identity or resp.executable_identity
+        measured_identities.append(resp.executable_identity)
         if not resp.ok:
             entry["log_tail"] = resp.log_tail
             disagreed.append(name)
@@ -131,8 +137,12 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         "datasets_that_disagreed": disagreed,
     }
     materials = capture_set_materials(detail)
+    artifacts = binary_artifacts(*measured_identities, executable=replay.executable)
     if disagreed:
         return CheckResult(
             verdict=FAIL, detail=detail, reasons=tuple(reasons), materials=materials,
+            binary_artifacts=artifacts,
         )
-    return CheckResult(verdict=PASS, detail=detail, materials=materials)
+    return CheckResult(
+        verdict=PASS, detail=detail, materials=materials, binary_artifacts=artifacts,
+    )

@@ -9,6 +9,7 @@ comparing arrays.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from equivalent.capture import npy
 from equivalent.ledger import capture_sets
@@ -110,3 +111,23 @@ def test_a_set_nobody_keeps_leaves_nothing_behind(tmp_path):
 
     assert not directory.exists()
     assert list(store.capture_sets_dir.iterdir()) == []
+
+
+def test_capture_detail_codec_ignores_incidental_nested_keys():
+    detail = {
+        "datasets": {"visible": {"capture_set": "a" * 64, "cases": 2}},
+        "diagnostic": {"datasets": {"spoof": {"capture_set": "b" * 64}}},
+    }
+
+    references = capture_sets.decode_capture_sets(detail)
+
+    assert [(reference.dataset, reference.sha256) for reference in references] == [
+        ("visible", "a" * 64),
+    ]
+
+
+def test_capture_detail_codec_rejects_a_malformed_named_set():
+    with pytest.raises(ValueError, match="sha256"):
+        capture_sets.decode_capture_sets({
+            "datasets": {"visible": {"capture_set": "not a digest"}},
+        })

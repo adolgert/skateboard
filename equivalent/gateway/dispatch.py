@@ -36,8 +36,10 @@ from equivalent.components import (
     sese_check,
     timing,
 )
-from equivalent.components.context import CheckContext, CheckResult
+from equivalent.components.context import CheckContext
+from equivalent.components.result import CheckResult
 from equivalent.ledger.table import ACTION_TABLE, SUBJECT_KIND_OF
+from equivalent.ledger.workflow import ACTIONS
 
 # The context the gateway resolved and the settings the session asked
 # for, in; a verdict out.
@@ -64,30 +66,45 @@ class Handler:
     subject_kind: str = "tree"
 
 
-HANDLERS = {
-    # Porting.
-    "sese_check": Handler(sese_check.check, "sese_check"),
-    "build_replay": Handler(build_replay.check, "builder"),
-    "run_replay": Handler(run_replay.check, "builder"),
-    "sanitize": Handler(sanitize.check, "compute-sanitizer"),
-    "regression_visible": Handler(regression.check_visible, "oracle"),
-    "property_check": Handler(property_check.check, "builder"),
-    "regression_holdout": Handler(regression.check_holdout, "oracle"),
-    "program_regression": Handler(program_regression.check, "builder"),
-    "time_port": Handler(timing.check_port, "builder"),
-    "time_baseline": Handler(timing.check_baseline, "builder", subject_kind="baseline_tree"),
-
-    # Onboarding.
-    "manifest_check": Handler(manifest_check.check, "manifest_check"),
-    "harness_build": Handler(harness_build.check, "builder"),
-    "harness_capture": Handler(harness_capture.check, "builder"),
-    "harness_replay": Handler(harness_replay.check, "builder"),
-    "harness_determinism": Handler(harness_determinism.check, "builder"),
-    "harness_timing": Handler(harness_timing.check, "builder"),
-    "harness_original": Handler(original_check.check, "builder"),
-    "harness_self_check": Handler(harness_self_check.check, "builder"),
-    "harness_property": Handler(harness_property.check, "builder"),
+# Only Python callables belong here. Tool and subject policy come from the
+# same catalog the ledger reader and action table use.
+CHECKS = {
+    'sese_check': sese_check.check,
+    'build_replay': build_replay.check,
+    'run_replay': run_replay.check,
+    'sanitize': sanitize.check,
+    'regression_visible': regression.check_visible,
+    'property_check': property_check.check,
+    'regression_holdout': regression.check_holdout,
+    'program_regression': program_regression.check,
+    'time_port': timing.check_port,
+    'time_baseline': timing.check_baseline,
+    'manifest_check': manifest_check.check,
+    'harness_build': harness_build.check,
+    'harness_capture': harness_capture.check,
+    'harness_replay': harness_replay.check,
+    'harness_determinism': harness_determinism.check,
+    'harness_timing': harness_timing.check,
+    'harness_original': original_check.check,
+    'harness_self_check': harness_self_check.check,
+    'harness_property': harness_property.check,
 }
+
+
+def _handlers() -> dict[str, Handler]:
+    names = {action.name for action in ACTIONS}
+    if names != set(CHECKS):
+        raise RuntimeError(
+            f"workflow and checks disagree: missing {sorted(names - set(CHECKS))}, "
+            f"unknown {sorted(set(CHECKS) - names)}"
+        )
+    return {
+        action.name: Handler(CHECKS[action.name], action.tool, action.subject_kind)
+        for action in ACTIONS
+    }
+
+
+HANDLERS = _handlers()
 
 
 def _parity() -> None:

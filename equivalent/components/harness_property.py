@@ -22,7 +22,8 @@ from __future__ import annotations
 
 from equivalent.ledger.vocabulary import PASS
 from . import harness_capture, harness_replay, property_check
-from .context import CheckContext, CheckResult
+from .context import CheckContext
+from .result import CheckResult
 from .errors import ComponentError
 # The properties draw their corpus from the dataset the agent can see.
 # Held-out inputs are for judging a port, not for a search the agent is

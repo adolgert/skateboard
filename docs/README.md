@@ -13,6 +13,7 @@ Documentation reviewed against the implementation on 2026-09-06.
 | [Porting manual](pi-users-manual.md) | Agent tools, preconditions, status, and reviewer commands |
 | [Deployment README](../deploy/README.md) | Containers, scripts, isolation, and machine qualification |
 | [Architecture](architecture.pdf) ([source](architecture.tex)) | Current service and evidence architecture, with proposed extensions distinguished |
+| [Code map](code-map.md) | Implementation owners, shared workflow definitions, and how to add a check |
 | [Original-reference example](examples/original-reference.yaml) | A reviewed contract for comparing an onboarded program with its preserved original |
 
 The [2026-09-06 qualification record](builder-qualification-2026-09-06.md)

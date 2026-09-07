@@ -15,11 +15,13 @@ not the only thing enforcing it.
 """
 from __future__ import annotations
 
+from equivalent.ledger.artifacts import binary_artifacts
 from equivalent.ledger.subjects import Subject
 from equivalent.ledger.vocabulary import POLICY_KEY
 
 from . import backend
-from .context import CheckContext, CheckResult
+from .context import CheckContext
+from .result import CheckResult
 from .errors import ComponentError
 from .names import HOLDOUT, REPLAY_ROLE, VISIBLE
 from .run_replay import RUN_PREDICATE
@@ -85,4 +87,7 @@ def check_holdout(ctx: CheckContext, config: dict) -> CheckResult:
         verdict=resp.verdict,
         detail={POLICY_KEY: resp.policy_sha256},
         materials=_policy_material(resp),
+        binary_artifacts=binary_artifacts(
+            run_resp.executable_identity, executable=replay.executable,
+        ),
     )

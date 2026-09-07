@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from equivalent.ledger.artifacts import binary_artifacts
 from equivalent.ledger.subjects import Subject
 from equivalent.ledger.vocabulary import (
     EXECUTABLE_IDENTITY_KEY,
@@ -40,8 +41,9 @@ from equivalent.ledger.vocabulary import (
 from equivalent.manifest.schema import Manifest
 
 from . import program_outputs
-from .build_replay import Recipe, build_verdict
-from .context import CheckContext, CheckResult
+from .building import Recipe, build_verdict
+from .context import CheckContext
+from .result import CheckResult
 from .errors import ComponentError
 from .names import TIMING_ROLE
 from .workspaces import attempt_id_for_tree
@@ -125,18 +127,25 @@ def check_port(ctx: CheckContext, config: dict) -> CheckResult:
         "compared_repetitions": len(comparisons), "per_run": comparisons,
     }
     materials = (policy, Subject(kind="capture_set", sha256=program_set))
+    artifacts = binary_artifacts(
+        response.executable_identity,
+        executable=manifest.build.targets[TIMING_ROLE].executable,
+    )
     reasons = [
         reason for per_var in comparisons
         for reason in program_outputs.comparison_reasons(per_var)
     ]
     if all(per_var and all(v[PASS] for v in per_var.values()) for per_var in comparisons):
-        return CheckResult(verdict=PASS, detail=detail, materials=materials)
+        return CheckResult(
+            verdict=PASS, detail=detail, materials=materials, binary_artifacts=artifacts,
+        )
     return CheckResult(
         verdict=FAIL, detail=detail, materials=materials,
         reasons=tuple(reasons or [
             "a timed repetition wrote nothing the baseline program's outputs could be "
             "compared with"
         ]),
+        binary_artifacts=artifacts,
     )
 
 
@@ -172,6 +181,10 @@ def check_baseline(ctx: CheckContext, config: dict) -> CheckResult:
             },
             reasons=build_result.reasons,
             subject_kind=BASELINE_SUBJECT,
+            binary_artifacts=tuple(
+                artifact for record in build_result.build_records
+                for artifact in record.binary_artifacts
+            ),
         )
     resp, refusal = program_outputs.time_program(
         ctx, attempt_id, manifest, int(config.get("repeats", DEFAULT_REPEATS)),
@@ -200,6 +213,14 @@ def check_baseline(ctx: CheckContext, config: dict) -> CheckResult:
         materials=materials,
         stores=() if packed is None else (packed,),
         subject_kind=BASELINE_SUBJECT,
+        binary_artifacts=(
+            *tuple(artifact for record in build_result.build_records
+                   for artifact in record.binary_artifacts),
+            *binary_artifacts(
+                resp.executable_identity,
+                executable=manifest.build.targets[TIMING_ROLE].executable,
+            ),
+        ),
     )
 
 

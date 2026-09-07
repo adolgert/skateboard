@@ -393,6 +393,20 @@ def built(request: dict, *, sha256: str = EXECUTABLE_IDENTITY["sha256"],
     return BuildResponse(**fields)
 
 
+def build_claim_detail(phase: str, sha256: str) -> dict:
+    """A complete v2 build claim, using the backend's actual target layout."""
+    reply = built({
+        "flags": [],
+        "targets": [{"role": "replay", "target": "replay", "executable": "replay"}],
+    }, sha256=sha256)
+    if phase == "onboarding":
+        return {"strategies": {
+            name: {"attempt_id": f"attempt-{name}", "targets": reply.targets}
+            for name in ("cpu_reference", "onboarding")
+        }}
+    return {"attempt_id": "attempt-port", "targets": reply.targets}
+
+
 def replayed(request: dict, *, writes: dict | None = None, **over) -> RunResponse:
     """What the builder answers a /v1/run with.
 

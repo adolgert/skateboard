@@ -28,11 +28,14 @@ thing said about two different programs.
 """
 from __future__ import annotations
 
+from equivalent.ledger.artifacts import binary_artifacts
 from equivalent.ledger.subjects import Subject
 from equivalent.ledger.vocabulary import EXECUTABLE_IDENTITY_KEY, PASS, PROGRAM_SET_KEY
 
 from . import program_outputs
-from .context import CheckContext, CheckResult, failed
+from .context import CheckContext
+from .result import CheckResult, failed
+from .names import TIMING_ROLE
 
 # How many times the program is run. Two is what the question needs: one
 # run to measure and a second to disagree with it.
@@ -75,6 +78,10 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
         return refusal
 
     runs = resp.outputs
+    artifacts = binary_artifacts(
+        resp.executable_identity,
+        executable=manifest.build.targets[TIMING_ROLE].executable,
+    )
     measured = {
         **described,
         "runs_s": resp.runs_s,
@@ -87,10 +94,13 @@ def check(ctx: CheckContext, config: dict) -> CheckResult:
     packed, unreadable = program_outputs.packed_program_set(manifest, resp)
     problems = [*_drifted(runs[0], runs[1], timing.outputs), *unreadable]
     if problems:
-        return failed({**measured, "problems": problems}, problems)
+        return failed(
+            {**measured, "problems": problems}, problems, binary_artifacts=artifacts,
+        )
 
     return CheckResult(
         verdict=PASS, detail={**measured, PROGRAM_SET_KEY: packed.sha256},
         materials=(Subject(kind="capture_set", sha256=packed.sha256),),
         stores=(packed,),
+        binary_artifacts=artifacts,
     )
