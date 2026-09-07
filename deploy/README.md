@@ -161,12 +161,22 @@ executor identities, the binary digest, protected `strace` compiler evidence,
 required flags and source paths, read-only tree and trusted files, absent
 credentials and network, one exact scratch mount with sibling and cross-attempt
 data hidden, and cleanup of normal and timed-out descendants. On a GPU host it
-also builds an OpenACC kernel, requires the protected `nsys` report to contain a
-real launch, and runs the strategy's `memcheck`, `racecheck`, and `initcheck`
-modes. The command exits nonzero unless all of those checks pass. On a CPU-only
-development machine, `./qualify.sh --cpu-only` records the same CPU checks and
-may pass with `gpu_status: "unavailable"`; that record does not qualify a GPU
-deployment.
+also builds an OpenACC kernel, requires the `nsys` report to contain a real
+launch, and runs the strategy's `memcheck`, `racecheck`, and `initcheck` modes.
+The profiler runs as the job's own uid (its session cannot be joined across
+uids), and its report is read as root only after the program and everything it
+left running are gone; a program that leaves a process behind has its profile
+refused. The command exits nonzero unless all of those checks pass. On a
+CPU-only development machine, `./qualify.sh --cpu-only` records the same CPU
+checks and may pass with `gpu_status: "unavailable"`; that record does not
+qualify a GPU deployment.
+
+The same qualification runs as a test, against an image built from the
+working tree, whenever a Docker daemon is usable:
+
+```sh
+.venv/bin/python -m pytest services/tests/test_qualification.py
+```
 
 The protected exec trace establishes that the configured compiler ran with the
 recorded flags and sources. It does not establish that every byte in the final

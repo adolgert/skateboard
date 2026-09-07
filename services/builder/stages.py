@@ -563,6 +563,31 @@ def capture(workspace, executable, args=(), run_name="capture",
     )
 
 
+# The one line each sanitizer ends with, and the count on it. memcheck,
+# initcheck and synccheck say "ERROR SUMMARY: N error(s)"; racecheck says
+# "RACECHECK SUMMARY: N hazards displayed (N errors, N warnings)".
+SANITIZER_SUMMARY = re.compile(
+    r"^=+ (?:ERROR SUMMARY: (\d+) errors?"
+    r"|RACECHECK SUMMARY: \d+ hazards? displayed \((\d+) errors?, \d+ warnings?\))",
+    re.MULTILINE,
+)
+
+
+def sanitizer_errors(output: str) -> int | None:
+    """How many errors the tool's own summary counts, or None if it wrote none.
+
+    The count is read from the summary line rather than by looking for
+    the word ERROR in the log: the summary line itself contains that
+    word, so a clean run would otherwise count as one error. A tool that
+    wrote no summary did not finish, and the caller treats that as a
+    failure rather than as zero errors.
+    """
+    total = None
+    for match in SANITIZER_SUMMARY.finditer(output):
+        total = (total or 0) + int(match.group(1) or match.group(2))
+    return total
+
+
 def sanitize(workspace, executable, cases, tools, *, timeout=SANITIZE_TIMEOUT_S) -> SanitizeResponse:
     """Run every tool over every case, against the manifest's replay executable.
 
@@ -612,7 +637,12 @@ def sanitize(workspace, executable, cases, tools, *, timeout=SANITIZE_TIMEOUT_S)
                 failing_log = str(exc)
                 break
             output = job.stdout + job.stderr
-            errors += len(re.findall(r"========= ERROR|Invalid|race", output))
+            counted = sanitizer_errors(output)
+            if counted is None:
+                failed = True
+                failing_log = f"the {tool} sanitizer wrote no summary line: {output[-1500:]}"
+                break
+            errors += counted
             if not workspace.matches(replay, identity):
                 failed = True
                 failing_log = "the executable changed while it was being measured"

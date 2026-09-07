@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from services.builder import compile_log, stages, workspace
+from services.builder import compile_log, executor, stages, workspace
 
 HARNESS = Path(__file__).resolve().parents[1] / "builder" / "harness"
 
@@ -716,3 +716,61 @@ def test_properties_reports_the_replay_executable_when_it_is_missing(attempt):
 
     assert result.ok is False
     assert "some_other_binary" in result.log_tail
+
+
+@pytest.mark.parametrize("summary, count", [
+    ("========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n", 0),
+    ("========= ERROR SUMMARY: 1 error\n", 1),
+    ("========= Target application returned an error\n========= ERROR SUMMARY: 10 errors\n", 10),
+    ("========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)\n", 0),
+    ("========= RACECHECK SUMMARY: 3 hazards displayed (2 errors, 1 warning)\n", 2),
+])
+def test_a_sanitizer_error_count_is_the_one_on_its_own_summary_line(summary, count):
+    # The summary line itself contains the word ERROR, so counting
+    # occurrences of the word would call a clean run one error.
+    assert stages.sanitizer_errors(summary) == count
+
+
+def test_a_sanitizer_that_wrote_no_summary_has_counted_nothing():
+    assert stages.sanitizer_errors("========= COMPUTE-SANITIZER\nkilled\n") is None
+
+
+def _sanitizer_saying(summary, returncode=0):
+    """A sanitizer run whose whole output is its summary."""
+    def runner(cmd, **kwargs):
+        return executor.JobResult(returncode, "", summary)
+    return runner
+
+
+def _sanitized(tmp_path, runner, tool="memcheck"):
+    attempt = stages.workspace_for(
+        "attempt-1", work_root=tmp_path, policy=workspace.InProcessJobs(runner=runner),
+    )
+    tree = Path(attempt.tree_dir)
+    tree.mkdir(parents=True)
+    (tree / "replay").write_text("#!/bin/sh\n")
+    (tree / "replay").chmod(0o755)
+    return stages.sanitize(attempt, "replay", {"case": {}}, [tool])
+
+
+def test_a_clean_sanitizer_run_counts_zero_errors(tmp_path):
+    result = _sanitized(tmp_path, _sanitizer_saying(
+        "========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n"
+    ))
+    assert result.ok is True
+    assert result.per_tool["memcheck"] == {"ok": True, "errors": 0, "log_tail": result.per_tool["memcheck"]["log_tail"]}
+
+
+def test_a_sanitizer_that_found_errors_fails_with_their_count(tmp_path):
+    result = _sanitized(tmp_path, _sanitizer_saying(
+        "========= Invalid __global__ write of size 4 bytes\n========= ERROR SUMMARY: 2 errors\n",
+        returncode=1,
+    ))
+    assert result.ok is False
+    assert result.per_tool["memcheck"]["errors"] == 2
+
+
+def test_a_sanitizer_that_never_reached_its_summary_did_not_pass(tmp_path):
+    result = _sanitized(tmp_path, _sanitizer_saying("========= COMPUTE-SANITIZER\n"))
+    assert result.ok is False
+    assert "wrote no summary" in result.per_tool["memcheck"]["log_tail"]

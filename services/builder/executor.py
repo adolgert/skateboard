@@ -212,8 +212,12 @@ class DockerJobExecutor:
         for key, value in sorted(job_env.items()):
             create.extend(["--env", f"{key}={value}"])
         if profile_gpu or audit_exec:
-            # The profiler remains root while profile_run drops only the submitted
-            # child to the job uid.  Its report lives in root-only /run/evidence.
+            # Both wrappers start as root and drop the submitted program to
+            # the job uid. The exec observer stays root and its trace lives
+            # in root-only /run/evidence. The profiler cannot: its session
+            # is joinable only by the uid that opened it, so profile_run
+            # runs it as the job uid and reads its report as root only once
+            # nothing of that uid is left running.
             create.extend(["--cap-add", "SETUID", "--cap-add", "SETGID"])
             if profile_gpu:
                 job_cmd = ["python3", "-I", "/opt/sandbox/profile_run.py", "--", *job_cmd]

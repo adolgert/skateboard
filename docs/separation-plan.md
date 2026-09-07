@@ -592,6 +592,23 @@ fixed with it.
   `ledger/acceptance.py`'s source (so the extension's tests now need
   the Python tree beside them).
 
+- **Preflight tests** (asked for after the plan was done). Unit tests
+  in `services/tests/test_preflight.py` play the executor and the two
+  builds; `services/tests/test_qualification.py` builds the image from
+  the tree and runs the real qualification through Docker, GPU included
+  when a driver is visible, and is skipped without a daemon. Writing
+  them found that the GPU half had never qualified on this host: the
+  recorded run had no driver visible, and with one, two checks failed
+  both before and after the refactor. The sanitizer count matched the
+  word ERROR in the tool's own "ERROR SUMMARY: 0 errors" line; it now
+  reads the count on that line. The profiler ran as root over a program
+  of the job uid, and Nsight's session cannot be joined across uids, so
+  the program aborted before main; `profile_run.py` now runs the
+  profiler as the job uid, reaps its zombies as pid 1, and reads the
+  report only after nothing of that uid is alive, refusing the profile
+  otherwise. The wrapper's process accounting and the sanitizer parser
+  have unit tests of their own.
+
 ## Appendix — The review findings, verbatim anchors
 
 Findings marked **[dissolves in 2x]** are expected to disappear as a
