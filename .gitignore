@@ -51,3 +51,14 @@ tools/regionharness/cases/*/fcg/pre/
 tools/regionharness/cases/*/fcg/cache/
 tools/regionharness/cases/*/fcg/modtmp/
 tools/regionharness/cases/*/replay/build/
+
+# Third-party tool checkouts under tools/, each with its own git history,
+# and a saved copy of the compiler manual. Nothing this project depends on
+# lives in them; tools/fmutate and tools/regionharness are ours and tracked.
+tools/KGen/
+tools/fortrancallgraph/
+tools/fortrantestgenerator/
+tools/pFUnit/
+tools/pFUnit_demos/
+tools/serialbox/
+tools/*.html
