@@ -243,8 +243,14 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             stores[region_id] = LedgerStore(regions[region_id].ledger_dir)
         return stores[region_id]
 
-    def _runtime_materials(cfg) -> tuple[Subject, ...]:
-        """Identity of the remote services that execute and judge code."""
+    def _runtime_materials(cfg) -> tuple[tuple[Subject, ...], str | None]:
+        """Identity of the remote services that execute and judge code.
+
+        Answers with those identities as materials, and with the live
+        executor identity itself: the artifact recheck below has to know
+        which executor is answering right now, and asking the builder a
+        second time in the same request could get a different answer.
+        """
         builder_identity = None
         oracle_identity = None
         if builder is None and getattr(cfg, "executor_identity", None) is not None:
@@ -313,42 +319,47 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             materials.append(Subject(kind="executor", sha256=builder_identity))
         if oracle_identity and getattr(cfg, "oracle_identity", None) is None:
             materials.append(Subject(kind="oracle", sha256=oracle_identity))
-        return tuple(materials)
+        return tuple(materials), builder_identity
 
     def _current_materials(cfg, strategy, baseline_strategy):
+        runtime, builder_identity = _runtime_materials(cfg)
         return (
             *evidence_materials_for(cfg, strategy, baseline_strategy),
-            *_runtime_materials(cfg),
-        )
+            *runtime,
+        ), builder_identity
 
     def _build_claim(
         cfg, store, tree_subject, core_materials,
     ):
         return current_build_claim(store, cfg.phase, tree_subject, core_materials)
 
-    def _artifacts_match_build(cfg, detail: dict) -> bool:
-        """Recheck every claimed target against the builder's protected sidecar."""
+    def _artifacts_match_build(cfg, detail: dict, executor_identity) -> bool:
+        """Recheck every claimed target against the builder's protected sidecar.
+
+        A False here means the builder answered and its answer disagrees
+        with the claim. A builder that cannot be reached has answered
+        nothing, so that raises instead: reading it as a disagreement
+        would tell the caller its build was lost when all that was lost
+        was a request.
+        """
         if builder is None:
             return False
         entries = _build_entries(cfg.phase, detail)
         if not entries:
-            return False
-        try:
-            health = builder.healthz()
-        except Exception:
-            return False
-        if health.get("ok") is not True:
             return False
         for attempt_id, targets in entries:
             if not isinstance(attempt_id, str) or not isinstance(targets, dict) or not targets:
                 return False
             try:
                 report = builder.artifacts(attempt_id)
-            except Exception:
-                return False
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"cannot read the builder's record of what it built: {exc}",
+                ) from exc
             if report.get("ok") is not True:
                 return False
-            if report.get("executor_identity") != health.get("executor_identity"):
+            if report.get("executor_identity") != executor_identity:
                 return False
             executables = report.get("executables", {})
             for target in targets.values():
@@ -365,6 +376,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
 
     def _restore_build(
         cfg, store, ref, tree_sha, strategy, baseline_strategy, expected_detail,
+        executor_identity,
     ) -> tuple[Subject, ...]:
         """Rebuild a lost workspace, accepting it only when bytes reproduce."""
         if cfg.phase == PORTING:
@@ -384,7 +396,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 "the cached build was lost and rebuilding produced different executable bytes; "
                 "run the build action again before continuing"
             )
-        if not _artifacts_match_build(cfg, rebuilt["detail"]):
+        if not _artifacts_match_build(cfg, rebuilt["detail"], executor_identity):
             raise ComponentError("the builder did not retain the executables it just rebuilt")
         return expected
 
@@ -450,7 +462,7 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         store = _store(region)
         strategy = load_strategy(cfg.strategy_path)
         baseline_strategy = load_strategy(cfg.baseline_strategy_path)
-        materials = _current_materials(cfg, strategy, baseline_strategy)
+        materials, executor_identity = _current_materials(cfg, strategy, baseline_strategy)
         tree_sha, frozen_sha = _current(
             cfg, store, strategy, required_materials=materials,
         )
@@ -461,7 +473,9 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
         )
         build_context_ok = bool(
             build_claim and build_materials
-            and _artifacts_match_build(cfg, build_claim.predicate.detail)
+            and _artifacts_match_build(
+                cfg, build_claim.predicate.detail, executor_identity,
+            )
         )
         status = compute_status(
             store, requirements_for(cfg.phase, cfg.manifest), cfg.phase,
@@ -641,7 +655,9 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
 
         strategy = load_strategy(cfg.strategy_path)
         baseline_strategy = load_strategy(cfg.baseline_strategy_path)
-        evidence_materials = _current_materials(cfg, strategy, baseline_strategy)
+        evidence_materials, executor_identity = _current_materials(
+            cfg, strategy, baseline_strategy,
+        )
         store.activate_context(evidence_materials)
         # Resolve once.  Every tree read and component dispatch below uses this
         # immutable commit even if a concurrent submit advances the branch.
@@ -672,18 +688,33 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 tool_call_id=x_tool_call_id,
             ))
 
+        if dependent_action and build_claim is not None and not build_materials:
+            # Nothing to refuse and nothing to run: the build passed, so
+            # asking for it again would name a requirement the session
+            # already has, but it named no executable to run against.
+            raise HTTPException(
+                status_code=503,
+                detail="the current passing build claim names no executable; "
+                       "run the build action again before continuing",
+            )
         missing = []
-        if dependent_action and (build_claim is None or not build_materials):
-            missing.append(requirement_status(
+        if dependent_action and build_claim is None:
+            # Only a requirement the session can act on belongs in a
+            # refusal, the same rule the row requirements below follow.
+            build_row = requirement_status(
                 store, BUILD_PREDICATE[cfg.phase], subjects_by_kind["tree"],
                 PRODUCERS[BUILD_PREDICATE[cfg.phase]],
                 required_materials=evidence_materials,
-            ))
-        elif dependent_action and not _artifacts_match_build(cfg, build_claim.predicate.detail):
+            )
+            if build_row["status"] == "missing":
+                missing.append(build_row)
+        elif dependent_action and not _artifacts_match_build(
+            cfg, build_claim.predicate.detail, executor_identity,
+        ):
             try:
                 build_materials = _restore_build(
                     cfg, store, ref, tree_sha, strategy, baseline_strategy,
-                    build_claim.predicate.detail,
+                    build_claim.predicate.detail, executor_identity,
                 )
             except ComponentError as exc:
                 log("error")
@@ -723,7 +754,9 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
             if (
                 existing and all(existing)
                 and row.name in ("build_replay", "harness_build")
-                and not _artifacts_match_build(cfg, existing[0].predicate.detail)
+                and not _artifacts_match_build(
+                    cfg, existing[0].predicate.detail, executor_identity,
+                )
             ):
                 # A restart removed the workspace. Fall through to the build
                 # dispatch instead of returning a claim whose executable no
@@ -779,7 +812,9 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                 result = build_replay.check(
                     cfg.repo_dir, ref, cfg.region_id, tree_sha, strategy, cfg.manifest, builder,
                 )
-                if result["verdict"] == "pass" and not _artifacts_match_build(cfg, result["detail"]):
+                if result["verdict"] == "pass" and not _artifacts_match_build(
+                    cfg, result["detail"], executor_identity,
+                ):
                     raise ComponentError(
                         "the builder did not retain the executables from the passing build"
                     )
@@ -925,7 +960,9 @@ def create_app(regions: dict[str, RegionConfig], token: str, *, builder=None, or
                     cfg.repo_dir, ref, cfg.region_id, tree_sha, strategy,
                     load_strategy(cfg.baseline_strategy_path), builder,
                 )
-                if result["verdict"] == "pass" and not _artifacts_match_build(cfg, result["detail"]):
+                if result["verdict"] == "pass" and not _artifacts_match_build(
+                    cfg, result["detail"], executor_identity,
+                ):
                     raise ComponentError(
                         "the builder did not retain the executables from the passing build"
                     )

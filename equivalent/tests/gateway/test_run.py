@@ -414,3 +414,34 @@ def test_a_run_without_the_header_records_no_tool_call_id(tmp_path):
     line = store.all_requests()[-1]
     assert line.tool_call_id is None
     assert "tool_call_id" not in line.to_dict()
+
+
+def test_a_build_claim_that_names_no_executable_is_an_error_not_a_refusal(tmp_path):
+    # A passing build claim whose detail names no executable cannot be
+    # depended on, but neither is it a missing requirement: the session
+    # has nothing to run and would be told to run a check that is already
+    # present. It is reported as the unusable precondition it is.
+    client, cfg, store = _client(tmp_path)
+    _submit_spec_only(client, cfg)
+    tree_sha, _ = _current(cfg, store)
+    materials = evidence_materials_for(cfg)
+    store.record_claim(
+        [Subject(kind="tree", sha256=tree_sha)], "sese/verified",
+        Predicate(tool="sese_check", version="0.1", configHash="cfg", verdict="pass",
+                  detail={"allow_globs": [SPEC_PATH]}),
+        materials, "sess-0",
+    )
+    store.record_claim(
+        [Subject(kind="tree", sha256=tree_sha)], "build/replay",
+        Predicate(tool="builder", version="0.1", configHash="cfg", verdict="pass",
+                  detail={"attempt_id": "att-1", "targets": {}}),
+        materials, "sess-0",
+    )
+
+    response = client.post(
+        "/run", json={"action": "run_replay", "region": cfg.region_id, "config": {}},
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 503
+    assert "names no executable" in response.json()["detail"]

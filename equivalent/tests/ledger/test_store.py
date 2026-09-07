@@ -1,6 +1,8 @@
 import threading
 import multiprocessing
 
+import pytest
+
 from equivalent.ledger.records import Predicate, RequestLogLine
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
@@ -219,3 +221,29 @@ def _claim_at(store, tree, predicate_type, predicate, ts):
         materials=(),
         session="sess-1",
     )
+
+
+def test_find_duplicate_has_a_docstring(tmp_path):
+    # A string placed after the first statement of a function body is dead
+    # code, not a docstring, so the help a reader asks for is not there.
+    doc = LedgerStore.find_duplicate.__doc__
+    assert doc is not None
+    assert "predicate type" in doc
+
+
+def test_recording_a_claim_with_an_unregistered_predicate_type_writes_nothing(tmp_path):
+    # An unknown predicate type must be refused before the line is on disk;
+    # otherwise the ledger keeps a claim nothing can read back.
+    store = LedgerStore(tmp_path / "region")
+    with pytest.raises(KeyError):
+        store.record_claim([_tree(1)], "not/a/predicate", _pred(), [], "sess-1")
+    assert not store.claims_path.exists()
+
+
+def test_an_unregistered_predicate_type_leaves_earlier_claims_untouched(tmp_path):
+    store = LedgerStore(tmp_path / "region")
+    store.record_claim([_tree(1)], "build/replay", _pred(), [], "sess-1")
+    before = store.claims_path.read_bytes()
+    with pytest.raises(KeyError):
+        store.record_claim([_tree(1)], "not/a/predicate", _pred(), [], "sess-1")
+    assert store.claims_path.read_bytes() == before

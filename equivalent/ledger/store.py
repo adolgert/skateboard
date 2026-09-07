@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import predicates
 from .records import SCHEMA_VERSION, Claim, RequestLogLine
 from .subjects import Subject
 
@@ -121,6 +122,10 @@ class LedgerStore:
 
     def record_claim(self, subject, predicateType: str, predicate, materials, session: str) -> Claim:
         """Build a Claim with an auto-assigned id and timestamp, and append it."""
+        # Reject an unregistered predicate type here, before anything is
+        # written: otherwise the bad line lands on disk and only fails
+        # later, when something reads the claim back.
+        predicates.get(predicateType)
         with self._writer_lock():
             claim = Claim(
                 id=self.next_claim_id(),
@@ -221,13 +226,13 @@ class LedgerStore:
     def find_duplicate(
         self, predicate_type: str, tree: Subject, config_hash: str, *, required_materials=None,
     ):
-        required_materials = self._required_materials(required_materials)
         """Most recent claim for this (predicate type, tree, config), if any.
 
         A Claim records a predicateType, never an action name, so a caller
         asking "did this action already run?" passes the predicate type
         the action emits.
         """
+        required_materials = self._required_materials(required_materials)
         matches = [
             c for c in self._read_claims()
             if c.predicateType == predicate_type

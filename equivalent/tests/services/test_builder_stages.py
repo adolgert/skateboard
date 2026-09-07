@@ -10,6 +10,7 @@ import base64
 import importlib.util
 import io
 import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -191,6 +192,33 @@ def test_a_compile_error_is_a_failed_build_carrying_the_compiler_log(tmp_path):
     assert result["ok"] is False
     assert result["stage"] == "build"
     assert "Error" in result["log_tail"] or "error" in result["log_tail"]
+
+
+class _TimingOutJob:
+    """Stands in for the Docker job that never comes back."""
+
+    def run(self, cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+
+def test_a_build_that_runs_past_its_timeout_is_a_failed_build(tmp_path, monkeypatch):
+    # The production path, where the build is read back through its exec
+    # audit: no runner is injected, and giving an attempt's files to the
+    # job user is the one step that wants root.
+    monkeypatch.setattr(stages, "_JOB_RUNNER", None)
+    monkeypatch.setattr(stages, "_job_executor", lambda *a, **k: _TimingOutJob())
+    monkeypatch.setattr(stages, "_prepare_job_files", lambda *a, **k: None)
+
+    result = stages.build(
+        "attempt-1", tree_of({"Makefile": "replay:\n\ttrue\n"}), "Makefile",
+        [{"role": "replay", "target": "replay", "executable": "replay"}],
+        "gfortran", FLAGS, [], PATTERNS,
+        harness_dir=HARNESS, work_root=tmp_path, timeout=7,
+    )
+
+    assert result["ok"] is False
+    assert result["stage"] == "build"
+    assert "7 seconds" in result["log_tail"]
 
 
 # A replay driver small enough to read: it writes one output file into the

@@ -221,6 +221,21 @@ def test_a_mutant_the_bands_catch_is_killed_and_a_dead_line_survives(tmp_path):
 
 
 @needs_gfortran
+def test_mutants_are_scored_in_workers_that_are_started_rather_than_forked(tmp_path, monkeypatch):
+    # A started worker inherits nothing from this process, so a worker
+    # that scores a mutant has to be handed its job runner rather than
+    # find one already in the module it imports.
+    monkeypatch.setattr(stages, "MUTATE_START_METHOD", "spawn")
+
+    result = _mutate(tmp_path, TIGHT)
+
+    assert result["ok"] is True
+    assert _by_line(result, LIVE_LINE, "KILLED")
+    assert _by_line(result, DEAD_LINE, "EQUIVALENT")
+    assert not [r for r in result["results"] if "the scoring run failed" in r["note"]]
+
+
+@needs_gfortran
 def test_widening_the_bands_absurdly_turns_a_kill_into_the_tolerance_blind_gap(tmp_path):
     tight = _mutate(tmp_path, TIGHT)
     killed = {r["id"] for r in tight["results"] if r["status"] == "KILLED"}

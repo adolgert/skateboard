@@ -21,6 +21,7 @@ import base64
 import glob
 import hashlib
 import json
+import multiprocessing
 import os
 import re
 import shutil
@@ -76,6 +77,10 @@ MUTATE_TIMEOUT_S = 300
 # kernel of a few hundred lines, short enough that the answer arrives
 # while the session that asked for it is still waiting.
 MUTATE_CEILING_S = 1500
+# How the mutation pool starts its workers. None means whatever this
+# Python defaults to. A worker gets everything it needs from its job
+# payload, so any start method works; a test names one to prove it.
+MUTATE_START_METHOD = None
 # How many mutants are built at once when the caller does not say. Each
 # worker is a compile and a run, so this is chosen against a machine the
 # rest of the harness is also using rather than against the core count.
@@ -410,7 +415,10 @@ def build(attempt_id, tree, makefile, targets, compiler, flags, link_flags, sour
             command, cwd=tree_dir, env=env, timeout=timeout, work_root=work_root,
         )
     except subprocess.TimeoutExpired:
-        rc, out, err = 1, "", f"the build did not finish within {timeout} seconds"
+        return {
+            "ok": False, "stage": "build", "targets": {}, "compiles": [],
+            "log_tail": f"the build did not finish within {timeout} seconds",
+        }
     output = out + err
 
     if _JOB_RUNNER is None:
@@ -1065,11 +1073,15 @@ def score_mutant(job) -> dict:
     """Build one mutant, replay every case through it, and say what happened.
 
     Runs in a worker process, so everything it needs is in `job` and
-    everything it answers with is in the returned row. The mutant's
+    everything it answers with is in the returned row -- including which
+    job runner to run its commands with, since a worker that was started
+    rather than forked inherits nothing from this module. The mutant's
     directory is a copy of the tree that already built, so `make` rebuilds
     only what the changed file forces -- and it is removed again unless
     the verdict is one a person has to read the source of.
     """
+    global _JOB_RUNNER
+    _JOB_RUNNER = job["runner"]
     mutant = job["mutant"]
     mutant_dir = job["mutant_dir"]
     deadline = time.monotonic() + job["timeout"]
@@ -1237,6 +1249,7 @@ def mutate(attempt_id, makefile, replay_target, files, cases, bands, compiler, f
     payloads = [
         {
             "mutant": mutant,
+            "runner": _JOB_RUNNER,
             "tree_dir": tree_dir,
             "mutant_dir": os.path.join(workspace, "mutants", mutant.mid),
             "makefile": makefile,
@@ -1279,7 +1292,8 @@ def _score_all(payloads, workers: int, ceiling) -> list:
     """
     by_id = {payload["mutant"].mid: payload["mutant"] for payload in payloads}
     scored = {}
-    pool = ProcessPoolExecutor(max_workers=max(1, workers))
+    context = multiprocessing.get_context(MUTATE_START_METHOD) if MUTATE_START_METHOD else None
+    pool = ProcessPoolExecutor(max_workers=max(1, workers), mp_context=context)
     deadline = time.monotonic() + ceiling
     try:
         futures = {pool.submit(score_mutant, payload): payload for payload in payloads}

@@ -424,3 +424,29 @@ def test_how_many_examples_a_search_draws_can_be_asked_for(tmp_path):
     )
 
     assert builder.properties_calls[0]["max_examples"] == 100
+
+
+def test_a_builder_that_cannot_be_asked_about_its_artifacts_is_not_a_lost_build(tmp_path):
+    # A failed call to the builder says nothing about whether the build
+    # is still there, so it must not be read as one that vanished and
+    # rebuilt: the gateway reports the service as unavailable instead.
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    _run(client, cfg, "sese_check")
+    _run(client, cfg, "build_replay")
+
+    def unreachable(attempt_id):
+        raise ConnectionError("connection reset")
+
+    builder.artifacts = unreachable
+    response = client.post(
+        "/run", json={"action": "run_replay", "region": cfg.region_id, "config": {}},
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 503
+    assert len(builder.build_calls) == 1  # no rebuild
+    assert len(builder.run_calls) == 0
