@@ -7,10 +7,11 @@ written from it. This is findings only; it proposes no procedure.
 
 **This is a dated snapshot and is left as it was written.** Most of what
 it describes has since been replaced; every file path and line number
-below is the tree as it stood that day. The closing section, "What was
+in sections 1–5 is the tree as it stood that day. The closing section, "What was
 resolved", says what each finding became and what is still open. Read
 that first if you are here to know the state of the harness rather than
-the state of the audit.
+the state of the audit. For the operating procedure, start with the
+[coworker handoff](coworker-handoff.md).
 
 ## Summary
 
@@ -227,8 +228,9 @@ Four places already externalize part of what a per-code layer needs:
 
 ## 6. What was resolved
 
-Added after the generalization work. One line per finding: what replaced
-it, or that nothing did.
+Added after the generalization work and updated on 2026-09-06. One line per
+finding: what replaced it, or that nothing did. Current evidence limits are
+spelled out in [the evidence contract](evidence-contract.md).
 
 ### The structural assumptions of §3
 
@@ -244,11 +246,13 @@ it, or that nothing did.
    declares it holds. No Python file outside a code's own directory
    names a variable.
 3. **One compiler command over a flat, hand-ordered file list.** The
-   builder runs the tree's own makefile, with `FC` set to a shim that
-   logs every compiler invocation before running the strategy's
-   compiler. The log is read back: every compile must carry the
-   strategy's flags and must compile only the tree's own source, and
-   both facts go into the build claim. `make`, `cmake` and `fpm` are in
+   builder runs the tree's own makefile in a disposable job. A protected
+   `strace` observer records actual compiler processes and arguments;
+   accepted compile observations must carry the strategy's flags and use
+   allowed source paths. Both facts go into the build claim alongside
+   executable digests. This does not prove exclusive compiler provenance
+   of the final executable; the build recipe still needs review.
+   `make`, `cmake` and `fpm` are in
    the builder image, so a thin makefile can drive either of the other
    two.
 4. **A tracked subdirectory of this repository, UTF-8 text only.** The
@@ -281,20 +285,27 @@ it, or that nothing did.
    onboarding against a stated contract, and checked by
    `harness_replay`, `harness_determinism` and `harness_self_check`
    rather than generated.
-9. **Line-numbered anchors that go stale.** Not resolved. A spec still
-   names a line range, and the analyzer's verdict is only as good as the
-   range it was given -- which the manual says. The analyzer's claim is
-   filed against the frozen set rather than the tree, so it survives
-   edits inside the region.
+9. **Line-numbered anchors that go stale.** The scanner now resolves full
+   named procedures in the candidate source and rejects unsupported
+   arbitrary line selections. `sese/verified` is scoped to the candidate
+   tree and must be renewed after edits. This closes the stale-range reuse
+   problem for the supported source subset; it is not a complete Fortran
+   control-flow or effects proof.
 10. **Property-based invariants have no home.** A code's manifest may
     name a pytest module of invariants; `regression/property` is a
     predicate type; the builder bakes in the library that module imports
     and runs it against the replay binary; and acceptance requires the
     claim exactly when the code declares a module.
-11. **Device proof is the substring `launch `.** The proof now requires
-    the offload runtime's own `file`, `function`, `line` and `device`
-    fields on each launch line, and the claim records where each launch
-    came from. A stronger proof remains open -- see below.
+11. **Device proof is the substring `launch `.** Submitted stdout and
+    runtime notification text no longer establish GPU execution. A protected
+    Nsight report must contain kernel activity. Attributing that activity
+    to the intended scientific work still needs review.
+12. **A self-consistent harness can disagree with the original.** Onboarding
+    now requires `harness_original`: repeated runs of a preserved original
+    and the onboarded CPU program must agree on a separately reviewed output
+    contract. The original source and contract are hashed outside the
+    agent's working copy. Test representativeness and hidden state remain
+    the scientist's responsibility.
 
 ### The duplicated facts of §2
 
@@ -331,14 +342,14 @@ it, or that nothing did.
 - **The static footprint check is still missing.** Nothing confirms that
   a spec's declared reads and writes match what the code actually
   touches; that needs static-analysis tooling this repository does not
-  run generically. `harness_replay` and `harness_self_check` catch a
-  wrong footprint empirically -- a driver that does not set everything
-  the region reads shows up as a replay that does not reproduce the
-  capture -- but the static check is open.
+  run generically. Replay, original comparison, and mutation checks may expose
+  an omitted effect on the cases exercised; they do not guarantee that every
+  omitted state variable will be detected. The static check remains open.
 - **Requirements are scoped to the whole tree.** Any edit invalidates
   every check, which is right for a small kernel and expensive on a
   large code, where a region-scoped subject (a hash of the region's
   dependency cone) would let untouched evidence stand.
-- **A stronger device proof.** Counting kernels with `nsys` rather than
-  reading the runtime's notification lines is a strategy option nobody
-  has written.
+- **Qualification on the target GPU host.** Protected Nsight collection is
+  implemented, but the September 2026 local qualification exercised only
+  the CPU execution boundary because the NVIDIA driver was unavailable.
+  Run the full deployment qualification before relying on GPU claims.

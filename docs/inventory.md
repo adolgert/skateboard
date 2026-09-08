@@ -1,4 +1,9 @@
-# Inventory of the current code
+# Historical inventory before the gateway
+
+This describes commit `ba5a627`, not the current implementation. The gateway,
+claim ledger, per-code manifests, property checks, and isolated builder jobs now
+exist. Keep this inventory as the starting-point record; use the
+[documentation guide](README.md) for current instructions.
 
 Step 0 of `notes/pi-ledger-plan.md`. Written before any code for the
 gateway/ledger system exists, against the state of `main` at commit

@@ -5,6 +5,7 @@ package code; the test lives here so that running the suite from the
 repository root covers it along with everything else.
 """
 from pathlib import Path
+import pytest
 
 from deploy.seed import baseline_dir, baseline_paths, write_seed
 from equivalent.ledger.subjects import tree_subject
@@ -66,3 +67,17 @@ def test_two_seedings_produce_the_same_baseline_hash(tmp_path):
     write_seed(REPO_ROOT, second, CODE)
 
     assert tree_subject(_seeded_files(first)) == tree_subject(_seeded_files(second))
+
+
+def test_existing_identical_seed_can_be_reused(tmp_path):
+    assert write_seed(REPO_ROOT, tmp_path, CODE) == write_seed(REPO_ROOT, tmp_path, CODE)
+
+
+@pytest.mark.parametrize("path", ["src/another_code.f90", "src/mod_kernel.f90"])
+def test_stale_or_different_baseline_is_refused_before_writing(tmp_path, path):
+    write_seed(REPO_ROOT, tmp_path, CODE)
+    (tmp_path / path).write_bytes(b"different baseline")
+    before = _seeded_files(tmp_path)
+    with pytest.raises(ValueError, match="fresh state directory"):
+        write_seed(REPO_ROOT, tmp_path, CODE)
+    assert _seeded_files(tmp_path) == before

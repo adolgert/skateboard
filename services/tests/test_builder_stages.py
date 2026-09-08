@@ -1,0 +1,926 @@
+"""The builder's stages, run for real against gfortran where one is present.
+
+These are the tests that actually put a Makefile in front of `make` and
+read the log the shim wrote, because that pairing is the whole point of
+the build contract: the tree says how to build itself, and the log is
+what says whether it obeyed. They are skipped where no gfortran is
+installed, so the suite still runs on a machine with no compiler.
+"""
+import base64
+import importlib.util
+import io
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from services.builder import (
+    compile_log,
+    executor,
+    stage_build,
+    stage_sanitizer,
+    stages,
+    workspace,
+)
+
+HARNESS = Path(__file__).resolve().parents[1] / "builder" / "harness"
+
+needs_gfortran = pytest.mark.skipif(
+    shutil.which("gfortran") is None or shutil.which("make") is None,
+    reason="the build contract needs a Fortran compiler and make",
+)
+
+# The flags the strategy asks for. -O1 and -fno-range-check are chosen
+# because gfortran accepts both and neither is a default, so a Makefile
+# that ignores FFLAGS cannot pass by accident.
+FLAGS = ["-O1", "-fno-range-check"]
+PATTERNS = ["src/*.f90", "*.f90", "Makefile"]
+
+
+MAIN = """program main
+  print *, 'ran'
+end program main
+"""
+
+
+def tree_of(files: dict) -> list:
+    return [
+        {"path": path, "b64": base64.b64encode(content.encode()).decode()}
+        for path, content in files.items()
+    ]
+
+
+def build(attempt, files, targets=None, compiler="gfortran"):
+    return stages.build(
+        attempt, tree_of(files), "Makefile",
+        targets or [{"role": "replay", "target": "replay", "executable": "replay"}],
+        compiler, FLAGS, [], PATTERNS, harness_dir=HARNESS,
+    )
+
+
+def test_the_tree_is_written_with_its_directories_intact(tmp_path):
+    workspace.write_tree(tmp_path / "tree", tree_of({
+        "Makefile": "all:\n", "src/deep/mod_kernel.f90": MAIN,
+    }))
+
+    assert (tmp_path / "tree" / "src" / "deep" / "mod_kernel.f90").read_text() == MAIN
+
+
+@pytest.mark.parametrize("path", ["/etc/passwd", "../escape.f90", "src/../../escape.f90"])
+def test_a_path_that_would_leave_the_workspace_is_refused_by_name(tmp_path, path):
+    with pytest.raises(ValueError) as excinfo:
+        workspace.write_tree(tmp_path / "tree", tree_of({path: MAIN}))
+
+    assert path in str(excinfo.value)
+
+
+@needs_gfortran
+def test_a_build_that_obeys_the_makefile_reports_every_compile(attempt):
+    result = build(attempt, {
+        "Makefile": (
+            "replay: src/main.f90\n"
+            "\t$(FC) $(FFLAGS) $(MODFLAG) . -o replay src/main.f90 $(LDFLAGS)\n"
+        ),
+        "src/main.f90": MAIN,
+    })
+
+    assert result.ok is True
+    assert result.targets["replay"]["executable"] == "replay"
+    assert result.targets["replay"]["built"] is True
+    assert len(result.targets["replay"]["sha256"]) == 64
+    assert result.flags_reached_every_compile is True
+    assert result.compiled_only_tree_source is True
+    assert [record["inputs"] for record in result.compiles] == [["src/main.f90"]]
+    assert result.compiles[0]["output"] == "replay"
+
+
+@needs_gfortran
+def test_a_makefile_that_hard_codes_its_flags_names_the_compile_that_ignored_them(attempt):
+    result = build(attempt, {
+        "Makefile": (
+            "FFLAGS = -O0\n"
+            "replay: src/main.f90\n"
+            "\t$(FC) $(FFLAGS) $(MODFLAG) . -o replay src/main.f90\n"
+        ),
+        "src/main.f90": MAIN,
+    })
+
+    # The build succeeded. Only the log says the strategy never reached it.
+    assert result.targets["replay"]["built"] is True
+    assert result.flags_reached_every_compile is False
+    assert result.compiles[0]["has_flags"] is False
+    assert "-O0" in result.compiles[0]["argv"]
+
+
+@needs_gfortran
+def test_a_build_that_compiles_a_file_from_outside_the_tree_names_it(attempt):
+    result = build(attempt, {
+        "Makefile": (
+            "replay: src/main.f90\n"
+            "\tprintf 'module extra\\nend module extra\\n' > ../extra.f90\n"
+            "\t$(FC) $(FFLAGS) $(MODFLAG) . -c ../extra.f90\n"
+            "\t$(FC) $(FFLAGS) $(MODFLAG) . -o replay src/main.f90 extra.o\n"
+        ),
+        "src/main.f90": MAIN,
+    })
+
+    assert result.compiled_only_tree_source is False
+    outside = [path for record in result.compiles for path in record["outside"]]
+    assert [path.endswith("extra.f90") for path in outside] == [True]
+
+
+@needs_gfortran
+def test_two_sources_with_the_same_basename_in_different_directories_both_build(attempt):
+    same_name = "module {name}\ncontains\n  subroutine {name}_hello\n  end subroutine\nend module\n"
+    result = build(attempt, {
+        "Makefile": (
+            "SRC = src/a/x.f90 src/b/x.f90 src/main.f90\n"
+            "replay: $(SRC)\n"
+            "\t$(FC) $(FFLAGS) $(MODFLAG) . -o replay $(SRC)\n"
+        ),
+        "src/a/x.f90": same_name.format(name="alpha"),
+        "src/b/x.f90": same_name.format(name="beta"),
+        "src/main.f90": "program main\n  use alpha\n  use beta\nend program\n",
+    })
+
+    assert result.ok is True
+    assert result.compiles[0]["inputs"] == ["src/a/x.f90", "src/b/x.f90", "src/main.f90"]
+
+
+@needs_gfortran
+def test_every_declared_target_is_built_and_reported_by_its_role(attempt):
+    result = build(
+        attempt,
+        {
+            "Makefile": (
+                "replay: src/main.f90\n"
+                "\t$(FC) $(FFLAGS) $(MODFLAG) . -o replay src/main.f90\n"
+                "timing: whole_program\n"
+                "whole_program: src/main.f90\n"
+                "\t$(FC) $(FFLAGS) $(MODFLAG) . -o whole_program src/main.f90\n"
+                ".PHONY: timing\n"
+            ),
+            "src/main.f90": MAIN,
+        },
+        targets=[
+            {"role": "replay", "target": "replay", "executable": "replay"},
+            {"role": "timing", "target": "timing", "executable": "whole_program"},
+        ],
+    )
+
+    assert result.ok is True
+    assert sorted(result.targets) == ["replay", "timing"]
+    assert result.targets["timing"]["executable"] == "whole_program"
+
+
+@needs_gfortran
+def test_a_target_that_leaves_no_executable_fails_naming_the_role(attempt):
+    result = build(
+        attempt,
+        {"Makefile": "replay:\n\t@echo nothing to do here\n.PHONY: replay\n"},
+        targets=[{"role": "replay", "target": "replay", "executable": "replay"}],
+    )
+
+    assert result.ok is False
+    assert "replay" in result.log_tail
+    assert result.targets["replay"]["built"] is False
+
+
+@pytest.mark.skipif(
+    shutil.which("gcc") is None or shutil.which("g++") is None,
+    reason="mixed-language build needs C and C++ compilers",
+)
+def test_a_mixed_build_proves_each_languages_compiler_and_flags(attempt):
+    result = stages.build(
+        attempt,
+        tree_of({
+            "Makefile": (
+                "mixed: c.o main.o\n"
+                "\t$(CXX) c.o main.o -o mixed\n"
+                "c.o: src/value.c\n"
+                "\t$(CC) $(CFLAGS) -c src/value.c -o c.o\n"
+                "main.o: src/main.cpp\n"
+                "\t$(CXX) $(CXXFLAGS) -c src/main.cpp -o main.o\n"
+            ),
+            "src/value.c": "int answer(void) { return 42; }\n",
+            "src/main.cpp": (
+                'extern "C" int answer(void);\n'
+                "int main() { return answer() == 42 ? 0 : 1; }\n"
+            ),
+        }),
+        "Makefile",
+        [{"role": "replay", "target": "mixed", "executable": "mixed"}],
+        None,
+        [],
+        [],
+        ["src/*.c", "src/*.cpp", "Makefile"],
+        toolchains={
+            "c": {"compiler": "gcc", "flags": ["-O1", "-DC_BUILD"]},
+            "cxx": {"compiler": "g++", "flags": ["-O2", "-std=c++17"]},
+        },
+        harness_dir=HARNESS,
+    )
+
+    assert result.ok is True
+    assert result.languages_compiled == ["c", "cxx"]
+    assert result.flags_reached_every_compile is True
+    assert {record["language"] for record in result.compiles if record["inputs"]} == {
+        "c", "cxx",
+    }
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="build needs a C compiler")
+def test_a_declared_language_that_never_compiles_fails_closed(attempt):
+    result = stages.build(
+        attempt,
+        tree_of({
+            "Makefile": "mixed: src/main.c\n\t$(CC) $(CFLAGS) src/main.c -o mixed\n",
+            "src/main.c": "int main(void) { return 0; }\n",
+        }),
+        "Makefile",
+        [{"role": "replay", "target": "mixed", "executable": "mixed"}],
+        None,
+        [],
+        [],
+        ["src/*.c", "src/*.cpp", "Makefile"],
+        toolchains={
+            "c": {"compiler": "gcc", "flags": ["-O1"]},
+            "cxx": {"compiler": "g++", "flags": ["-O1"]},
+        },
+        harness_dir=HARNESS,
+    )
+
+    assert result.ok is False
+    assert "cxx" in result.log_tail
+
+
+def test_configured_compiler_descendants_are_not_counted_as_direct_build_entries(tmp_path):
+    compiler = shutil.which("python3")
+    source = tmp_path / "kernel.cu"
+    source.write_text("// source\n")
+    observed, audit, problem = stage_build._observed_compiler_log(
+        {
+            "ok": True,
+            "initial_cwd": str(tmp_path),
+            "executions": [
+                {"path": "/usr/bin/make", "argv": ["make"], "pid": 1, "ppid": None},
+                {"path": compiler, "argv": ["nvcc", "kernel.cu"], "cwd": str(tmp_path), "pid": 2, "ppid": 1},
+                {"path": compiler, "argv": ["ptxas", "generated.ptx"], "cwd": str(tmp_path), "pid": 3, "ppid": 2},
+            ],
+        },
+        None,
+        str(tmp_path),
+        toolchains={
+            "cuda": {"compiler": compiler, "flags": []},
+            "ptx": {"compiler": compiler, "flags": []},
+        },
+    )
+
+    assert problem is None
+    assert len(observed.splitlines()) == 1
+    assert audit["compiler_invocations"] == 1
+
+
+def test_an_unparseable_configured_compiler_execution_fails_closed(tmp_path):
+    compiler = shutil.which("python3")
+    observed, audit, problem = stage_build._observed_compiler_log(
+        {
+            "ok": True,
+            "initial_cwd": str(tmp_path),
+            "executions": [{
+                "path": compiler, "argv": None, "pid": 2, "ppid": 1,
+                "audit_error": "execve arguments could not be audited",
+            }],
+        },
+        None,
+        str(tmp_path),
+        toolchains={"c": {"compiler": compiler, "flags": []}},
+    )
+
+    assert observed == ""
+    assert audit == {}
+    assert "could not be audited" in problem
+
+
+@needs_gfortran
+def test_a_compile_error_is_a_failed_build_carrying_the_compiler_log(attempt):
+    result = build(attempt, {
+        "Makefile": "replay: src/main.f90\n\t$(FC) $(FFLAGS) -o replay src/main.f90\n",
+        "src/main.f90": "program main\n  this is not fortran(\nend program\n",
+    })
+
+    assert result.ok is False
+    assert result.stage == "build"
+    assert "Error" in result.log_tail or "error" in result.log_tail
+
+
+@needs_gfortran
+def test_the_protected_observer_reports_the_compiles_the_shim_log_reports(attempt):
+    # A deployment reads execve records instead of the shim's log, which
+    # removes the writable log file as a trust root. The two accounts have
+    # to say the same thing about the same build, or a claim would depend
+    # on which half of the harness produced it.
+    result = build(attempt, {
+        "Makefile": "replay: src/main.f90\n\t$(FC) $(FFLAGS) -o replay src/main.f90\n",
+        "src/main.f90": MAIN,
+    })
+    assert result.ok is True
+    logged = [
+        json.loads(line) for line in
+        Path(attempt.path(stage_build.LOG_NAME)).read_text().splitlines() if line.strip()
+    ]
+    assert logged
+
+    observed, audit, problem = stage_build._observed_compiler_log(
+        {"ok": True, "executions": [
+            {"path": shutil.which("gfortran"), "argv": ["gfortran", *entry["argv"]]}
+            for entry in logged
+        ]},
+        "gfortran", attempt.tree_dir,
+    )
+
+    assert problem is None
+    assert audit["protected"] is True
+    assert audit["compiler_invocations"] == len(logged)
+    assert compile_log.compile_records(
+        observed, attempt.tree_dir, FLAGS, PATTERNS, harness_dir=str(HARNESS),
+    ) == result.compiles
+
+
+def test_a_build_the_observer_saw_no_compiler_in_is_not_a_reported_build():
+    observed, audit, problem = stage_build._observed_compiler_log(
+        {"ok": True, "executions": [{"path": "/bin/sh", "argv": ["sh", "-c", "true"]}]},
+        "gfortran", "/tmp",
+    )
+
+    assert (observed, audit) == ("", {})
+    assert "observed no invocation" in problem
+
+
+def _never_returns(cmd, **kwargs):
+    """Stands in for a job that never comes back."""
+    raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+
+def test_a_build_that_runs_past_its_timeout_is_a_failed_build(tmp_path):
+    attempt = stages.workspace_for(
+        "attempt-1", work_root=tmp_path,
+        policy=workspace.InProcessJobs(runner=_never_returns),
+    )
+
+    result = stages.build(
+        attempt, tree_of({"Makefile": "replay:\n\ttrue\n"}), "Makefile",
+        [{"role": "replay", "target": "replay", "executable": "replay"}],
+        "gfortran", FLAGS, [], PATTERNS, harness_dir=HARNESS, timeout=7,
+    )
+
+    assert result.ok is False
+    assert result.stage == "build"
+    assert "7 seconds" in result.log_tail
+
+
+# A replay driver small enough to read: it writes one output file into the
+# case directory it is given. What is in that file does not matter here --
+# the builder never looks inside one; the oracle does.
+WRITER = """program writer
+  character(len=512) :: casedir
+  call get_command_argument(1, casedir)
+  open(unit=10, file=trim(casedir)//'/field.out.npy', access='stream', form='unformatted')
+  write(10) 'OUT'
+  close(10)
+end program writer
+"""
+
+WRITER_MAKEFILE = (
+    "replay: src/writer.f90\n"
+    "\t$(FC) $(FFLAGS) $(MODFLAG) . -o replay src/writer.f90\n"
+)
+
+
+@needs_gfortran
+def test_run_writes_the_inputs_replays_each_case_and_collects_the_outputs(attempt):
+    build(attempt, {"Makefile": WRITER_MAKEFILE, "src/writer.f90": WRITER})
+    cases = {"case0000": {"field": base64.b64encode(b"IN").decode()}}
+
+    result = stages.run(attempt, "replay", cases)
+
+    assert result.ok is True
+    assert base64.b64decode(result.outputs["case0000"]["field"]) == b"OUT"
+    # The inputs really were laid out as files for the driver to read.
+    assert Path(attempt.path("cases", "case0000", "field.npy")).read_bytes() == b"IN"
+
+
+@needs_gfortran
+def test_run_refuses_a_case_whose_array_did_not_arrive_as_array_bytes(attempt):
+    # A stage that let this reach the decoder would answer with a crashed
+    # service, which a reader cannot tell from a machine that fell over.
+    build(attempt, {"Makefile": WRITER_MAKEFILE, "src/writer.f90": WRITER})
+
+    result = stages.run(attempt, "replay", {"case0000": {"field": "not base64 at all"}})
+
+    assert result.ok is False
+    assert result.case == "case0000"
+    assert "base64" in result.log_tail
+
+
+@needs_gfortran
+def test_run_reports_the_executable_the_manifest_named_when_it_is_missing(attempt):
+    build(attempt, {"Makefile": WRITER_MAKEFILE, "src/writer.f90": WRITER})
+
+    result = stages.run(attempt, "some_other_binary", {"case0000": {}})
+
+    assert result.ok is False
+    assert "some_other_binary" in result.log_tail
+
+
+def test_explicit_profile_collects_kernels_when_notification_is_absent(attempt, monkeypatch):
+    tree = Path(attempt.tree_dir)
+    tree.mkdir(parents=True)
+    replay = tree / "replay"
+    replay.write_text("#!/bin/sh\nexit 0\n")
+    replay.chmod(0o755)
+    observed = {}
+
+    def execute(cmd, **options):
+        observed.update(options)
+        return executor.JobResult(0, "", "", {
+            "ok": True, "kernels_launched": 2, "kernel_names": ["mixed_kernel"],
+        })
+
+    monkeypatch.setattr(attempt, "execute", execute)
+    result = stages.run(
+        attempt, "replay", {"case0000": {}}, notify=None, profile=True,
+    )
+
+    assert observed["mode"] == "profiled"
+    assert result.ok is True
+    assert result.kernels_launched == 2
+    assert result.profiler == "nsys/CUPTI_ACTIVITY_KIND_KERNEL"
+
+
+TIMER = """program timer
+  open(unit=10, file='result.dat')
+  write(10, *) 'done'
+  close(10)
+end program timer
+"""
+
+TIMER_MAKEFILE = (
+    "timing: whole_program\n"
+    "whole_program: src/timer.f90\n"
+    "\t$(FC) $(FFLAGS) $(MODFLAG) . -o whole_program src/timer.f90\n"
+    ".PHONY: timing\n"
+)
+
+
+def _timing_tree(attempt):
+    return build(
+        attempt,
+        {"Makefile": TIMER_MAKEFILE, "src/timer.f90": TIMER},
+        targets=[{"role": "timing", "target": "timing", "executable": "whole_program"}],
+    )
+
+
+@needs_gfortran
+def test_time_run_repeats_the_program_and_returns_the_files_it_declared(attempt):
+    _timing_tree(attempt)
+
+    result = stages.time_run(
+        attempt, "whole_program", args=[], env={"EQUIVALENT_TEST": "1"},
+        outputs=["result.dat"], repeats=2, budget_s=60,
+    )
+
+    assert result.ok is True
+    assert len(result.runs_s) == 2
+    # One set of collected files per run, so a caller can ask whether the
+    # program wrote the same thing both times.
+    assert len(result.outputs) == 2
+    assert b"done" in base64.b64decode(result.outputs[-1]["result.dat"])
+
+
+# A program whose declared output really is different every run. It
+# writes its own process id rather than reading a clock: two runs a few
+# milliseconds apart can land on the same tick, and then the test below
+# would fail for a reason that has nothing to do with what it is asking.
+# It cannot count its runs in a file either -- each repetition works in a
+# fresh copy of the tree, which is the point of the test below it.
+DRIFTING_TIMER = """program drifting
+  open(unit=10, file='result.dat')
+  write(10, *) getpid()
+  close(10)
+end program drifting
+"""
+
+
+@needs_gfortran
+def test_time_run_collects_each_runs_own_files_so_a_drifting_output_is_visible(attempt):
+    # A program whose declared output changes from run to run is the thing
+    # a caller most wants to know about, and it is invisible if the files
+    # are only collected once at the end.
+    build(
+        attempt,
+        {"Makefile": TIMER_MAKEFILE.replace("src/timer.f90", "src/drifting.f90"),
+         "src/drifting.f90": DRIFTING_TIMER},
+        targets=[{"role": "timing", "target": "timing", "executable": "whole_program"}],
+    )
+
+    result = stages.time_run(
+        attempt, "whole_program", args=[], env={}, outputs=["result.dat"],
+        repeats=2, budget_s=60,
+    )
+
+    assert result.ok is True
+    assert result.outputs[0]["result.dat"] != result.outputs[1]["result.dat"]
+
+
+@needs_gfortran
+def test_time_run_fails_naming_an_output_file_the_program_did_not_write(attempt):
+    _timing_tree(attempt)
+
+    result = stages.time_run(
+        attempt, "whole_program", args=[], env={}, outputs=["result.dat", "energy.csv"],
+        repeats=1, budget_s=60,
+    )
+
+    assert result.ok is False
+    assert "energy.csv" in result.log_tail
+
+
+@needs_gfortran
+def test_time_run_does_not_collect_a_declared_output_the_tree_already_held(attempt):
+    # Otherwise a program that stopped writing its output would be timed
+    # happily and compared against the file the last port left behind.
+    _timing_tree(attempt)
+    (Path(attempt.tree_dir) / "energy.csv").write_text("from an earlier attempt\n")
+
+    result = stages.time_run(
+        attempt, "whole_program", args=[], env={}, outputs=["energy.csv"],
+        repeats=1, budget_s=60,
+    )
+
+    assert result.ok is False
+    assert "energy.csv" in result.log_tail
+    assert result.outputs == []
+
+
+@needs_gfortran
+def test_every_timed_repetition_runs_in_its_own_copy_of_the_tree(attempt):
+    # The measured binary is executed from the tree it was built in and
+    # works in a copy of it, so nothing a run writes can reach the binary
+    # being measured or the run after it.
+    _timing_tree(attempt)
+
+    result = stages.time_run(
+        attempt, "whole_program", args=[], env={}, outputs=["result.dat"],
+        repeats=2, budget_s=60,
+    )
+
+    assert result.ok is True
+    assert not (Path(attempt.tree_dir) / "result.dat").exists()
+    assert sorted(p.name for p in Path(attempt.path("timing")).iterdir()) == [
+        "run-0001", "run-0002",
+    ]
+
+
+# A capture program small enough to read: it takes a number of cases and,
+# as every capture program does, the directory to write them into as its
+# last argument. It writes real NPY files, because the capture format is
+# the contract and a test that wrote its own bytes would not be checking
+# it. A shell script rather than Fortran, so this runs where no compiler
+# is installed.
+CAPTURE_PROGRAM = """#!/bin/sh
+set -e
+"PYTHON" - "$1" "$2" <<'PYEOF'
+import json, sys
+import numpy as np
+from pathlib import Path
+count, outdir = int(sys.argv[1]), Path(sys.argv[2])
+for i in range(count):
+    case = outdir / ("case%04d" % i)
+    case.mkdir(parents=True)
+    np.save(case / "h.npy", np.asarray([i, i + 1], dtype="<f4"))
+    np.save(case / "h.out.npy", np.asarray([i + 2, i + 3], dtype="<f4"))
+    (case / "case.json").write_text(json.dumps({"inputs": ["h"], "outputs": ["h"]}))
+print("wrote", count, "cases")
+PYEOF
+"""
+
+
+def _capture_tree(attempt, program=None):
+    """A workspace holding one executable capture program and nothing else."""
+    import os
+    import sys
+    source = CAPTURE_PROGRAM.replace("PYTHON", sys.executable) if program is None else program
+    tree_dir = attempt.write_tree(tree_of({"gen_reference": source}))
+    os.chmod(Path(tree_dir) / "gen_reference", 0o755)
+    return tree_dir
+
+
+def test_capture_returns_every_case_directory_the_program_wrote(attempt):
+    _capture_tree(attempt)
+
+    result = stages.capture(attempt, "gen_reference", ["2"], "visible")
+
+    assert result.ok is True
+    assert sorted(result.cases) == ["case0000", "case0001"]
+    case = result.cases["case0000"]
+    assert sorted(case["inputs"]) == ["h"] and sorted(case["outputs"]) == ["h"]
+    assert base64.b64decode(case["inputs"]["h"]).startswith(b"\x93NUMPY")
+    assert "wrote 2 cases" in result.stdout_tail
+
+
+def test_capture_writes_into_a_directory_named_for_the_run(attempt):
+    _capture_tree(attempt)
+
+    stages.capture(attempt, "gen_reference", ["1"], "holdout")
+
+    assert Path(attempt.path("captures", "holdout", "case0000")).is_dir()
+
+
+def test_capture_starts_from_an_empty_directory_each_time(attempt):
+    # Otherwise a run that captured fewer cases than the last one would
+    # come back holding cases the program did not write this time.
+    _capture_tree(attempt)
+
+    stages.capture(attempt, "gen_reference", ["3"], "visible")
+    result = stages.capture(attempt, "gen_reference", ["1"], "visible")
+
+    assert sorted(result.cases) == ["case0000"]
+
+
+def test_capture_that_leaves_no_case_directory_says_so(attempt):
+    _capture_tree(attempt, program='#!/bin/sh\necho "nothing to capture"\n')
+
+    result = stages.capture(attempt, "gen_reference", [], "visible")
+
+    assert result.ok is False
+    assert "no case" in result.stdout_tail
+    assert result.cases == {}
+
+
+def test_capture_reports_a_program_that_failed(attempt):
+    _capture_tree(attempt, program='#!/bin/sh\necho "bad grid size" >&2\nexit 2\n')
+
+    result = stages.capture(attempt, "gen_reference", [], "visible")
+
+    assert result.ok is False
+    assert "bad grid size" in result.stdout_tail
+
+
+def test_capture_reports_the_executable_the_manifest_named_when_it_is_missing(attempt):
+    _capture_tree(attempt)
+
+    result = stages.capture(attempt, "no_such_program", [], "visible")
+
+    assert result.ok is False
+    assert "no_such_program" in result.stdout_tail
+
+
+# A replay driver written in Python rather than Fortran, so the property
+# stage can be exercised where no compiler is installed. It does what the
+# fixture region does: one step, adding one to what it was given.
+REPLAY_SCRIPT = """#!/bin/sh
+exec "PYTHON" - "$1" <<'PYEOF'
+import sys
+from pathlib import Path
+import numpy as np
+case = Path(sys.argv[1])
+np.save(case / "h.out.npy", np.load(case / "h.npy") + 1)
+PYEOF
+"""
+
+# One property this replay has and one it does not. The failing one is
+# wrong on purpose: what the stage has to report is which of the two
+# failed and how many ran, not that everything was fine.
+PROPERTIES_MODULE = '''"""Invariants of a code, run against its own replay binary."""
+from hypothesis import given, strategies as st
+
+import harness_properties as harness
+
+
+@harness.settings()
+@given(st.integers(min_value=0, max_value=3))
+def test_the_same_inputs_replay_to_the_same_outputs(offset):
+    inputs = {"h": harness.corpus()[0]["h"] + offset}
+    first = harness.run_replay(inputs)["h"]
+    second = harness.run_replay(inputs)["h"]
+    assert (first == second).all()
+
+
+def test_the_replay_hands_back_what_it_was_given():
+    inputs = harness.corpus()[0]
+    assert (harness.run_replay(inputs)["h"] == inputs["h"]).all()
+
+
+def test_the_seed_reached_the_module():
+    assert harness.seed() == 4242
+'''
+
+def _npy(values) -> bytes:
+    """One array as the bytes of an NPY file, which is how a case travels."""
+    buffer = io.BytesIO()
+    np.save(buffer, np.asarray(values, dtype="<f4"), allow_pickle=False)
+    return buffer.getvalue()
+
+
+PROPERTY_CASES = {"case0000": {"h": base64.b64encode(_npy([1.0, 2.0, 3.0])).decode()}}
+
+
+def _property_tree(attempt, files=None):
+    """A workspace holding a replay binary and whatever else the test wants."""
+    import os
+    import sys
+
+    written = {"replay": REPLAY_SCRIPT.replace("PYTHON", sys.executable)}
+    written.update(files or {"harness/properties.py": PROPERTIES_MODULE})
+    tree_dir = attempt.write_tree(tree_of(written))
+    os.chmod(Path(tree_dir) / "replay", 0o755)
+    return tree_dir
+
+
+needs_hypothesis = pytest.mark.skipif(
+    importlib.util.find_spec("hypothesis") is None,
+    reason="running a code's property module needs Hypothesis",
+)
+
+
+@needs_hypothesis
+def test_properties_runs_the_module_and_reports_what_passed_and_what_failed(attempt):
+    _property_tree(attempt)
+
+    result = stages.properties(
+        attempt, "replay", "harness/properties.py", PROPERTY_CASES,
+        seed=4242, max_examples=5, harness_dir=HARNESS,
+    )
+
+    assert result.ok is False  # one of the three properties does not hold
+    assert result.passed == 2
+    assert result.failed == 1
+    assert result.errors == 0
+    assert result.seed == 4242
+    assert result.max_examples == 5
+    assert "test_the_replay_hands_back_what_it_was_given" in result.log_tail
+
+
+@needs_hypothesis
+def test_properties_passes_when_every_property_holds(attempt):
+    _property_tree(attempt, files={"harness/properties.py": (
+        "import harness_properties as harness\n"
+        "\n"
+        "\n"
+        "def test_one_step_adds_one():\n"
+        "    inputs = harness.corpus()[0]\n"
+        "    assert (harness.run_replay(inputs)['h'] == inputs['h'] + 1).all()\n"
+    )})
+
+    result = stages.properties(
+        attempt, "replay", "harness/properties.py", PROPERTY_CASES,
+        seed=7, max_examples=5, harness_dir=HARNESS,
+    )
+
+    assert result.ok is True
+    assert result.passed == 1
+    assert result.failed == 0
+
+
+@needs_hypothesis
+def test_a_code_gets_the_determinism_property_from_the_library(attempt):
+    # The draw from the corpus, the bitwise comparison and "the region is
+    # a function of its inputs" are the same for every code, so a code's
+    # own module is left holding its physics and nothing else.
+    _property_tree(attempt, files={"harness/properties.py": (
+        "import harness_properties as harness\n"
+        "\n"
+        "\n"
+        "test_the_region_is_a_function_of_its_inputs = harness.determinism_property()\n"
+    )})
+
+    result = stages.properties(
+        attempt, "replay", "harness/properties.py", PROPERTY_CASES,
+        seed=7, max_examples=5, harness_dir=HARNESS,
+    )
+
+    assert result.ok is True, result.log_tail
+    assert result.passed == 1
+
+
+@needs_hypothesis
+def test_the_cases_reach_the_module_as_the_corpus_it_reads(attempt):
+    # The property module never sees the wire format: it asks for the
+    # corpus and gets arrays, which is the whole point of the library.
+    _property_tree(attempt, files={"harness/properties.py": (
+        "import harness_properties as harness\n"
+        "\n"
+        "\n"
+        "def test_the_corpus_is_the_visible_cases():\n"
+        "    corpus = harness.corpus()\n"
+        "    assert len(corpus) == 1\n"
+        "    assert list(corpus[0]['h']) == [1.0, 2.0, 3.0]\n"
+    )})
+
+    result = stages.properties(
+        attempt, "replay", "harness/properties.py", PROPERTY_CASES,
+        seed=7, max_examples=5, harness_dir=HARNESS,
+    )
+
+    assert result.ok is True, result.log_tail
+
+
+@pytest.mark.parametrize("module", ["../elsewhere/properties.py", "/etc/properties.py"])
+def test_a_properties_module_outside_the_tree_is_refused_by_name(attempt, module):
+    _property_tree(attempt)
+
+    result = stages.properties(
+        attempt, "replay", module, PROPERTY_CASES,
+        seed=1, max_examples=5, harness_dir=HARNESS,
+    )
+
+    assert result.ok is False
+    assert module in result.log_tail
+
+
+def test_a_properties_module_the_tree_does_not_hold_is_refused_by_name(attempt):
+    _property_tree(attempt)
+
+    result = stages.properties(
+        attempt, "replay", "harness/nothing_here.py", PROPERTY_CASES,
+        seed=1, max_examples=5, harness_dir=HARNESS,
+    )
+
+    assert result.ok is False
+    assert "harness/nothing_here.py" in result.log_tail
+
+
+def test_properties_reports_the_replay_executable_when_it_is_missing(attempt):
+    _property_tree(attempt)
+
+    result = stages.properties(
+        attempt, "some_other_binary", "harness/properties.py", PROPERTY_CASES,
+        seed=1, max_examples=5, harness_dir=HARNESS,
+    )
+
+    assert result.ok is False
+    assert "some_other_binary" in result.log_tail
+
+
+@pytest.mark.parametrize("summary, count", [
+    ("========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n", 0),
+    ("========= ERROR SUMMARY: 1 error\n", 1),
+    ("========= Target application returned an error\n========= ERROR SUMMARY: 10 errors\n", 10),
+    ("========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)\n", 0),
+    ("========= RACECHECK SUMMARY: 3 hazards displayed (2 errors, 1 warning)\n", 2),
+])
+def test_a_sanitizer_error_count_is_the_one_on_its_own_summary_line(summary, count):
+    # The summary line itself contains the word ERROR, so counting
+    # occurrences of the word would call a clean run one error.
+    assert stage_sanitizer.sanitizer_errors(summary) == count
+
+
+def test_a_sanitizer_that_wrote_no_summary_has_counted_nothing():
+    assert stage_sanitizer.sanitizer_errors(
+        "========= COMPUTE-SANITIZER\nkilled\n"
+    ) is None
+
+
+def _sanitizer_saying(summary, returncode=0):
+    """A sanitizer run whose whole output is its summary."""
+    def runner(cmd, **kwargs):
+        return executor.JobResult(returncode, "", summary)
+    return runner
+
+
+def _sanitized(tmp_path, runner, tool="memcheck"):
+    attempt = stages.workspace_for(
+        "attempt-1", work_root=tmp_path, policy=workspace.InProcessJobs(runner=runner),
+    )
+    tree = Path(attempt.tree_dir)
+    tree.mkdir(parents=True)
+    (tree / "replay").write_text("#!/bin/sh\n")
+    (tree / "replay").chmod(0o755)
+    return stages.sanitize(attempt, "replay", {"case": {}}, [tool])
+
+
+def test_a_clean_sanitizer_run_counts_zero_errors(tmp_path):
+    result = _sanitized(tmp_path, _sanitizer_saying(
+        "========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n"
+    ))
+    assert result.ok is True
+    assert result.per_tool["memcheck"] == {"ok": True, "errors": 0, "log_tail": result.per_tool["memcheck"]["log_tail"]}
+
+
+def test_a_sanitizer_that_found_errors_fails_with_their_count(tmp_path):
+    result = _sanitized(tmp_path, _sanitizer_saying(
+        "========= Invalid __global__ write of size 4 bytes\n========= ERROR SUMMARY: 2 errors\n",
+        returncode=1,
+    ))
+    assert result.ok is False
+    assert result.per_tool["memcheck"]["errors"] == 2
+
+
+def test_a_sanitizer_that_never_reached_its_summary_did_not_pass(tmp_path):
+    result = _sanitized(tmp_path, _sanitizer_saying("========= COMPUTE-SANITIZER\n"))
+    assert result.ok is False
+    assert "wrote no summary" in result.per_tool["memcheck"]["log_tail"]

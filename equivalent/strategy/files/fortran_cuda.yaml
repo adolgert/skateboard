@@ -1,0 +1,16 @@
+name: fortran_cuda
+version: 1
+allow_globs: ['src/*.f90', 'src/*.cu', 'notes/regions/*.yaml']
+languages:
+  fortran:
+    compiler: nvfortran
+    flags: ['-O2']
+  cuda:
+    compiler: nvcc
+    flags: ['-O2', '-arch=sm_89', '--fmad=false']
+link_flags: ['-cuda', '-c++libs']
+required_tools: [nvfortran, nvcc, compute-sanitizer, 'python:pytest', 'python:hypothesis']
+device_proof: {notify: null, mandatory: false}
+sanitizers: [memcheck, racecheck, initcheck]
+sanitize_cases: all
+analyzer_command: python3 -m equivalent.analyzers.check_sese

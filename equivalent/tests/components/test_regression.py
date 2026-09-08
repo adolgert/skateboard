@@ -1,66 +1,79 @@
-from pathlib import Path
-
 import pytest
 
 from equivalent.components import regression
 from equivalent.components.errors import ComponentError
-from equivalent.ledger.records import Predicate
-from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject
 from equivalent.manifest.schema import load_manifest
-from equivalent.strategy.schema import load_strategy
+from equivalent.tests.components.conftest import PORT_STRATEGY, strategy as strategy_named
+from equivalent.components.answers import RunResponse
 from equivalent.tests.fakes import FakeBuilder, FakeOracle, fixture_case, write_program
 
-STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
-TREE = Subject(kind="tree", sha256="a" * 64)
+
+def _porting(harness):
+    """A porting region of the fixture code, ready for a comparison."""
+    harness.repo()
+    return harness.context(
+        region_id="ch04:step", phase="porting", strategy=strategy_named(PORT_STRATEGY),
+        manifest=load_manifest(write_program(harness.tmp_path) / "manifest.yaml"),
+    )
 
 
-def test_visible_reads_outputs_from_the_stored_gpu_executed_claim_not_a_new_run(tmp_path):
-    store = LedgerStore(tmp_path / "ledger")
+def test_visible_reads_outputs_from_the_stored_gpu_executed_claim_not_a_new_run(harness):
     outputs = {"case0000": fixture_case()}
-    store.record_claim([TREE], "gpu/executed",
-                        Predicate(tool="builder", version="0.1", configHash="cfg", verdict="pass",
-                                  detail={"kernels_launched": 4, "outputs": outputs}),
-                        [], "sess-0")
-    oracle = FakeOracle()
+    harness.claim("gpu/executed", {"kernels_launched": 4, "outputs": outputs})
 
-    result = regression.check_visible(store, TREE, oracle)
+    result = regression.check_visible(_porting(harness), {})
 
-    assert result["verdict"] == "pass"
-    assert oracle.compare_calls[0]["outputs"] == outputs
+    assert result.verdict == "pass"
+    assert harness.oracle.compare_calls[0]["outputs"] == outputs
 
 
-def test_visible_raises_component_error_with_no_passing_run(tmp_path):
-    store = LedgerStore(tmp_path / "ledger")
-    oracle = FakeOracle()
+def test_visible_is_an_error_when_the_run_claim_recorded_no_outputs(harness):
+    # The precondition table is what puts a passing run claim in the
+    # context, so the only thing left to be wrong is a claim that passed
+    # and kept nothing to compare.
+    harness.claim("gpu/executed", {"kernels_launched": 4})
 
     with pytest.raises(ComponentError):
-        regression.check_visible(store, TREE, oracle)
+        regression.check_visible(_porting(harness), {})
 
 
-def _manifest(tmp_path):
-    """The code's own description, which is where the replay executable is named."""
-    return load_manifest(write_program(tmp_path) / "manifest.yaml")
+def test_holdout_never_puts_outputs_or_per_case_detail_in_its_own_claim(harness):
+    result = regression.check_holdout(_porting(harness), {})
+
+    assert result.verdict == "pass"
+    assert "outputs" not in result.detail
+    assert "per_case" not in result.detail
 
 
-def test_holdout_never_puts_outputs_or_per_case_detail_in_its_own_claim(tmp_path):
-    strategy = load_strategy(STRATEGY_PATH)
-    builder = FakeBuilder()
-    oracle = FakeOracle()
+def test_holdout_fetches_inputs_from_the_oracle_and_runs_them_through_the_builder(harness):
+    regression.check_holdout(_porting(harness), {})
 
-    result = regression.check_holdout("ch04:step", "tree123", strategy, _manifest(tmp_path), oracle, builder)
-
-    assert result["verdict"] == "pass"
-    assert "outputs" not in result["detail"]
-    assert "per_case" not in result["detail"]
+    assert list(harness.builder.run_calls[0]["cases"]) == ["hcase0"]
+    assert harness.builder.run_calls[0]["profile"] is True
+    assert harness.oracle.compare_calls[0]["dataset"] == "holdout"
 
 
-def test_holdout_fetches_inputs_from_the_oracle_and_runs_them_through_the_builder(tmp_path):
-    strategy = load_strategy(STRATEGY_PATH)
-    builder = FakeBuilder()
-    oracle = FakeOracle()
+@pytest.mark.parametrize("transport", [False, True])
+def test_failed_holdout_does_not_echo_candidate_output(harness, transport):
+    harness.builder = FakeBuilder(run=(
+        RuntimeError("SECRET_HELD_OUT_INPUT") if transport
+        else RunResponse(ok=False, log_tail="SECRET_HELD_OUT_INPUT")
+    ))
 
-    regression.check_holdout("ch04:step", "tree123", strategy, _manifest(tmp_path), oracle, builder)
+    with pytest.raises(ComponentError) as raised:
+        regression.check_holdout(_porting(harness), {})
 
-    assert list(builder.run_calls[0]["cases"]) == ["hcase0"]
-    assert oracle.compare_calls[0]["dataset"] == "holdout"
+    assert "SECRET" not in str(raised.value)
+    assert "withheld" in str(raised.value)
+
+
+def test_the_tolerance_policy_a_verdict_was_reached_under_is_a_material(harness):
+    # Which bands judged a comparison is part of what the verdict rests
+    # on, so the check declares it rather than leaving it a note.
+    harness.claim("gpu/executed", {"outputs": {"case0000": fixture_case()}})
+
+    result = regression.check_visible(_porting(harness), {})
+
+    assert [(s.kind, s.sha256) for s in result.materials] == [
+        ("policy", FakeOracle().policy().policy_sha256),
+    ]

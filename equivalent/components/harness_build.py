@@ -11,47 +11,56 @@ compiler's flags and quietly hard-codes another's is exactly what
 onboarding is meant to catch, and catching it once, early, is cheaper
 than discovering it when a port is already written.
 
-The verdict for each build comes from build_replay, not from a second
+The verdict for each build comes from building, not from a second
 copy of the same reasoning here.
 """
 from __future__ import annotations
 
-from equivalent.gateway.submit import attempt_id_for_strategy, tree_payload
-from equivalent.strategy.schema import Strategy
+from equivalent.ledger.vocabulary import PASS
+from . import building
+from .context import CheckContext
+from .result import CheckResult, failed
 
-from . import build_replay, tree_manifest
 
-
-def check(
-    repo_dir, ref: str, region_id: str, tree_sha: str,
-    strategy: Strategy, baseline_strategy: Strategy, builder,
-) -> dict:
+def check(ctx: CheckContext, config: dict) -> CheckResult:
     """Build the tree once per strategy and pass only if both builds count.
 
     Each build gets its own workspace on the builder, keyed by the region,
     the tree, and the strategy's name, so the two never read each other's
     object files and a later onboarding step can find either one again.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}, where the detail
-    holds one entry per strategy -- the targets it built, the compiler
-    command lines it ran, and, on a failure, which of the three statements
-    did not hold.
+    The detail holds one entry per strategy -- the targets it built, the
+    compiler command lines it ran, and, on a failure, which of the three
+    statements did not hold.
     """
-    manifest = tree_manifest.manifest_of(repo_dir, ref)
-    tree = tree_payload(repo_dir, ref)
+    manifest = ctx.provenance.manifest()
+    tree = ctx.tree.payload()
+    recipe = building.Recipe.from_manifest(manifest)
 
-    per_strategy = {}
-    for one in (baseline_strategy, strategy):
-        attempt_id = attempt_id_for_strategy(region_id, tree_sha, one.name)
-        per_strategy[one.name] = build_replay.build_verdict(
-            builder, attempt_id, tree, one, manifest,
+    per_strategy = {
+        one.name: building.build_verdict(
+            ctx.builder, ctx.provenance.attempt_id(one), tree, one, recipe,
         )
+        for one in ctx.provenance.strategies()
+    }
 
-    failed = [name for name, result in per_strategy.items() if result["verdict"] != "pass"]
+    did_not_build = [name for name, result in per_strategy.items() if result.verdict != PASS]
     detail = {
-        "strategies": {name: result["detail"] for name, result in per_strategy.items()},
-        "failed_strategies": failed,
-        "targets_asked_for": [target["role"] for target in build_replay.build_targets(manifest)],
+        "strategies": {name: result.detail for name, result in per_strategy.items()},
+        "failed_strategies": did_not_build,
+        "targets_asked_for": [target["role"] for target in recipe.targets],
         "manifest_sha256": manifest.sha256,
     }
-    return {"verdict": "fail" if failed else "pass", "detail": detail}
+    if did_not_build:
+        return failed(detail, [
+            f"strategy '{name}': {reason}"
+            for name in did_not_build for reason in per_strategy[name].reasons
+        ], build_records=tuple(
+            record for result in per_strategy.values() for record in result.build_records
+        ))
+    return CheckResult(
+        verdict=PASS, detail=detail,
+        build_records=tuple(
+            record for result in per_strategy.values() for record in result.build_records
+        ),
+    )

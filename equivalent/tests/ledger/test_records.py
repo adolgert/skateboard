@@ -33,7 +33,7 @@ def test_claim_rejects_unknown_field_on_load():
 
 def test_claim_defaults_schema_version():
     claim = _claim()
-    assert claim.version == 1
+    assert claim.version == 2
 
 
 def _request_line(**overrides):

@@ -4,18 +4,17 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from equivalent.gateway.app import create_app
-from equivalent.gateway.regions import RegionConfig
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import init_baseline_repo
 from equivalent.ledger.acceptance import ONBOARDING, PORTING, requirements_for
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
-from equivalent.tests.fakes import write_program
+from equivalent.tests.gateway.conftest import region_config
+from equivalent.components.answers import HealthResponse
+from equivalent.tests.fakes import EXECUTOR_IDENTITY, FakeBuilder, write_program
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
-STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
-BASELINE_STRATEGY_PATH = STRATEGY_PATH.parent / "cpu_reference.yaml"
 
 
 def _seed(root):
@@ -29,22 +28,14 @@ def _region(tmp_path, region_id="ch04:step", phase=PORTING):
     init_baseline_repo(repo_dir, _seed(tmp_path / "seed"))
     working = tmp_path / "working"
     working.mkdir()
-    cfg = RegionConfig(
-        region_id=region_id,
-        code="tsunami",
-        phase=phase,
-        repo_dir=repo_dir,
-        spec_path="notes/regions/ch04-step.sese.yaml",
-        ledger_dir=tmp_path / "ledger",
-        strategy_path=STRATEGY_PATH,
-        baseline_strategy_path=BASELINE_STRATEGY_PATH,
+    return region_config(
+        tmp_path, region_id=region_id, phase=phase, repo_dir=repo_dir,
         working_copy_dir=working,
         # A code that declares its own invariants: the accept row's
         # preconditions are the longest list a porting region can have,
         # which is what the table fixture below is a copy of.
         manifest=load_manifest(write_program(tmp_path, properties=True) / "manifest.yaml"),
     )
-    return cfg
 
 
 def _client(tmp_path, region_id="ch04:step"):
@@ -74,7 +65,7 @@ def test_get_table_for_an_onboarding_region_returns_the_onboarding_rows(tmp_path
 
     assert [row["name"] for row in rows] == [
         "manifest_check", "harness_build", "harness_capture", "harness_replay",
-        "harness_determinism", "harness_timing", "harness_self_check",
+        "harness_determinism", "harness_timing", "harness_original", "harness_self_check",
         "harness_property", "onboarded",
     ]
     # The row that names the whole list has nothing to dispatch to, the
@@ -165,7 +156,7 @@ def test_get_status_reports_the_real_current_tree_before_any_check_has_run(tmp_p
     assert body["accepted"] is False
     # The gateway's answer matches what compute_status itself would say
     # given the same tree/frozen -- one rendering, not two.
-    from equivalent.gateway.submit import current_tree_and_frozen
+    from equivalent.region.current import current_tree_and_frozen
     from equivalent.ledger.acceptance import requirements_for
     from equivalent.ledger.subjects import Subject
     from equivalent.strategy.schema import load_strategy
@@ -173,11 +164,17 @@ def test_get_status_reports_the_real_current_tree_before_any_check_has_run(tmp_p
         cfg.repo_dir, cfg.region_id, store, cfg.spec_path, cfg.phase,
         load_strategy(cfg.strategy_path),
     )
+    # No builder is configured here, so nothing can confirm the
+    # executables the claims name are still in place, and the gateway
+    # says so rather than deciding acceptance a second way of its own.
     expected = compute_status(
         store, requirements_for(cfg.phase, cfg.manifest), cfg.phase,
         tree=Subject(kind="tree", sha256=tree_sha), frozen=Subject(kind="frozen", sha256=frozen_sha),
+        required_materials=(), context_verified=False,
     )
     assert body == expected
+    assert body["context_verified"] is False
+    assert body["note"]
 
 
 def test_post_submit_reads_the_region_own_working_copy_and_returns_its_receipt(tmp_path):
@@ -226,7 +223,10 @@ def test_compute_status_and_history_without_repo_info_are_unchanged(tmp_path):
     # The CLI's own behaviour and golden file must keep working: no tree
     # or frozen argument means fall back to the claims-based guess.
     store = LedgerStore(tmp_path / "region")
-    status = compute_status(store, requirements_for(PORTING), PORTING)
+    status = compute_status(
+        store, requirements_for(PORTING), PORTING,
+        required_materials=(), context_verified=True,
+    )
     history = compute_history(store)
     assert status["tree"] is None
     assert status["accepted"] is False
@@ -259,6 +259,19 @@ def test_healthz_answers_without_a_token(tmp_path):
 
     assert r.status_code == 200
     assert r.json() == {"ok": True}
+
+
+def test_a_pinned_builder_identity_does_not_override_an_unhealthy_backend(tmp_path):
+    builder = FakeBuilder(healthz=HealthResponse(
+        ok=False, executor_identity=EXECUTOR_IDENTITY,
+    ))
+    cfg = replace(_region(tmp_path), executor_identity=EXECUTOR_IDENTITY)
+    client = TestClient(create_app({cfg.region_id: cfg}, TOKEN, builder=builder))
+
+    response = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "builder executor is not ready"
 
 
 def test_submit_records_the_caller_tool_call_id_when_it_sends_one(tmp_path):

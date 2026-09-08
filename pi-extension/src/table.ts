@@ -11,6 +11,8 @@ import { Type, type TObject } from "typebox";
 export interface ConfigParam {
   type: string;
   description: string;
+  minimum?: number;
+  maximum?: number;
 }
 
 export interface ActionRow {
@@ -28,6 +30,7 @@ export interface ActionRow {
 
 const SUBJECT_PHRASE: Record<string, string> = {
   tree: "the submitted tree",
+  baseline_tree: "the pristine baseline",
   frozen: "this region",
   capture_set: "the capture set",
   strategy: "the strategy",
@@ -90,7 +93,11 @@ export function toolParameters(row: ActionRow): TObject {
   const properties: Record<string, ReturnType<typeof Type.Optional>> = {};
   for (const [key, spec] of Object.entries(configParams(row))) {
     if (spec.type !== "integer") continue;
-    properties[key] = Type.Optional(Type.Integer({ description: spec.description }));
+    properties[key] = Type.Optional(Type.Integer({
+      description: spec.description,
+      ...(spec.minimum === undefined ? {} : { minimum: spec.minimum }),
+      ...(spec.maximum === undefined ? {} : { maximum: spec.maximum }),
+    }));
   }
   return Type.Object(properties);
 }

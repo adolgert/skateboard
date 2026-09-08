@@ -20,19 +20,15 @@ claim.
 """
 from __future__ import annotations
 
-from equivalent.gateway.submit import attempt_id_for_strategy
-from equivalent.ledger.capture_sets import load_capture_set
-from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject
-from equivalent.strategy.schema import Strategy
-
-from . import harness_capture, harness_replay, property_check, tree_manifest
+from equivalent.ledger.vocabulary import PASS
+from . import harness_capture, harness_replay, property_check
+from .context import CheckContext
+from .result import CheckResult
 from .errors import ComponentError
-
-# The dataset the properties draw their corpus from: the one the agent
-# can see. Held-out inputs are for judging a port, not for a search the
-# agent is running.
-VISIBLE = "visible"
+# The properties draw their corpus from the dataset the agent can see.
+# Held-out inputs are for judging a port, not for a search the agent is
+# running.
+from .names import VISIBLE
 
 # What the detail says when the code states no invariants, in the words
 # the manifest writes it in.
@@ -43,34 +39,37 @@ NO_PROPERTIES = (
 )
 
 
-def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str, tree_sha: str,
-          baseline_strategy: Strategy, builder, *, seed=None,
-          max_examples: int = property_check.DEFAULT_MAX_EXAMPLES) -> dict:
+def check(ctx: CheckContext, config: dict) -> CheckResult:
     """Run the tree's property module on the baseline build, or record that it has none.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}: the module that
-    was run, the seed it was run at, how many examples were drawn, and
-    what the run printed -- which is where the minimized failing example
-    is. Raises ComponentError if the tree has no passing capture claim or
-    the builder could not be reached.
-    """
-    manifest = tree_manifest.manifest_of(repo_dir, ref)
-    if manifest.properties is None:
-        return {"verdict": "pass", "detail": {"module": None, "note": NO_PROPERTIES}}
+    A seed the request names is the same search again, and the gateway's
+    config hash carries it, so a repeat at that seed comes back as the
+    claim already filed. A request that names none has one drawn in the
+    run and written into the claim, which is how a person reads back the
+    search that failed and asks for it again.
 
-    sets = harness_capture.captured_sets(store, tree)
+    The detail names the module that was run, the seed it was run at, how
+    many examples were drawn, and what the run printed -- which is where
+    the minimized failing example is. Raises ComponentError if the builder
+    could not be reached.
+    """
+    manifest = ctx.provenance.manifest()
+    if manifest.properties is None:
+        return CheckResult(verdict=PASS, detail={"module": None, "note": NO_PROPERTIES})
+
+    sets = harness_capture.captured_sets(ctx)
     if VISIBLE not in sets:
         raise ComponentError(
-            f"the capture claim for tree {tree.sha256} names no '{VISIBLE}' dataset, so "
+            f"the capture claim for tree {ctx.tree.sha} names no '{VISIBLE}' dataset, so "
             f"there is no corpus for the code's properties to draw from"
         )
-    cases = load_capture_set(store, sets[VISIBLE])
+    cases = ctx.sets.load(sets[VISIBLE])
 
     return property_check.run_module(
-        builder,
-        attempt_id_for_strategy(region_id, tree_sha, baseline_strategy.name),
+        ctx.builder,
+        ctx.provenance.attempt_id(),
         manifest,
         harness_replay.wire_inputs(cases),
-        seed=seed,
-        max_examples=max_examples,
+        seed=config.get("seed"),
+        max_examples=config.get("max_examples", property_check.DEFAULT_MAX_EXAMPLES),
     )

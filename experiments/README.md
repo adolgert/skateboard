@@ -1,10 +1,21 @@
 # Experiments
 
-Results from running the skateboard harness across configurations. Each CSV is a
+The [7 September 2026 GPU demonstration](potential-gpu-2026-09-07/README.md)
+contains current-policy gateway ledgers for fresh-application onboarding and
+accepted NVIDIA Fortran, CUDA C++, and PTX ports, with an explicit speedup gate
+and an external-module tampering check.
+
+## Historical CSV campaigns
+
+Results below come from earlier harness configurations. Each CSV is a
 copy of the ledger for one campaign, written by the first demonstration harness
 -- the batch orchestrator the gateway path has since replaced. The rungs, gates
 and speedups below are that harness's; the gate names and the ledger's shape
 have changed since, and these files are kept as the record of what was run.
+Their acceptance labels do not satisfy the current evidence policy. The old
+GPU detector read runtime notification text, which a submitted program could
+spoof; current claims use protected Nsight reports. See the
+[evidence contract](../docs/evidence-contract.md) for the present boundary.
 
 ## model-matrix-2026-07-30.csv
 
@@ -195,11 +206,11 @@ an LLVM/Clang offload variable that nvfortran ignores completely (zero bytes of
 stderr, even at `-1`). NVIDIA's runtime uses `NVCOMPILER_ACC_NOTIFY`, which
 covers OpenMP target regions as well as OpenACC/stdpar. A hand-written, verified
 correct OpenMP port scored `kernels_launched = 0` before the fix. Every attempt
-on this rung would have failed the device proof regardless of quality. Fixed in what is now
-`services/builder/stages.py`; both notify modes use the NVIDIA notifier. The
-match has since been tightened further: a launch line counts only if it carries
-the runtime's own file, function, line and device fields, which a program
-cannot print for a kernel it never launched.
+on this rung would have failed the device proof regardless of quality. The
+historical fix used the NVIDIA notifier for both modes. A later revision
+matched file, function, line and device fields, but that text was still
+spoofable by the submitted program. The September 2026 implementation in
+`services/builder/stages.py` instead requires a protected Nsight kernel report.
 
 ### Findings
 
@@ -276,8 +287,9 @@ recorded for any attempt** — `port_s` and `speedup` are `NA` across all 100 ro
 | sanitizer | 0 |
 | **correctness (visible)** | **98** |
 
-Lowering the temperature did not produce successes. It made success *impossible*,
-and the mechanism is visible in the source.
+Lowering the temperature did not produce successes in this campaign. The
+sampled sources repeatedly used the same incorrect stencil; this observation
+does not establish that success at that temperature is impossible.
 
 ### Mode collapse onto a wrong idiom
 
@@ -297,7 +309,8 @@ differencing it, and it handled the periodic boundaries with explicit branches
 whose indices it got right. At T=0.4 the model produced **neither, in 100
 attempts**. The winning structure lies outside the low-temperature mode.
 
-A representative failure (`../docs/examples/codestral-omp-T04-attempt50-mod_kernel.f90`):
+A representative failure excerpt reported for attempt 50 (the complete source
+file is not retained under `docs/examples/`):
 
 ```fortran
 duh_dx(i) = (u(i)*(hmean + h(modulo(i+1,n)+1)) - &

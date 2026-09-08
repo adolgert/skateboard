@@ -7,6 +7,12 @@ capture reader already reads -- one directory per case, one NPY file per
 variable -- so a person reviewing a ledger opens files rather than
 unpacking an archive.
 
+A set is packed here and kept by the store: a check writes the arrays
+into a directory of its own and hands back its hash, and only a verdict
+the gateway is about to record moves that directory into the ledger. A
+set that failed its own check is therefore never there for a later
+comparison to find.
+
 Trust role: a capture set is what every later comparison is made
 against. Two things have to hold. The bytes that come back must be the
 bytes that went in, or a replay would be judged against arrays nobody
@@ -20,19 +26,18 @@ arrays.
 """
 from __future__ import annotations
 
-import base64
 import json
 import shutil
 import tempfile
+import weakref
+from dataclasses import dataclass
 from pathlib import Path
 
 from equivalent.capture import npy
+from equivalent.ledger.packed import PackedSet
 from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject, hash_files
-
-# Where capture sets live inside a region's artifacts directory. One
-# subdirectory per set, named by the set's own hash.
-CAPTURE_SETS = "capture_sets"
+from equivalent.ledger.subjects import Subject, hash_files, is_digest
+from equivalent.ledger.vocabulary import CAPTURE_SET_KEY
 
 # What a timing run's own outputs are stored as: one dataset holding one
 # case, whose variables are the files the program wrote. The baseline
@@ -40,16 +45,105 @@ CAPTURE_SETS = "capture_sets"
 # it the same way here rather than each spelling it for itself.
 PROGRAM_SET = "program"
 
+# The claim that says which stored set each declared dataset was written
+# into. It is spelled beside the sets themselves because two layers read
+# it: the check that files it, and the promotion command that copies the
+# sets it named into the code's own directory.
+CAPTURED_PREDICATE = "harness/captured"
 
-def capture_sets_dir(store: LedgerStore) -> Path:
-    directory = store.region_dir / "artifacts" / CAPTURE_SETS
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
+
+@dataclass(frozen=True)
+class CaptureSetReference:
+    """One dataset and the content-addressed capture set it names."""
+
+    dataset: str
+    sha256: str
+
+    def __post_init__(self):
+        if not isinstance(self.dataset, str) or not self.dataset:
+            raise ValueError("capture-set dataset name must be a non-empty string")
+        if not is_digest(self.sha256):
+            raise ValueError("capture-set sha256 must be a lowercase SHA-256 digest")
+
+    @property
+    def subject(self) -> Subject:
+        return Subject(kind="capture_set", sha256=self.sha256)
 
 
-def capture_set_dir(store: LedgerStore, sha256: str) -> Path:
-    """Where one capture set's cases sit. It may not exist yet."""
-    return capture_sets_dir(store) / sha256
+def decode_capture_sets(detail) -> tuple[CaptureSetReference, ...]:
+    """Decode the named ``datasets`` claim-detail layout.
+
+    Dataset entries without a capture-set key are valid failure diagnostics.
+    A present declaration must be completely well formed.
+    """
+    if not isinstance(detail, dict):
+        return ()
+    datasets = detail.get("datasets", {})
+    if not isinstance(datasets, dict):
+        raise ValueError("claim detail datasets must be an object")
+    if any(not isinstance(name, str) or not name for name in datasets):
+        raise ValueError("claim detail dataset names must be non-empty strings")
+    references = []
+    for name, entry in sorted(datasets.items()):
+        if not isinstance(entry, dict):
+            raise ValueError(f"claim detail dataset {name!r} must be an object")
+        if entry.get(CAPTURE_SET_KEY) is not None:
+            references.append(CaptureSetReference(name, entry[CAPTURE_SET_KEY]))
+    return tuple(references)
+
+
+def capture_set_materials(detail) -> tuple[Subject, ...]:
+    """Capture-set subjects in the named ``datasets`` claim-detail layout.
+
+    Only direct dataset entries count. Nested diagnostic keys with the same
+    spelling are not artifact declarations.
+    """
+    return tuple(reference.subject for reference in decode_capture_sets(detail))
+
+
+def sets_named_by(claim, where: str) -> dict:
+    """The capture set each dataset was stored under, from one capture claim.
+
+    This is how anyone finds the arrays a passing capture approved: by
+    reading the claim, never by capturing again. A passing claim that
+    names no set at all is broken evidence rather than a verdict about
+    the code, so it is raised; a caller decides whether that is an error
+    on the harness's side or a reason to refuse.
+    """
+    sets = {
+        reference.dataset: reference.sha256
+        for reference in decode_capture_sets(claim.predicate.detail)
+    }
+    if not sets:
+        raise ValueError(f"the {CAPTURED_PREDICATE} claim for {where} names no capture set")
+    return sets
+
+
+class SetReader:
+    """Read-only access to the capture sets one region's ledger holds.
+
+    A check is given one of these rather than the store, because reading
+    the arrays a verdict is measured against is all a check has any
+    business doing with the ledger: it cannot file a claim through this,
+    and it cannot leave a set behind through it either.
+    """
+
+    def __init__(self, directory):
+        self.directory = Path(directory)
+
+    def path(self, sha256: str) -> Path:
+        """Where one set's cases sit. It may not exist."""
+        return self.directory / sha256
+
+    def load(self, sha256: str) -> dict:
+        """The cases of one stored set, in the shape `pack_capture_set` took."""
+        directory = self.path(sha256)
+        if not directory.is_dir():
+            raise FileNotFoundError(
+                f"{self.directory} holds no capture set {sha256}; a claim naming "
+                f"it was filed against a ledger that no longer has it"
+            )
+        return npy.load_dataset(directory)
 
 
 def write_dataset(directory: Path, cases: dict, *, inputs: bool = True, outputs: bool = True) -> None:
@@ -81,77 +175,37 @@ def _files_under(directory: Path) -> list[dict]:
     ]
 
 
-def store_capture_set(store: LedgerStore, name: str, cases: dict) -> Subject:
-    """Write one dataset of cases into the region's artifacts and name it.
+def pack_capture_set(name: str, cases: dict) -> PackedSet:
+    """Write one dataset of cases somewhere of its own and name it by its content.
 
     `cases` is {case: {"inputs": {variable: array}, "outputs": {...}}},
     which is what the capture reader hands back for a dataset directory.
-    `name` is what the manifest calls this dataset; it is for the caller's
-    own messages and is deliberately not part of the hash, so that two
+    `name` is what the manifest calls this dataset. It names the staging
+    directory, so a person looking at what a run left behind can see
+    which dataset it was, and it is kept out of the hash, so that two
     datasets holding the same arrays are one artifact rather than two
     copies that a later comparison would have to know are the same.
 
-    Storing a set that is already there writes nothing and returns the
-    same subject.
+    Nothing is filed here. The directory belongs to the returned value and
+    goes away with it unless a store keeps it, so a check can pack a set,
+    compare it with one already stored, and hand back only what should
+    survive.
     """
-    staging = Path(tempfile.mkdtemp(dir=capture_sets_dir(store), prefix=".staging-"))
-    try:
-        write_dataset(staging, cases)
-        subject = Subject(kind="capture_set", sha256=hash_files(_files_under(staging)))
-        destination = capture_set_dir(store, subject.sha256)
-        if not destination.exists():
-            staging.rename(destination)
-        return subject
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
+    readable = "".join(c if c.isalnum() or c in "._-" else "-" for c in name)
+    staging = Path(tempfile.mkdtemp(prefix=f"equivalent-set-{readable}-"))
+    write_dataset(staging, cases)
+    packed = PackedSet(sha256=hash_files(_files_under(staging)), directory=staging)
+    weakref.finalize(packed, shutil.rmtree, staging, True)
+    return packed
 
 
 def load_capture_set(store: LedgerStore, sha256: str) -> dict:
-    """The cases of one stored set, in the shape `store_capture_set` took."""
-    directory = capture_set_dir(store, sha256)
-    if not directory.is_dir():
-        raise FileNotFoundError(
-            f"region {store.region_dir} holds no capture set {sha256}; a claim naming "
-            f"it was filed against a ledger that no longer has it"
-        )
-    return npy.load_dataset(directory)
+    """The cases of one stored set, in the shape `pack_capture_set` took."""
+    return SetReader(store.capture_sets_dir).load(sha256)
 
 
-def program_variable(path: str) -> str:
-    """The variable a file a program wrote is stored under: its path without the suffix.
-
-    A file in a directory of the program's own keeps that directory in
-    its name, so two files called `rho.npy` in different directories stay
-    two variables.
-    """
-    return path[: -len(npy.INPUT_SUFFIX)] if path.endswith(npy.INPUT_SUFFIX) else path
-
-
-def program_arrays(written: dict, declared) -> tuple[dict, dict]:
-    """The declared files one run wrote, as arrays, and a message per file that is not one.
-
-    `written` is what the builder hands back for one run: {path: base64 of
-    that file's bytes}. The program's outputs are compared as arrays, like
-    the region's, so a file that is not an NPY file is a problem named
-    here -- keyed by the path it came from, so a caller comparing one
-    output at a time can say which one -- rather than a comparison that
-    quietly did not happen.
-    """
-    arrays = {}
-    problems = {}
-    for path in declared:
-        try:
-            arrays[program_variable(path)] = npy.decode(base64.b64decode(written[path]))
-        except Exception as exc:
-            problems[path] = (
-                f"the timing run's '{path}' does not read as an array ({exc}); the "
-                f"program's outputs are compared as arrays, like the region's"
-            )
-    return arrays, problems
-
-
-def store_program_set(store: LedgerStore, arrays: dict) -> Subject:
-    """Store what one timing run wrote as the set a later run is compared against."""
-    return store_capture_set(
-        store, PROGRAM_SET, {PROGRAM_SET: {"inputs": {}, "outputs": arrays}},
+def pack_program_set(arrays: dict) -> PackedSet:
+    """What one timing run wrote, as the set a later run is compared against."""
+    return pack_capture_set(
+        PROGRAM_SET, {PROGRAM_SET: {"inputs": {}, "outputs": arrays}},
     )

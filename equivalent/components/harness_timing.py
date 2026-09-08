@@ -13,34 +13,33 @@ see now, on the baseline, than later in a port's failing comparison.
 What is timed is the code's own program at the size its manifest
 declares -- the executable, its arguments, its environment, the files it
 writes, and the budget are all manifest fields -- built the way the
-baseline is built. The timings themselves are recorded for a reader;
-nothing here judges them. How fast a port has to be is a question for
-the port.
+baseline is built. Running it and reading the builder's answer is
+program_outputs' job, the same one a port's timing goes through, so
+"there was a measurement" cannot mean one thing here and another there.
+The timings themselves are recorded for a reader; nothing here judges
+them. How fast a port has to be is a question for the port.
 
 The last run's files are stored as a capture set of one case, whose
 variables are the files themselves: `h.npy` is stored as the variable
 `h`, so the program's outputs are compared later by the same comparator
-that compares the region's.
+that compares the region's. The claim names that set under the same key
+a baseline timing claim names its own under, because they are the same
+thing said about two different programs.
 """
 from __future__ import annotations
 
-from equivalent.gateway.submit import attempt_id_for_strategy
-from equivalent.ledger.capture_sets import PROGRAM_SET, program_arrays, store_program_set
-from equivalent.ledger.store import LedgerStore
-from equivalent.strategy.schema import Strategy
+from equivalent.ledger.artifacts import binary_artifacts
+from equivalent.ledger.subjects import Subject
+from equivalent.ledger.vocabulary import EXECUTABLE_IDENTITY_KEY, PASS, PROGRAM_SET_KEY
 
-from . import tree_manifest
-from .errors import ComponentError
+from . import program_outputs
+from .context import CheckContext
+from .result import CheckResult, failed
+from .names import TIMING_ROLE
 
-# The manifest role of the program a timing run measures.
-TIMING_ROLE = "timing"
 # How many times the program is run. Two is what the question needs: one
 # run to measure and a second to disagree with it.
 REPEATS = 2
-
-
-def _fail(problems: list, detail=None) -> dict:
-    return {"verdict": "fail", "detail": {**(detail or {}), "problems": problems}}
 
 
 def _drifted(first: dict, second: dict, declared) -> list:
@@ -55,72 +54,53 @@ def _drifted(first: dict, second: dict, declared) -> list:
     return problems
 
 
-def check(store: LedgerStore, repo_dir, ref: str, region_id: str, tree_sha: str,
-          baseline_strategy: Strategy, builder) -> dict:
-    """Run the timing program twice and store what its last run wrote.
+def check(ctx: CheckContext, config: dict) -> CheckResult:
+    """Run the timing program twice and pack what its last run wrote.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}: the two runs'
-    wall-clock seconds, whether the GPU was to itself, the files the
-    program declared, and the capture set the ledger now holds them
-    under. Raises ComponentError if the builder could not be reached.
+    The detail holds the two runs' wall-clock seconds, whether the GPU was
+    to itself, what the last run wrote and what the manifest said it would
+    write, and the capture set the ledger will hold the files under. The
+    two are recorded separately, and `outputs` means here what it means in
+    a port's own timing claim: the files that were written, named and
+    hashed. A manifest that names no timing program is a `fail` here
+    rather than an error, because the manifest is the agent's own work
+    while a code is being brought in. Raises ComponentError if the builder
+    could not be reached.
     """
-    manifest = tree_manifest.manifest_of(repo_dir, ref)
+    manifest = ctx.provenance.manifest()
     described = {"manifest_sha256": manifest.sha256}
-
-    target = manifest.build.targets.get(TIMING_ROLE)
-    if target is None:
-        return _fail(
-            [f"code '{manifest.name}' declares no '{TIMING_ROLE}' build target, so there "
-             f"is no program to time"],
-            described,
-        )
-
     timing = manifest.timing
-    attempt_id = attempt_id_for_strategy(region_id, tree_sha, baseline_strategy.name)
-    try:
-        resp = builder.time(
-            attempt_id, target.executable, list(timing.args), dict(timing.env),
-            list(timing.outputs), REPEATS, timing.budget_s,
-        )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/time call failed: {exc}") from exc
 
-    if not resp.get("ok"):
-        # An exceeded budget and a declared file the program never wrote
-        # both arrive this way, and the builder's own words say which.
-        return {
-            "verdict": "fail",
-            "detail": {
-                **described, "runs_s": resp.get("runs_s", []),
-                "log_tail": resp.get("log_tail", ""),
-            },
-        }
+    resp, refusal = program_outputs.time_program(
+        ctx, ctx.provenance.attempt_id(), manifest, REPEATS, described,
+    )
+    if refusal is not None:
+        return refusal
 
-    runs = resp.get("outputs", [])
+    runs = resp.outputs
+    artifacts = binary_artifacts(
+        resp.executable_identity,
+        executable=manifest.build.targets[TIMING_ROLE].executable,
+    )
     measured = {
         **described,
-        "runs_s": resp.get("runs_s", []),
-        "gpu_exclusive": resp.get("gpu_exclusive"),
-        "outputs": list(timing.outputs),
+        "runs_s": resp.runs_s,
+        "gpu_exclusive": resp.gpu_exclusive,
+        "outputs": program_outputs.collected(runs),
+        "declared_outputs": list(timing.outputs),
+        EXECUTABLE_IDENTITY_KEY: resp.executable_identity,
     }
-    if len(runs) < REPEATS:
-        return _fail(
-            [f"the builder reported {len(runs)} run(s) of collected files, and what is "
-             f"being asked is whether {REPEATS} of them agree"],
-            measured,
+
+    packed, unreadable = program_outputs.packed_program_set(manifest, resp)
+    problems = [*_drifted(runs[0], runs[1], timing.outputs), *unreadable]
+    if problems:
+        return failed(
+            {**measured, "problems": problems}, problems, binary_artifacts=artifacts,
         )
 
-    problems = _drifted(runs[0], runs[1], timing.outputs)
-    arrays, unreadable = program_arrays(runs[-1], timing.outputs)
-    problems.extend(unreadable.values())
-    if problems:
-        return _fail(problems, measured)
-
-    subject = store_program_set(store, arrays)
-    return {
-        "verdict": "pass",
-        "detail": {
-            **measured,
-            "datasets": {PROGRAM_SET: {"cases": 1, "capture_set": subject.sha256}},
-        },
-    }
+    return CheckResult(
+        verdict=PASS, detail={**measured, PROGRAM_SET_KEY: packed.sha256},
+        materials=(Subject(kind="capture_set", sha256=packed.sha256),),
+        stores=(packed,),
+        binary_artifacts=artifacts,
+    )

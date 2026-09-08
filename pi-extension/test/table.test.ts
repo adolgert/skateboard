@@ -35,7 +35,8 @@ describe("table", () => {
   it("generated tool descriptions for the real table match a golden file", () => {
     const rows = callableRows(loadFixtureTable());
     const rendered = rows.map((row) => `${row.name}: ${describeRow(row)}`).join("\n\n");
-    const golden = readFileSync(path.join(__dirname, "fixtures", "tool-descriptions.golden.txt"), "utf8");
+    const golden = readFileSync(path.join(__dirname, "fixtures", "tool-descriptions.golden.txt"), "utf8")
+      .replace(/\n$/, "");
     expect(rendered).toBe(golden);
   });
 
@@ -45,8 +46,8 @@ describe("table", () => {
     expect(toolParameters(row)).toEqual({
       type: "object",
       properties: {
-        seed: { type: "integer", description: row.config_params!.seed.description },
-        max_examples: { type: "integer", description: row.config_params!.max_examples.description },
+        seed: { ...row.config_params!.seed },
+        max_examples: { ...row.config_params!.max_examples },
       },
     });
     // Optional: a call that names neither is the call the gateway

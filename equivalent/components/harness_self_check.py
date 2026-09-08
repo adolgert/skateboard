@@ -18,48 +18,46 @@ Three things fail the check, and each says something different:
     unnoticed, so the harness is not a harness -- usually a replay driver
     that does not write what it computed, or captured inputs that never
     reach the region.
-  * Some mutant landed in the tolerance-blind gap: its answer differed
-    from the captured one and every band let it through. That is a wrong
-    kernel this policy would accept, and it is the number to hold at
-    zero. The bands are the thing to change, not this check.
+  * Some selected mutation changed an answer but remained inside every
+    band. For this deliberately conservative self-check policy, that needs
+    human review of the mutation, workload, and numerical policy.
 
-A survivor -- a mutant no output changed at all for -- is not a failure.
-It is either code that really is equivalent or region the captured
-inputs never reach, and nothing here can tell those apart. They are
-listed in the detail for the person, which is the whole point of running
-this while a person is still reading.
+A row whose output did not change is not called equivalent: it may be
+equivalent, or the captured inputs may never reach it. Such rows are listed
+for review. Build failures are also listed but do not count as evidence that
+the harness detects a numerical fault. Runtime failures, skipped rows, and
+pending rows make the run incomplete and prevent a passing adequacy claim.
 """
 from __future__ import annotations
 
 import base64
-import hashlib
-import json
 
 from equivalent.capture import npy
-from equivalent.gateway.submit import attempt_id_for_strategy
-from equivalent.ledger.capture_sets import load_capture_set
-from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject
-from equivalent.strategy.schema import Strategy
+from equivalent.ledger.subjects import policy_subject
 
-from . import build_replay, harness_capture, tree_manifest
-from .errors import ComponentError
+from equivalent.ledger.vocabulary import CAPTURE_SET_KEY, FAIL, PASS, POLICY_KEY
+from . import backend, building, harness_capture
+from equivalent.ledger.capture_sets import capture_set_materials
 
-# The manifest role of the driver each mutant is replayed through.
-REPLAY_ROLE = "replay"
-# The dataset the mutants are scored against: the one the agent can see,
-# because a self-check is about the harness and holds nothing back.
-VISIBLE = "visible"
-# Where the tolerance policy keeps a band per region output variable.
-# The `files` section beside it bands a whole-program run, which is a
-# different measurement and would answer a different question.
-VARIABLE_BANDS = "variables"
+from .context import CheckContext
+from .result import CheckResult
+from .errors import ComponentError, after_the_manifest_check_passed
+# The mutants are scored on the dataset the agent can see, within the
+# bands a port's own region outputs are judged by: a self-check is about
+# the harness and holds nothing back.
+from .names import REPLAY_ROLE, VARIABLE_BANDS, VISIBLE, bands
 
 # What the builder calls a mutant it noticed, one it could not, and one
 # whose answer changed inside every band.
 KILLED = "KILLED"
 EQUIVALENT = "EQUIVALENT"
 GAP = "GAP"
+BUILD_FAIL = "BUILD_FAIL"
+RUNTIME_FAIL = "RUNTIME_FAIL"
+SKIPPED = "SKIPPED"
+PENDING = "PENDING"
+KNOWN_STATUSES = frozenset({KILLED, EQUIVALENT, GAP, BUILD_FAIL, RUNTIME_FAIL, SKIPPED, PENDING})
+INCOMPLETE_STATUSES = frozenset({RUNTIME_FAIL, SKIPPED, PENDING})
 # What a named mutant is reported as, so the person can open the file at
 # that line and read the change.
 NAMED_FIELDS = ("id", "file", "line", "op", "mutated", "note")
@@ -86,17 +84,20 @@ def wire_cases(cases: dict) -> dict:
 
 
 def bands_of(policy_bytes: bytes) -> dict:
-    """The band per output variable, from the tolerance file the tree carries."""
+    """The band per output variable, from the tolerance file the tree carries.
+
+    A passing manifest claim says this file reads as a policy, so a file
+    that does not is a fault on the harness's side rather than a verdict
+    about the code.
+    """
     try:
-        bands = json.loads(policy_bytes)[VARIABLE_BANDS]
-        if not isinstance(bands, dict):
-            raise TypeError(f"'{VARIABLE_BANDS}' is not a mapping")
-    except (ValueError, KeyError, TypeError) as exc:
+        per_variable, _ = bands(policy_bytes)
+    except ValueError as exc:
         raise ComponentError(
             f"the tree's tolerance policy names no band per output variable under "
             f"'{VARIABLE_BANDS}', although a passing manifest claim says it does: {exc}"
         ) from exc
-    return bands
+    return per_variable
 
 
 def _named(rows, status: str) -> list:
@@ -107,7 +108,7 @@ def _named(rows, status: str) -> list:
     ]
 
 
-def _problems(generated: int, counts: dict, gap: list) -> list:
+def _problems(generated: int, rows: list, counts: dict, gap: list) -> list:
     problems = []
     if not generated:
         problems.append(
@@ -122,78 +123,123 @@ def _problems(generated: int, counts: dict, gap: list) -> list:
     if gap:
         problems.append(
             f"{len(gap)} mutant(s) changed an output and stayed inside the tolerance "
-            f"bands; each is a wrong kernel this policy would accept, so the bands are "
-            f"what has to change"
+            f"bands; the mutation, workload, and numerical policy require review"
         )
+    if generated != len(rows):
+        problems.append(
+            f"not all generated mutants were classified: generated {generated}, "
+            f"received {len(rows)} result row(s)"
+        )
+    incomplete = [row for row in rows if row.get("status") in INCOMPLETE_STATUSES]
+    if incomplete:
+        problems.append(
+            f"{len(incomplete)} mutant(s) did not complete numerical scoring"
+        )
+    unknown = [row for row in rows if row.get("status") not in KNOWN_STATUSES]
+    if unknown:
+        problems.append(f"{len(unknown)} mutant(s) have an unknown status")
     return problems
 
 
-def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str, tree_sha: str,
-          baseline_strategy: Strategy, builder, *, limit=None) -> dict:
+def check(ctx: CheckContext, config: dict) -> CheckResult:
     """Mutate the region's files, score every mutant, and judge the harness.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}: how many
-    mutants were made and scored, how many landed in each verdict, every
-    mutant in the tolerance-blind gap, the survivors, and the two things
-    the verdict rests on -- the visible capture set and the tolerance
-    policy -- which the caller files as the claim's materials. Raises
-    ComponentError if the tree has no passing capture claim, if the
-    policy cannot be read, or if the builder could not run the mutation
-    at all.
+    `limit` scores only the first mutants. It is for a session finding its
+    feet on a large region; the claim says how many there were, so a
+    limited run cannot be mistaken for a whole one.
+
+    The detail says how many mutants were made and scored, how many landed
+    in each verdict, every mutant in the tolerance-blind gap, the
+    survivors, and the two things the verdict rests on -- the visible
+    capture set and the tolerance policy -- which come back as the claim's
+    materials. Raises ComponentError if the policy cannot be read, or if
+    the builder could not run the mutation at all.
     """
-    manifest, policy_bytes = tree_manifest.manifest_and_policy(repo_dir, ref)
-    sets = harness_capture.captured_sets(store, tree)
+    limit = config.get("limit")
+    with after_the_manifest_check_passed():
+        manifest, policy_bytes = ctx.tree.manifest_and_policy()
+    sets = harness_capture.captured_sets(ctx)
     if VISIBLE not in sets:
         raise ComponentError(
-            f"the capture claim for tree {tree.sha256} names no '{VISIBLE}' dataset, so "
+            f"the capture claim for tree {ctx.tree.sha} names no '{VISIBLE}' dataset, so "
             f"there are no answers to score a mutant against"
         )
-    cases = load_capture_set(store, sets[VISIBLE])
-    bands = bands_of(policy_bytes)
-    fortran = build_replay.fortran_of(baseline_strategy)
+    cases = ctx.sets.load(sets[VISIBLE])
+    per_variable = bands_of(policy_bytes)
+    fortran = building.fortran_of(ctx.baseline_strategy)
     replay = manifest.build.targets[REPLAY_ROLE]
 
-    try:
-        resp = builder.mutate(
-            attempt_id_for_strategy(region_id, tree_sha, baseline_strategy.name),
-            manifest.build.makefile,
-            {"target": replay.target, "executable": replay.executable},
-            list(manifest.interface.files),
-            wire_cases(cases),
-            bands,
-            fortran.compiler,
-            list(fortran.flags),
-            list(baseline_strategy.link_flags),
-            list(manifest.source.patterns),
-            limit=None if limit is None else int(limit),
-        )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/mutate call failed: {exc}") from exc
-    if not resp.get("ok"):
+    resp = backend.mutate(
+        ctx.builder,
+        ctx.provenance.attempt_id(),
+        manifest.build.makefile,
+        {"target": replay.target, "executable": replay.executable},
+        manifest.interface.files,
+        wire_cases(cases),
+        per_variable,
+        fortran.compiler,
+        fortran.flags,
+        ctx.baseline_strategy.link_flags,
+        manifest.source.patterns,
+        limit=None if limit is None else int(limit),
+    )
+    if not resp.ok:
         # The builder refused to run at all -- an unbuilt tree, a file
         # that is not in it. That is the harness's own footing, not a
         # verdict about whether this gate can tell right from wrong.
-        raise ComponentError(f"the mutation run did not start: {resp.get('log_tail', '')}")
+        raise ComponentError(f"the mutation run did not start: {resp.log_tail}")
 
-    rows = resp.get("results", [])
-    counts = resp.get("counts", {})
+    rows = resp.results
+    counts = resp.counts
+    response_problems = []
+    derived_counts = {}
+    for row in rows:
+        status = row.get("status")
+        derived_counts[status] = derived_counts.get(status, 0) + 1
+    if resp.scored != len(rows) or counts != derived_counts:
+        response_problems.append(
+            "builder returned mutation counts inconsistent with its result rows"
+        )
+    ids = [row.get("id") for row in rows]
+    if any(not isinstance(mid, str) or not mid for mid in ids) or len(ids) != len(set(ids)):
+        response_problems.append("builder returned missing or duplicate mutant identifiers")
+
     gap = _named(rows, GAP)
-    problems = _problems(resp.get("generated", 0), counts, gap)
+    problems = [*response_problems, *_problems(resp.generated, rows, counts, gap)]
+    incomplete = [
+        {field: row.get(field) for field in NAMED_FIELDS}
+        for row in rows if row.get("status") in INCOMPLETE_STATUSES
+    ]
+    policy = policy_subject(policy_bytes)
     detail = {
         "manifest_sha256": manifest.sha256,
-        "policy_sha256": hashlib.sha256(policy_bytes).hexdigest(),
+        POLICY_KEY: policy.sha256,
         "files": list(manifest.interface.files),
-        "datasets": {VISIBLE: {"cases": len(cases), "capture_set": sets[VISIBLE]}},
-        "generated": resp.get("generated", 0),
-        "scored": resp.get("scored", 0),
+        "datasets": {VISIBLE: {"cases": len(cases), CAPTURE_SET_KEY: sets[VISIBLE]}},
+        "generated": resp.generated,
+        "scored": resp.scored,
         "counts": counts,
         "gap": gap,
-        # Not a failure, and the reason the person is reading this claim:
-        # each one is either equivalent code or region the captured
-        # inputs never reach, and only a reader can say which.
+        "adequacy_policy": {
+            "all_generated_classified": True,
+            "incomplete_statuses_forbidden": sorted(INCOMPLETE_STATUSES),
+            "minimum_killed": 1,
+            "maximum_tolerance_gap": 0,
+        },
+        "incomplete": incomplete,
+        # The builder's historical status is EQUIVALENT, but this claim
+        # deliberately labels these only as unchanged outputs.
         "survivors": _named(rows, EQUIVALENT),
-        "kept_dirs": resp.get("kept_dirs", []),
+        "build_failures": _named(rows, BUILD_FAIL),
+        "kept_dirs": resp.kept_dirs,
     }
+    # The two things this verdict rests on: the answers the mutants were
+    # scored against, and the bands that decided whether a changed answer
+    # counted.
+    materials = (*capture_set_materials(detail), policy)
     if problems:
-        return {"verdict": "fail", "detail": {**detail, "problems": problems}}
-    return {"verdict": "pass", "detail": detail}
+        return CheckResult(
+            verdict=FAIL, detail={**detail, "problems": problems},
+            reasons=tuple(problems), materials=materials,
+        )
+    return CheckResult(verdict=PASS, detail=detail, materials=materials)

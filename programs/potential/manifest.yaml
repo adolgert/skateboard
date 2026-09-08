@@ -1,0 +1,42 @@
+version: 1
+name: potential
+source:
+  root: baseline
+  patterns: ['**/*.f90', '**/*.cu', '**/*.cpp', '**/*.ptx', Makefile]
+build:
+  makefile: Makefile
+  targets:
+    replay:
+      target: replay
+      executable: replay
+      runtime_artifacts: [{path: potential.cubin, kind: gpu_module, when_language: ptx}]
+    capture:
+      target: capture
+      executable: capture
+      runtime_artifacts: [{path: potential.cubin, kind: gpu_module, when_language: ptx}]
+    timing:
+      target: timing
+      executable: timing
+      runtime_artifacts: [{path: potential.cubin, kind: gpu_module, when_language: ptx}]
+interface:
+  module: potential_module
+  entry: potential
+  files: [src/potential.f90]
+  inputs:
+    - {name: x, dtype: f32, rank: 1}
+    - {name: y, dtype: f32, rank: 1}
+    - {name: z, dtype: f32, rank: 1}
+    - {name: q, dtype: f32, rank: 1}
+  outputs:
+    - {name: phi, dtype: f32, rank: 1}
+datasets:
+  visible: {args: ['129', '1']}
+  holdout: {args: ['257', '4']}
+timing:
+  args: ['32768', '2', '30']
+  outputs: [phi.npy]
+  budget_s: 180
+  performance: {min_median_speedup: 1.10}
+  env: {OMP_NUM_THREADS: '8'}
+tolerances: harness/tolerances.json
+properties: harness/properties.py

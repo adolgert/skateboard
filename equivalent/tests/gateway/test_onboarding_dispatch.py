@@ -5,53 +5,47 @@ stand-in builder, so what is under test here is the dispatch: the
 refusal before the evidence exists, the claims, the materials they name,
 and what `status` says when all of them have passed.
 """
-from pathlib import Path
+from dataclasses import replace
 
 from fastapi.testclient import TestClient
 
 from equivalent.cli import render
 from equivalent.gateway.app import create_app
-from equivalent.gateway.regions import RegionConfig
-from equivalent.gateway.submit import init_baseline_repo
-from equivalent.gateway.table import rows_for
+from equivalent.gateway.dispatch import HANDLERS
+from equivalent.tree import init_baseline_repo
+from equivalent.ledger.table import rows_for
 from equivalent.ledger.acceptance import ONBOARDING
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
-from equivalent.tests.fakes import FakeBuilder, write_program, write_tree
+from equivalent.tests.gateway.conftest import ONBOARDING_STRATEGY_PATH, region_config
+from equivalent.tests.fakes import reference, reference_builder, write_program, write_tree
 
 TOKEN = "test-token"
 # Every action of the onboarding phase that has something to dispatch to,
 # read from the gateway's own table rather than listed again here.
-ONBOARDING_ACTIONS = [row.name for row in rows_for(ONBOARDING) if row.component is not None]
+ONBOARDING_ACTIONS = [row.name for row in rows_for(ONBOARDING) if row.dispatchable]
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
-STRATEGY_DIR = Path(__file__).resolve().parents[2] / "strategy" / "files"
 REGION = "tsunami:onboarding"
 
 
-def _client(tmp_path):
+def _client(tmp_path, *, oracle=None):
     """A gateway holding one onboarding region, seeded from a bare tree."""
     repo_dir = tmp_path / "repo"
     init_baseline_repo(repo_dir, write_tree(tmp_path / "seed"))
     # The agent's working copy is that tree, which is what it edits.
     working = write_tree(tmp_path / "working")
     program = write_program(tmp_path, minimal=True)
-    cfg = RegionConfig(
-        region_id=REGION,
-        code="tsunami",
-        phase=ONBOARDING,
-        repo_dir=repo_dir,
-        spec_path=None,
-        ledger_dir=tmp_path / "ledger",
-        strategy_path=STRATEGY_DIR / "onboarding.yaml",
-        baseline_strategy_path=STRATEGY_DIR / "cpu_reference.yaml",
+    cfg = region_config(
+        tmp_path, region_id=REGION, phase=ONBOARDING, repo_dir=repo_dir,
+        spec_path=None, strategy_path=ONBOARDING_STRATEGY_PATH,
         working_copy_dir=working,
         manifest=load_manifest(program / "manifest.yaml"),
+        original_reference_path=reference(tmp_path),
     )
-    builder = FakeBuilder()
     # The tree's own replay driver reproduces what its capture program
     # recorded, which is what an onboarding that is going well looks like.
-    builder.replays_capture = True
-    client = TestClient(create_app({REGION: cfg}, TOKEN, builder=builder))
+    builder = reference_builder()
+    client = TestClient(create_app({REGION: cfg}, TOKEN, builder=builder, oracle=oracle))
     return client, cfg, LedgerStore(cfg.ledger_dir), builder
 
 
@@ -71,7 +65,8 @@ def test_the_onboarding_phase_offers_every_check_a_code_has_to_pass():
     # deciding it belongs in an onboarding session fails a test.
     assert ONBOARDING_ACTIONS == [
         "manifest_check", "harness_build", "harness_capture", "harness_replay",
-        "harness_determinism", "harness_timing", "harness_self_check", "harness_property",
+        "harness_determinism", "harness_timing", "harness_original",
+        "harness_self_check", "harness_property",
     ]
 
 
@@ -83,6 +78,18 @@ def test_the_build_check_is_refused_until_the_manifest_has_been_read(tmp_path):
     assert body["refused"] is True
     assert [item["predicateType"] for item in body["missing"]] == ["manifest/valid"]
     assert body["missing"][0]["producing_action"] == "manifest_check"
+
+
+def test_onboarding_never_queries_the_porting_oracle_policy(tmp_path):
+    class PortingOnlyOracle:
+        def policy(self):
+            raise AssertionError("onboarding must not query /v1/policy")
+
+    client, _, _, _ = _client(tmp_path, oracle=PortingOnlyOracle())
+
+    body = _run(client, "manifest_check")
+
+    assert body["verdict"] == "pass"
 
 
 def test_submitting_an_onboarding_region_keeps_every_file(tmp_path):
@@ -130,7 +137,7 @@ def test_status_reports_the_onboarding_requirements_and_what_is_still_missing(tm
     assert rows["harness/builds"]["status"] == "present"
     assert rows["harness/captured"]["status"] == "missing"
     assert rows["harness/captured"]["producing_action"] == "harness_capture"
-    # Six checks of the eight have not run, so the region is not onboarded.
+    # Seven checks of the nine have not run, so the region is not onboarded.
     assert body["accepted"] is False
 
 
@@ -148,6 +155,27 @@ def test_every_onboarding_check_passing_leaves_the_region_onboarded(tmp_path):
     assert "ONBOARDED" in render.render_status(body, REGION)
 
 
+def test_what_the_original_comparison_kept_is_in_the_ledger_beside_its_claim(tmp_path):
+    # The claim says two programs agreed; a person reading it later has to
+    # be able to look at what they agreed on. The check hands those bytes
+    # back with its verdict and the gateway files them, so nothing is in
+    # the artifacts directory that no recorded verdict rests on.
+    client, cfg, store, _ = _client(tmp_path)
+
+    claims = _onboard(client)
+
+    claim = store.get_claim(claims["harness_original"]["claim_id"])
+    named = {
+        sha
+        for run in claim.predicate.detail["runs"]
+        for output in run["outputs"]
+        for sha in (*output["original_artifacts"], *output["candidate_artifacts"])
+    }
+    assert named
+    for sha in named:
+        assert (store.region_dir / "artifacts" / sha).is_file()
+
+
 def test_a_check_that_reads_a_capture_set_names_it_in_the_claims_materials(tmp_path):
     client, _, store, _ = _client(tmp_path)
 
@@ -161,9 +189,9 @@ def test_a_check_that_reads_a_capture_set_names_it_in_the_claims_materials(tmp_p
     }
     assert visible["capture_set"] in named
     # The timing claim rests on the one set it wrote, the program's own.
-    program = by_predicate["harness/times"].predicate.detail["datasets"]["program"]
+    program_set = by_predicate["harness/times"].predicate.detail["program_set"]
     assert [subject.sha256 for subject in by_predicate["harness/times"].materials
-            if subject.kind == "capture_set"] == [program["capture_set"]]
+            if subject.kind == "capture_set"] == [program_set]
 
 
 def test_the_self_check_claim_rests_on_the_captures_and_the_bands_it_used(tmp_path):
@@ -219,3 +247,77 @@ def test_a_check_that_would_run_before_its_evidence_exists_is_refused(tmp_path):
     assert [claim.predicateType for claim in store.all_claims()] == [
         "manifest/valid", "harness/builds",
     ]
+
+
+def test_a_workspace_lost_to_a_restart_is_rebuilt_by_the_phases_own_build(tmp_path):
+    # The builder keeps one workspace per build and can lose it to a
+    # restart. What rebuilds it is whichever action files this phase's
+    # build claim, so an onboarding region rebuilds under both strategies
+    # rather than under the one a port would use.
+    client, _, _, builder = _client(tmp_path)
+    _run(client, "manifest_check")
+    _run(client, "harness_build")
+    builds_before = len(builder.build_calls)
+    builder.artifact_records.clear()
+
+    body = _run(client, "harness_capture")
+
+    assert "error" not in body
+    assert len(builder.build_calls) == builds_before + 2
+
+
+def _through(client, last_action):
+    """Every onboarding action up to, but not including, this one."""
+    for action in ONBOARDING_ACTIONS[:ONBOARDING_ACTIONS.index(last_action)]:
+        _run(client, action)
+
+
+def test_a_verdict_that_names_a_binary_no_build_of_this_region_made_is_refused(
+    tmp_path, monkeypatch,
+):
+    # Every claim after the build is about the executables the current
+    # build claim named, so that a pass cannot quietly be about a program
+    # built some other way. The original comparison is the one check that
+    # is allowed to name another binary, and only because it says it
+    # built one; take that declaration away and the same verdict must not
+    # be filed.
+    client, cfg, store, _ = _client(tmp_path)
+    original = HANDLERS["harness_original"]
+
+    def undeclared(ctx, config):
+        from dataclasses import replace as replace_result
+
+        return replace_result(original.check(ctx, config), measures_other_binaries=False)
+
+    monkeypatch.setitem(HANDLERS, "harness_original", replace(original, check=undeclared))
+    _through(client, "harness_original")
+
+    body = _run(client, "harness_original")
+
+    assert "does not match the current passing build claim" in body["error"]
+    assert "harness/original" not in [claim.predicateType for claim in store.all_claims()]
+    # And nothing it packed was kept: bytes in the ledger that no claim
+    # names read as a comparison somebody made.
+    assert [p for p in (store.region_dir / "artifacts").iterdir() if p.is_file()] == []
+
+
+def test_a_check_answering_about_a_subject_the_request_has_not_got_is_an_error(
+    tmp_path, monkeypatch,
+):
+    # A check and the table disagreeing about what a verdict is about is
+    # a mistake in the code, but the session still reads an answer that
+    # says what happened rather than a crash.
+    client, _, store, _ = _client(tmp_path)
+    manifest_check = HANDLERS["manifest_check"]
+
+    def elsewhere(ctx, config):
+        from dataclasses import replace as replace_result
+
+        return replace_result(manifest_check.check(ctx, config), subject_kind="somewhere_else")
+
+    monkeypatch.setitem(HANDLERS, "manifest_check", replace(manifest_check, check=elsewhere))
+
+    body = _run(client, "manifest_check")
+
+    assert "somewhere_else" in body["error"]
+    assert store.all_claims() == []

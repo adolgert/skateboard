@@ -15,52 +15,80 @@ not the only thing enforcing it.
 """
 from __future__ import annotations
 
-from equivalent.gateway.submit import attempt_id_for
-from equivalent.ledger.store import LedgerStore
+from equivalent.ledger.artifacts import binary_artifacts
 from equivalent.ledger.subjects import Subject
-from equivalent.manifest.schema import Manifest
-from equivalent.strategy.schema import Strategy
+from equivalent.ledger.vocabulary import POLICY_KEY
 
+from . import backend
+from .context import CheckContext
+from .result import CheckResult
 from .errors import ComponentError
+from .names import HOLDOUT, REPLAY_ROLE, VISIBLE
+from .run_replay import RUN_PREDICATE
 
 
-def check_visible(store: LedgerStore, tree: Subject, oracle) -> dict:
-    run_claim = store.latest("gpu/executed", tree)
-    if run_claim is None or run_claim.predicate.verdict != "pass" or "outputs" not in run_claim.predicate.detail:
-        raise ComponentError("no passing gpu/executed claim with recorded outputs for this tree")
+def _policy_material(resp) -> tuple:
+    """The tolerance policy that shaped a verdict, as the material it is.
 
+    The digest is the oracle's own, of the file it judged by; the subject
+    is built from it rather than from bytes this side never sees.
+    """
+    return (Subject(kind="policy", sha256=resp.policy_sha256),)
+
+
+def check_visible(ctx: CheckContext, config: dict) -> CheckResult:
+    run_claim = ctx.claims[RUN_PREDICATE]
+    if "outputs" not in run_claim.predicate.detail:
+        raise ComponentError(f"the {RUN_PREDICATE} claim for this tree recorded no outputs")
+
+    resp = backend.compare(
+        ctx.oracle, dataset=VISIBLE, outputs=run_claim.predicate.detail["outputs"],
+    )
+    return CheckResult(
+        verdict=resp.verdict,
+        detail={"per_case": resp.per_case, POLICY_KEY: resp.policy_sha256},
+        reasons=tuple(
+            f"case '{name}' is outside the code's tolerance bands"
+            for name in resp.cases_that_failed()
+        ),
+        materials=_policy_material(resp),
+    )
+
+
+def check_holdout(ctx: CheckContext, config: dict) -> CheckResult:
+    attempt_id = ctx.provenance.attempt_id()
+    replay = ctx.provenance.manifest().build.targets[REPLAY_ROLE]
     try:
-        resp = oracle.compare(dataset="visible", outputs=run_claim.predicate.detail["outputs"])
-    except Exception as exc:
-        raise ComponentError(f"oracle /v1/compare call failed: {exc}") from exc
-
-    return {
-        "verdict": resp["verdict"],
-        "detail": {"per_case": resp.get("per_case", {}), "policy_sha256": resp["policy_sha256"]},
-    }
-
-
-def check_holdout(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
-                  oracle, builder) -> dict:
-    attempt_id = attempt_id_for(region_id, tree_sha)
-    replay = manifest.build.targets["replay"]
-    try:
-        holdout = oracle.holdout_inputs()["cases"]
-        run_resp = builder.run(
+        holdout = ctx.oracle.holdout_inputs().cases
+        run_resp = ctx.builder.run(
             attempt_id, replay.executable, holdout,
-            notify=strategy.device_proof.notify, mandatory=strategy.device_proof.mandatory,
+            notify=ctx.strategy.device_proof.notify,
+            mandatory=ctx.strategy.device_proof.mandatory,
+            profile=True,
         )
     except Exception as exc:
-        raise ComponentError(f"could not execute the held-out cases: {exc}") from exc
-    if not run_resp.get("ok"):
-        raise ComponentError(f"held-out run failed: {run_resp.get('log_tail', '')}")
+        # Not backend.py's failure rule, deliberately: transport errors can
+        # include backend response bodies, and during a held-out run those
+        # bodies are influenced by the submitted code.
+        raise ComponentError("could not execute the held-out cases; private diagnostic withheld") from exc
+    if not run_resp.ok:
+        raise ComponentError("held-out run failed; private diagnostic withheld")
 
     try:
-        resp = oracle.compare(dataset="holdout", outputs=run_resp["outputs"])
+        resp = ctx.oracle.compare(dataset=HOLDOUT, outputs=run_resp.outputs)
     except Exception as exc:
-        raise ComponentError(f"oracle /v1/compare call failed: {exc}") from exc
+        raise ComponentError("held-out comparison unavailable; private diagnostic withheld") from exc
 
     # Deliberately no outputs and no per-case detail here -- the oracle's
     # own response for holdout never includes any, and this claim's detail
-    # must not become the place that leak happens through instead.
-    return {"verdict": resp["verdict"], "detail": {"policy_sha256": resp["policy_sha256"]}}
+    # must not become the place that leak happens through instead. The
+    # same rule governs the reasons: a session is told the verdict, and
+    # which held-out case failed is not something it may learn.
+    return CheckResult(
+        verdict=resp.verdict,
+        detail={POLICY_KEY: resp.policy_sha256},
+        materials=_policy_material(resp),
+        binary_artifacts=binary_artifacts(
+            run_resp.executable_identity, executable=replay.executable,
+        ),
+    )

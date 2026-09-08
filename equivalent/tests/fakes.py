@@ -3,10 +3,12 @@
 Unlike check_sese.py (cheap, pure Python, safe to run for real in
 tests), the builder needs nvfortran/compute-sanitizer/a GPU and the
 oracle needs its baked capture data -- none of which exist in this
-development environment. These fakes match the real services' response
-shapes (services/builder/app.py, services/oracle/app.py) exactly, so the
-gateway dispatch code under test is exercised the same way it would be
-against the real thing; only what's inside the box differs.
+development environment. Both fakes answer with the same typed responses
+a check reads from the real ones (equivalent/components/answers.py), and
+equivalent/tests/test_builder_parity.py and test_oracle_parity.py are
+what say those are still the shapes the services write -- so the gateway
+dispatch code under test is exercised the same way it would be against
+the real thing; only what's inside the box differs.
 
 `write_program` is not a fake: it writes a small but real code directory,
 laid out the way `programs/<code>/` is, so every test that needs a
@@ -29,6 +31,21 @@ import numpy as np
 import yaml
 
 from equivalent.capture import npy
+from equivalent.components.answers import (
+    ArtifactsResponse,
+    BuildResponse,
+    CaptureResponse,
+    CompareResponse,
+    HealthResponse,
+    HoldoutInputsResponse,
+    MutateResponse,
+    PolicyResponse,
+    PropertiesResponse,
+    RunResponse,
+    SanitizeResponse,
+    TimeResponse,
+)
+from equivalent.ledger.capture_sets import pack_capture_set, pack_program_set
 from equivalent.manifest.schema import IN_TREE_MANIFEST
 
 # The region interface the fixture code declares, and the shape each
@@ -119,6 +136,20 @@ VISIBLE_CASE = "case0000"
 CAPTURED_CASES = 2
 
 
+def keep_capture_set(store, name: str, cases: dict) -> str:
+    """Pack a set and file it, the way the gateway files what a check packed."""
+    packed = pack_capture_set(name, cases)
+    store.keep(packed)
+    return packed.sha256
+
+
+def keep_program_set(store, arrays: dict) -> str:
+    """The same for a timing run's own outputs."""
+    packed = pack_program_set(arrays)
+    store.keep(packed)
+    return packed.sha256
+
+
 def fixture_arrays(offset: int = 0) -> dict:
     """One array per fixture variable, of the type and rank it declares."""
     arrays = {}
@@ -131,14 +162,6 @@ def fixture_arrays(offset: int = 0) -> dict:
             values, dtype=npy.NUMPY_DTYPE[variable["dtype"]]
         ).reshape(shape, order="F")
     return arrays
-
-
-def fixture_case(offset: int = 0) -> dict:
-    """One case as it travels on the wire: {variable: base64 of its .npy file}."""
-    return {
-        name: base64.b64encode(npy.encode(array)).decode()
-        for name, array in fixture_arrays(offset).items()
-    }
 
 
 def stepped(arrays: dict) -> dict:
@@ -160,6 +183,11 @@ def encode_case(arrays: dict) -> dict:
 
 def decode_case(encoded: dict) -> dict:
     return {name: npy.decode(base64.b64decode(data)) for name, data in encoded.items()}
+
+
+def fixture_case(offset: int = 0) -> dict:
+    """The fixture's own arrays as one case travels on the wire."""
+    return encode_case(fixture_arrays(offset))
 
 
 def captured_cases(args) -> dict:
@@ -285,204 +313,430 @@ def write_tree(root, manifest: dict | None = None, *, properties: bool = False) 
     return root
 
 
-class FakeBuilder:
-    def __init__(self):
-        self.build_calls = []
-        self.run_calls = []
-        self.sanitize_calls = []
-        self.time_calls = []
-        self.build_ok = True
-        # The two statements the real builder reads out of its compiler
-        # log. A test that wants a makefile which ignored the flags, or
-        # one which compiled something from outside the tree, turns the
-        # matching one off.
-        self.flags_reached = True
-        self.only_tree_source = True
-        self.outside_file = "../elsewhere/sneak.f90"
-        self.compiled_file = "src/mod_kernel.f90"
-        self.capture_calls = []
-        self.run_ok = True
-        self.run_kernels = 4
-        self.run_launches = [["src/mod_kernel.f90", "step", "42"]]
-        # What one replay writes back. A test that wants an output missing
-        # or of the wrong type replaces this.
-        self.run_outputs = fixture_case()
-        # With this on, a replay reproduces what the capture program
-        # recorded for the case it is given, which is what a correct
-        # replay driver does. A test that wants a driver which does not
-        # leaves it off and sets `run_outputs` instead.
-        self.replays_capture = False
-        self.capture_ok = True
-        # The dataset each set of arguments captures, for a test that
-        # wants particular cases. Arguments that are not in it capture the
-        # fixture program's own dataset for those arguments.
-        self.capture_cases = {}
-        self.sanitize_ok = True
-        self.time_ok = True
-        self.runs_s = [0.21, 0.20, 0.22]
-        # The executable names the real builder reports on, all present.
-        # A test that wants a builder missing something drops a key here.
-        self.tools = {
-            name: True for name in
-            ("nvfortran", "compute-sanitizer", "nsys", "make", "cmake", "fpm", "gfortran")
+# What a builder answers with when a test says nothing else. Every one of
+# these is what the fixture code's own program would really do, so the
+# golden path passes against defaults and a test only says how its
+# builder differs.
+EXECUTOR_IDENTITY = "e" * 64
+IMAGE_ID = "sha256:" + "a" * 64
+EXECUTABLE_IDENTITY = {
+    "sha256": "b" * 64, "size": 12345, "role": "replay",
+    "executor_identity": EXECUTOR_IDENTITY,
+}
+# The file the fixture's makefile compiles, and one that is not in its
+# tree at all -- what a build that reached outside the tree names.
+COMPILED_FILE = "src/mod_kernel.f90"
+OUTSIDE_FILE = "../elsewhere/sneak.f90"
+# Where the runtime said the kernels came from: file, function, line.
+LAUNCHES = [["src/mod_kernel.f90", "step", "42"]]
+# The wall-clock seconds a timed run reports, cycled for as many
+# repetitions as were asked for.
+RUN_SECONDS = (0.21, 0.20, 0.22)
+# The executable names the real builder reports on, and the modules it
+# reports beside them: a strategy asks for pytest as `python:pytest`, and
+# an executable and an importable module are looked for in different ways.
+TOOLS = (
+    "nvfortran", "nvc", "nvc++", "nvcc", "ptxas", "gcc", "g++", "gfortran",
+    "compute-sanitizer", "nsys", "make", "cmake", "fpm",
+)
+PYTHON_MODULES = ("pytest", "hypothesis", "numpy")
+
+
+def run_seconds(repeats: int) -> list:
+    """What a timed run of `repeats` repetitions reports for each of them."""
+    return [RUN_SECONDS[i % len(RUN_SECONDS)] for i in range(repeats)]
+
+
+def timing_files(paths, run: int) -> dict:
+    """The declared files one timing run wrote: real arrays, as a program writes.
+
+    Which run it is makes no difference here -- a program that writes
+    something else the second time is the exception a test asks for by
+    name -- but the run number is what such a test writes its own version
+    of this against, so it is part of the shape.
+    """
+    return {
+        path: base64.b64encode(npy.encode(timing_array(path))).decode() for path in paths
+    }
+
+
+def built(request: dict, *, sha256: str = EXECUTABLE_IDENTITY["sha256"],
+          outside: str = OUTSIDE_FILE, **over) -> BuildResponse:
+    """What the builder answers a /v1/build with, and what a test changes.
+
+    The compiler record agrees with the two statements above it: a build
+    said to have missed the strategy's flags carries a command line
+    without them, because that is what a component reads to name the
+    offending compile.
+    """
+    toolchains = request.get("toolchains") or {
+        "fortran": {"compiler": request.get("compiler"), "flags": list(request["flags"])}
+    }
+    fields = {
+        "ok": True, "flags_reached_every_compile": True, "compiled_only_tree_source": True,
+        "flags": list(request["flags"]), "minfo_excerpt": "Generating Tesla code",
+        "toolchains": toolchains, "languages_compiled": sorted(toolchains),
+        "executor_identity": EXECUTOR_IDENTITY, "image_id": IMAGE_ID,
+        "log_tail": "" if over.get("ok", True) else "compile error",
+        **over,
+    }
+    fields.setdefault("targets", {
+        t["role"]: {
+            "executable": t["executable"], "built": fields["ok"],
+            "sha256": sha256, "size": 12345,
+            **({"runtime_artifacts": [
+                {
+                    **artifact,
+                    "sha256": hashlib.sha256(artifact["path"].encode()).hexdigest(),
+                    "size": 23456,
+                }
+                for artifact in t.get("runtime_artifacts", [])
+            ]} if t.get("runtime_artifacts") else {}),
         }
-        # The importable modules the real builder reports beside them,
-        # which is how a strategy asks for pytest: an executable and an
-        # importable module are looked for in different ways.
-        self.python_modules = {name: True for name in ("pytest", "hypothesis", "numpy")}
-        self.mutate_calls = []
-        # What one mutation run comes back with. The default is a harness
-        # that works: one mutant the bands caught, and one survivor on a
-        # line the captured inputs never reach. A test that wants a gap,
-        # or a harness that kills nothing, replaces this list.
-        self.mutate_results = [
+        for t in request["targets"]
+    })
+    # One compiler command line, shaped the way the shim log reads once
+    # services/builder/compile_log.py has been through it.
+    fields.setdefault("compiles", [{
+        "argv": [*request["flags"], "-o", request["targets"][0]["executable"], COMPILED_FILE],
+        "cwd": ".",
+        "inputs": [COMPILED_FILE],
+        "output": request["targets"][0]["executable"],
+        "has_flags": fields["flags_reached_every_compile"],
+        "outside": [] if fields["compiled_only_tree_source"] else [outside],
+    }])
+    return BuildResponse(**fields)
+
+
+def build_claim_detail(phase: str, sha256: str) -> dict:
+    """A complete v2 build claim, using the backend's actual target layout."""
+    reply = built({
+        "flags": [],
+        "targets": [{"role": "replay", "target": "replay", "executable": "replay"}],
+    }, sha256=sha256)
+    if phase == "onboarding":
+        return {"strategies": {
+            name: {"attempt_id": f"attempt-{name}", "targets": reply.targets}
+            for name in ("cpu_reference", "onboarding")
+        }}
+    return {"attempt_id": "attempt-port", "targets": reply.targets}
+
+
+def replayed(request: dict, *, writes: dict | None = None, **over) -> RunResponse:
+    """What the builder answers a /v1/run with.
+
+    Every case comes back stepped the way the fixture's capture program
+    stepped it, so a replay of a captured case reproduces the captured
+    answers -- which is what a correct replay driver does. A test whose
+    driver writes something else hands `writes` the arrays every case
+    should come back with instead.
+    """
+    outputs = {
+        name: dict(writes) if writes is not None else encode_case(stepped(decode_case(arrays)))
+        for name, arrays in request["cases"].items()
+    }
+    return RunResponse(**{
+        "ok": True, "outputs": outputs, "kernels_launched": 4, "launches": LAUNCHES,
+        "executable_identity": dict(EXECUTABLE_IDENTITY), "log_tail": "",
+        **over,
+    })
+
+
+def captured(request: dict, *, by_args: dict | None = None, **over) -> CaptureResponse:
+    """What the builder answers a /v1/capture with.
+
+    `by_args` gives a test the dataset a particular set of arguments
+    captures; anything else captures the fixture program's own for those
+    arguments, so two datasets differ exactly as two real ones would.
+    """
+    args = tuple(request["args"])
+    cases = (by_args or {}).get(args) or captured_cases(list(args))
+    return CaptureResponse(**{
+        "ok": True, "cases": cases, "stdout_tail": "",
+        "executable_identity": dict(EXECUTABLE_IDENTITY),
+        **over,
+    })
+
+
+def sanitized(request: dict, *, per_tool: dict | None = None, **over) -> SanitizeResponse:
+    """What the builder answers a /v1/sanitize with: one result per tool asked for."""
+    ok = over.get("ok", True)
+    if per_tool is None:
+        per_tool = {
+            tool: {"ok": ok, "errors": 0 if ok else 3, "log_tail": ""}
+            for tool in request["tools"]
+        }
+    return SanitizeResponse(**{
+        "ok": ok, "per_tool": per_tool,
+        "executable_identity": dict(EXECUTABLE_IDENTITY),
+        **over,
+    })
+
+
+def property_run(request: dict, **over) -> PropertiesResponse:
+    """What the builder answers a /v1/properties with: pytest's own summary.
+
+    The seed and the example count are echoed from the request, because a
+    builder that answered with different ones is a failed claim rather
+    than a passing one, and that is a test of its own.
+    """
+    return PropertiesResponse(**{
+        "ok": True, "seed": request["seed"], "max_examples": request["max_examples"],
+        "passed": 3, "collected": 3, "executed": 3, "replays_observed": 3,
+        "counts_source": "pytest summary emitted by the submitted property process",
+        "executable_identity": dict(EXECUTABLE_IDENTITY), "log_tail": "",
+        **over,
+    })
+
+
+def mutated(request: dict, *, results=None, **over) -> MutateResponse:
+    """What the builder answers a /v1/mutate with: one row per scored mutant.
+
+    The rows are a harness that works: one mutant the bands caught, and
+    one survivor on a line the captured inputs never reach. `generated`
+    follows the rows unless a test names it, which is what a limited run
+    leaves larger than the scored count.
+    """
+    if results is None:
+        results = [
             mutant_row("m-0001", "KILLED"),
             mutant_row("m-0002", "EQUIVALENT", line=42, note="no output changed"),
         ]
-        # How many mutants were generated, when that is not simply how many
-        # came back scored -- which is what a limit makes it.
-        self.generated = None
+    results = [dict(row) for row in results]
+    counts = {}
+    for row in results:
+        counts[row["status"]] = counts.get(row["status"], 0) + 1
+    return MutateResponse(**{
+        "ok": True, "generated": len(results), "scored": len(results),
+        "results": results, "counts": counts,
+        "kept_dirs": [f"/work/mutants/{row['id']}" for row in results
+                      if row["status"] in ("GAP", "EQUIVALENT")],
+        **over,
+    })
+
+
+def timed(request: dict, *, files=timing_files, repetitions: int | None = None,
+          **over) -> TimeResponse:
+    """What the builder answers a /v1/time with: the clock and the files, per run.
+
+    `files` writes one run's declared outputs and is where a test puts a
+    program that writes something else the second time; `repetitions`
+    answers with fewer runs than were asked for, which is not a
+    measurement at all.
+    """
+    repeats = request["repeats"] if repetitions is None else repetitions
+    return TimeResponse(**{
+        "ok": True, "runs_s": run_seconds(repeats), "gpu_exclusive": True,
+        "outputs": [files(request["outputs"], run) for run in range(repeats)],
+        "executable_identity": dict(EXECUTABLE_IDENTITY), "log_tail": "",
+        **over,
+    })
+
+
+def healthy(**over) -> HealthResponse:
+    """What the builder answers /healthz with: everything a strategy can ask for."""
+    return HealthResponse(**{
+        "ok": True, "tools": {name: True for name in TOOLS},
+        "python_modules": {name: True for name in PYTHON_MODULES},
+        "executor_identity": EXECUTOR_IDENTITY,
+        **over,
+    })
+
+
+# Every call a builder answers, which is also every name a test may
+# configure. A typo would otherwise be a knob nobody read.
+BUILDER_ENDPOINTS = (
+    "healthz", "artifacts", "build", "run", "capture", "sanitize", "properties",
+    "mutate", "time",
+)
+
+
+class FakeBuilder:
+    """A builder that answers without a compiler, a sanitizer, or a GPU.
+
+    Every endpoint answers with the typed response the real builder's
+    would, computed from the request so that the golden path passes
+    against a `FakeBuilder()` nobody configured. A test that wants a
+    different answer hands one in by endpoint name -- a response object, a
+    function of the request (the module's own makers take one and take
+    the fields to change), or an exception to raise:
+
+        FakeBuilder(run=RunResponse(ok=False, log_tail="runtime crash"))
+        FakeBuilder(time=partial(timed, repetitions=1))
+        FakeBuilder(artifacts=ConnectionError("connection reset"))
+
+    The same slots are writable afterwards, as `builder.answers[name]`,
+    for a test whose builder starts behaving differently partway through
+    a run of gates.
+
+    Every request is recorded, both in `calls` and in the endpoint's own
+    list, because most of what these tests ask is what the gateway sent.
+    """
+
+    def __init__(self, **answers):
+        unknown = sorted(set(answers) - set(BUILDER_ENDPOINTS))
+        if unknown:
+            raise TypeError(f"the builder has no {unknown} to answer")
+        self.answers = dict(answers)
+        self.calls = []
+        self.build_calls = []
+        self.run_calls = []
+        self.capture_calls = []
+        self.sanitize_calls = []
         self.properties_calls = []
-        self.properties_ok = True
-        # What pytest's summary line said, as the real builder parses it.
-        # A test that wants a property to have failed sets both.
-        self.properties_counts = {"passed": 3, "failed": 0, "errors": 0}
-        self.properties_log = ""
+        self.mutate_calls = []
+        self.time_calls = []
+        # What the builder's supervisor still holds, keyed by attempt: a
+        # test empties it to be a builder that lost its volume.
+        self.artifact_records = {}
+
+    def _answer(self, name: str, request: dict, default):
+        """The answer this test asked for, or what the real builder would say."""
+        self.calls.append((name, request))
+        recorded = getattr(self, f"{name}_calls", None)
+        if recorded is not None:
+            recorded.append(request)
+        answer = self.answers.get(name)
+        if isinstance(answer, BaseException):
+            raise answer
+        if answer is None:
+            return default(request)
+        return answer(request) if callable(answer) else answer
 
     def healthz(self):
-        return {
-            "ok": True, "tools": dict(self.tools),
-            "python_modules": dict(self.python_modules),
-        }
+        return self._answer("healthz", {}, lambda request: healthy())
+
+    def artifacts(self, attempt_id):
+        def default(request):
+            executables = self.artifact_records.get(attempt_id, {})
+            return ArtifactsResponse(
+                ok=bool(executables), executor_identity=EXECUTOR_IDENTITY,
+                executables={name: {**identity, "verified": True}
+                             for name, identity in executables.items()},
+            )
+        return self._answer("artifacts", {"attempt_id": attempt_id}, default)
 
     def build(self, attempt_id, tree, makefile, targets, compiler, flags, link_flags,
-              source_patterns):
-        self.build_calls.append({
+              source_patterns, *, toolchains=None):
+        resp = self._answer("build", {
             "attempt_id": attempt_id, "tree": tree, "makefile": makefile,
             "targets": targets, "compiler": compiler, "flags": flags,
             "link_flags": link_flags, "source_patterns": source_patterns,
-        })
-        # One compiler command line, shaped the way the real shim log
-        # reads once contract.py has been through it.
-        record = {
-            "argv": [*flags, "-o", targets[0]["executable"], self.compiled_file],
-            "cwd": ".",
-            "inputs": [self.compiled_file],
-            "output": targets[0]["executable"],
-            "has_flags": self.flags_reached,
-            "outside": [] if self.only_tree_source else [self.outside_file],
-        }
-        result = {
-            "stage": "build",
-            "targets": {
-                t["role"]: {"executable": t["executable"], "built": self.build_ok}
-                for t in targets
-            },
-            "compiles": [record],
-            "flags": list(flags),
-            "link_flags": list(link_flags),
-            "flags_reached_every_compile": self.flags_reached,
-            "compiled_only_tree_source": self.only_tree_source,
-            "minfo_excerpt": "Generating Tesla code",
-        }
-        if not self.build_ok:
-            return {**result, "ok": False, "log_tail": "compile error"}
-        return {**result, "ok": True, "log_tail": ""}
-
-    def run(self, attempt_id, executable, cases, notify=None, mandatory=False):
-        self.run_calls.append({
-            "attempt_id": attempt_id, "executable": executable, "cases": cases,
-            "notify": notify, "mandatory": mandatory,
-        })
-        if not self.run_ok:
-            return {"ok": False, "stage": "run", "log_tail": "runtime crash"}
-        if self.replays_capture:
-            outputs = {
-                name: encode_case(stepped(decode_case(arrays)))
-                for name, arrays in cases.items()
+            "toolchains": toolchains,
+        }, built)
+        if resp.ok:
+            records = {
+                target["executable"]: {
+                    "sha256": resp.targets[target["role"]]["sha256"], "size": 12345,
+                    "role": target["role"],
+                }
+                for target in targets
             }
-        else:
-            outputs = {name: dict(self.run_outputs) for name in cases}
-        return {"ok": True, "stage": "run", "outputs": outputs, "kernels_launched": self.run_kernels,
-                "launches": self.run_launches, "log_tail": ""}
+            for target in targets:
+                for artifact in resp.targets[target["role"]].get("runtime_artifacts", []):
+                    records[artifact["path"]] = {
+                        "sha256": artifact["sha256"], "size": artifact["size"],
+                        "role": target["role"], "kind": artifact["kind"],
+                    }
+            self.artifact_records[attempt_id] = records
+        return resp
+
+    def run(self, attempt_id, executable, cases, notify=None, mandatory=False, profile=None):
+        return self._answer("run", {
+            "attempt_id": attempt_id, "executable": executable, "cases": cases,
+            "notify": notify, "mandatory": mandatory, "profile": profile,
+        }, replayed)
+
+    def capture(self, attempt_id, executable, args, run_name):
+        return self._answer("capture", {
+            "attempt_id": attempt_id, "executable": executable, "args": list(args),
+            "run_name": run_name,
+        }, captured)
+
+    def sanitize(self, attempt_id, executable, cases, tools):
+        return self._answer("sanitize", {
+            "attempt_id": attempt_id, "executable": executable, "cases": cases,
+            "tools": tools,
+        }, sanitized)
 
     def properties(self, attempt_id, executable, module, cases, seed, max_examples):
-        self.properties_calls.append({
+        return self._answer("properties", {
             "attempt_id": attempt_id, "executable": executable, "module": module,
             "cases": cases, "seed": seed, "max_examples": max_examples,
-        })
-        return {
-            "ok": self.properties_ok, "stage": "properties", "seed": seed,
-            "max_examples": max_examples, **self.properties_counts,
-            "log_tail": self.properties_log,
-        }
+        }, property_run)
 
     def mutate(self, attempt_id, makefile, replay_target, files, cases, bands, compiler,
                flags, link_flags, source_patterns, jobs=None, limit=None):
-        self.mutate_calls.append({
+        return self._answer("mutate", {
             "attempt_id": attempt_id, "makefile": makefile, "replay_target": replay_target,
             "files": list(files), "cases": cases, "bands": bands, "compiler": compiler,
             "flags": flags, "link_flags": link_flags, "source_patterns": source_patterns,
             "jobs": jobs, "limit": limit,
-        })
-        results = [dict(row) for row in self.mutate_results]
-        counts = {}
-        for row in results:
-            counts[row["status"]] = counts.get(row["status"], 0) + 1
-        return {
-            "ok": True, "stage": "mutate", "generated": self.mutants_generated(),
-            "scored": len(results), "results": results, "counts": counts,
-            "kept_dirs": [f"/work/mutants/{row['id']}" for row in results
-                          if row["status"] in ("GAP", "EQUIVALENT")],
-        }
+        }, mutated)
 
-    def mutants_generated(self) -> int:
-        """How many mutants the run made, which a limit leaves larger than the scored count."""
-        return len(self.mutate_results) if self.generated is None else self.generated
-
-    def capture(self, attempt_id, executable, args, run_name):
-        self.capture_calls.append({
-            "attempt_id": attempt_id, "executable": executable, "args": list(args),
-            "run_name": run_name,
-        })
-        if not self.capture_ok:
-            return {
-                "ok": False, "stage": "capture", "cases": {},
-                "stdout_tail": "the capture run wrote no case directory",
-            }
-        cases = self.capture_cases.get(tuple(args), captured_cases(list(args)))
-        return {"ok": True, "stage": "capture", "cases": cases, "stdout_tail": ""}
-
-    def sanitize(self, attempt_id, executable, cases, tools):
-        self.sanitize_calls.append({
-            "attempt_id": attempt_id, "executable": executable, "cases": cases, "tools": tools,
-        })
-        per_tool = {t: {"ok": self.sanitize_ok, "errors": 0 if self.sanitize_ok else 3, "log_tail": ""} for t in tools}
-        return {"ok": self.sanitize_ok, "stage": "sanitize", "per_tool": per_tool}
-
-    def time(self, attempt_id, executable, args, env, outputs, repeats=5, budget_s=300):
-        self.time_calls.append({
+    def time(self, attempt_id, executable, args, env, outputs, repeats=5, budget_s=300,
+             expected_outputs=None):
+        return self._answer("time", {
             "attempt_id": attempt_id, "executable": executable, "args": args, "env": env,
             "outputs": outputs, "repeats": repeats, "budget_s": budget_s,
-        })
-        if not self.time_ok:
-            return {"ok": False, "stage": "time", "log_tail": "timing binary not built"}
-        return {
-            "ok": True, "stage": "time", "runs_s": self.runs_s, "gpu_exclusive": True,
-            # One set of files per run, in run order, as the builder
-            # collects them. The program writes the same arrays every
-            # time; a test that wants a program which does not overrides
-            # this method.
-            "outputs": [self.timing_outputs(outputs, run) for run in range(repeats)],
-            "stdout_tail": "",
-        }
+            "expected_outputs": expected_outputs,
+        }, timed)
 
-    def timing_outputs(self, outputs, run: int) -> dict:
-        """The declared files one timing run wrote: real arrays, as the program writes."""
-        return {
-            name: base64.b64encode(npy.encode(timing_array(name))).decode()
-            for name in outputs
-        }
+
+# The reviewed original an onboarding is compared against: a program
+# preserved outside the submitted tree, with the runs and outputs a person
+# said the two have to agree on. It lives here rather than in one test
+# because both the component's own tests and the onboarding dispatch have
+# to be judged against the same reviewed contract.
+def reference(tmp_path):
+    root = tmp_path / "original"
+    root.mkdir()
+    (root / "Makefile").write_text("original:\n\t$(FC) $(FFLAGS) kernel.f90 -o original\n")
+    (root / "kernel.f90").write_text("program original\nprint *, 42\nend program\n")
+    path = tmp_path / "reference.yaml"
+    path.write_text(yaml.safe_dump({
+        "version": 1, "provenance": "reviewed pristine upstream revision 123",
+        "source": {"root": "original", "patterns": ["*.f90"]},
+        "build": {"makefile": "Makefile", "target": "original", "executable": "original"},
+        "runs": [{"name": "odd-grid", "original_args": ["13", "7"],
+                  "candidate_args": ["13", "7"], "outputs": [
+                      {"original": "answer.npy", "candidate": "field.npy", "comparison": "array_exact"}]}],
+    }))
+    return path
+
+
+# The reviewed original is built in a workspace of its own, so what it
+# runs is not one of the executables the region's build produced. The
+# fake says so with a different digest, because a check that measures
+# another program is exactly what the gateway's cohort rule has to let
+# through knowingly.
+ORIGINAL_EXECUTABLE_IDENTITY = "c" * 64
+
+
+def reference_builder(*, wrong_candidate=False, drift=False, incomplete=False,
+                      value=42.0) -> FakeBuilder:
+    """Both programs may be internally repeatable while disagreeing with one another."""
+
+    def builds(request):
+        return built(request, sha256=(
+            ORIGINAL_EXECUTABLE_IDENTITY if "-original-" in request["attempt_id"]
+            else EXECUTABLE_IDENTITY["sha256"]
+        ))
+
+    def timed_runs(request):
+        original = "-original-" in request["attempt_id"]
+        value_written = value if original or not wrong_candidate else -value
+        written = [
+            {name: base64.b64encode(
+                npy.encode(np.array([value_written + (i if drift else 0)]))).decode()
+             for name in request["outputs"]}
+            for i in range(request["repeats"])
+        ]
+        if incomplete:
+            written = written[:1]
+        return TimeResponse(ok=True, outputs=written, runs_s=[0.1] * len(written))
+
+    return FakeBuilder(build=builds, time=timed_runs)
 
 
 class FakeOracle:
@@ -492,15 +746,18 @@ class FakeOracle:
         self.holdout_verdict = "pass"
 
     def policy(self):
-        return {"policy_version": "1", "policy_sha256": "policyabc"}
+        return PolicyResponse(policy_sha256="f" * 64, oracle_identity="0" * 64)
 
     def holdout_inputs(self):
-        return {"dataset": "holdout", "cases": {"hcase0": fixture_case(offset=7)}}
+        return HoldoutInputsResponse(cases={"hcase0": fixture_case(offset=7)})
 
     def compare(self, dataset, outputs, attempt_id="unknown"):
         self.compare_calls.append({"dataset": dataset, "outputs": outputs, "attempt_id": attempt_id})
         verdict = self.visible_verdict if dataset == "visible" else self.holdout_verdict
-        resp = {"verdict": verdict, "dataset": dataset, "policy_sha256": "policyabc"}
-        if dataset == "visible":
-            resp["per_case"] = {name: {"pass": verdict == "pass"} for name in outputs}
-        return resp
+        # Held-out comes back with no per-case detail, as the real oracle
+        # answers it: there is nothing quantitative for a session to read.
+        per_case = (
+            {name: {"pass": verdict == "pass"} for name in outputs}
+            if dataset == "visible" else {}
+        )
+        return CompareResponse(verdict=verdict, policy_sha256="f" * 64, per_case=per_case)

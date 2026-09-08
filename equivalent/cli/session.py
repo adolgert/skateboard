@@ -22,9 +22,10 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
-from equivalent.gateway.table import ACTION_TABLE
+from equivalent.ledger.table import ACTION_TABLE
 from equivalent.ledger.acceptance import PORTING, requirements_for
 from equivalent.ledger.records import RequestLogLine
+from equivalent.ledger.status import accepted_by
 from equivalent.ledger.store import LedgerStore
 
 # The tool names that reach the gateway. The action names come from the
@@ -33,7 +34,7 @@ from equivalent.ledger.store import LedgerStore
 # Nothing here is hand-listed, so a new row in the table is a new tool
 # name here on the same day.
 GATEWAY_TOOL_NAMES = frozenset(
-    {row.name for row in ACTION_TABLE if row.component is not None}
+    {row.name for row in ACTION_TABLE if row.dispatchable}
     | {"submit", "status", "claim"}
 )
 
@@ -110,9 +111,9 @@ class TimelineRow:
 
 @dataclass(frozen=True)
 class JoinResult:
-    rows: tuple  # tuple[TimelineRow, ...], in time order
-    unmatched_calls: tuple  # tuple[SessionEvent, ...] -- tool calls with no request line
-    unmatched_requests: tuple  # tuple[RequestLogLine, ...] -- request lines with no tool call
+    rows: tuple["TimelineRow", ...]  # in time order
+    unmatched_calls: tuple["SessionEvent", ...]  # tool calls with no request line
+    unmatched_requests: tuple[RequestLogLine, ...]  # request lines with no tool call
 
 
 @dataclass(frozen=True)
@@ -380,32 +381,7 @@ def _elapsed(start: str, end: str) -> str:
     return f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s"
 
 
-def _accepted_after(claims, requirements) -> bool:
-    """Would these claims, and no others, finish some tree?
-
-    Every requirement is read from the phase's own list rather than named
-    here, so a requirement added there counts here without an edit. A
-    requirement on the frozen files is met by any frozen value that
-    passes, because the transcript cannot say which frozen value was
-    current at the time.
-    """
-    latest = {}
-    for claim in claims:
-        for subject in claim.subject:
-            latest[(claim.predicateType, subject)] = claim.predicate.verdict
-    trees = {subject for (_, subject) in latest if subject.kind == "tree"}
-    frozen = {subject for (_, subject) in latest if subject.kind == "frozen"}
-    for tree in trees:
-        subjects_of = {"tree": [tree], "frozen": sorted(frozen, key=lambda s: s.sha256)}
-        if all(
-            any(latest.get((req.predicate_type, s)) == "pass" for s in subjects_of[req.subject_kind])
-            for req in requirements
-        ):
-            return True
-    return False
-
-
-def time_to_acceptance(requests, claims, phase: str = PORTING) -> str:
+def time_to_acceptance(requests, claims, phase: str = PORTING, *, required_materials=()) -> str:
     """How long from the session's first request to the claim that finished a tree.
 
     Replays the session's claims oldest first and stops at the one that
@@ -414,6 +390,11 @@ def time_to_acceptance(requests, claims, phase: str = PORTING) -> str:
     lists, so which list is used comes from the region the session ran
     against; a caller that knows only a ledger directory reads it as a
     port, which is what the rest of this tool does with one.
+
+    Whether a claim counts is the ledger's own acceptance rule, asked of
+    this session's claims: a summary that counted evidence the status
+    table calls stale would report a run as finished that the gateway
+    would refuse to accept.
 
     A session whose claims never add up to that gets "not accepted",
     which is also the honest answer for a session that finished a port
@@ -425,13 +406,13 @@ def time_to_acceptance(requests, claims, phase: str = PORTING) -> str:
     requirements = requirements_for(phase)
     ordered = sorted(claims, key=lambda c: c.ts)
     for i in range(len(ordered)):
-        if _accepted_after(ordered[: i + 1], requirements):
+        if accepted_by(ordered[: i + 1], requirements, required_materials=required_materials):
             return _elapsed(requests[0].ts, ordered[i].ts)
     return "not accepted"
 
 
 def summarize(store: LedgerStore, session_id: str, requests, events, joined: JoinResult,
-              phase: str = PORTING) -> Summary:
+              phase: str = PORTING, *, required_materials=()) -> Summary:
     """Count what this session did, reading the ledger for anything about claims.
 
     `requests` are already this session's lines; the claims are picked out
@@ -439,6 +420,11 @@ def summarize(store: LedgerStore, session_id: str, requests, events, joined: Joi
     claim id but never a predicate type, and one request can file several
     claims. `phase` is the region's, and decides which list of
     requirements the session is judged to have finished.
+
+    `required_materials` is the evidence context the region's claims have
+    to have been reached under, from whoever knows the region. A reader
+    that only has a ledger directory names none, and then a claim counts
+    if the schema it was written under is still the current one.
     """
     outcomes = [line.outcome for line in requests]
     claims = [claim for claim in store.all_claims() if claim.session == session_id]
@@ -461,7 +447,9 @@ def summarize(store: LedgerStore, session_id: str, requests, events, joined: Joi
         claims_by_predicate=claims_by_predicate,
         fail_verdicts=sum(1 for claim in claims if claim.predicate.verdict == "fail"),
         trees=tuple(trees),
-        time_to_acceptance=time_to_acceptance(requests, claims, phase),
+        time_to_acceptance=time_to_acceptance(
+            requests, claims, phase, required_materials=required_materials,
+        ),
         unmatched_calls=len(joined.unmatched_calls),
         unmatched_requests=len(joined.unmatched_requests),
     )

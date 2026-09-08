@@ -1,16 +1,15 @@
 import base64
-from pathlib import Path
+from dataclasses import replace
+from functools import partial
 
 import pytest
 
-from equivalent.components import build_replay
+from equivalent.components import building, build_replay
 from equivalent.components.errors import ComponentError
-from equivalent.gateway.submit import init_baseline_repo
 from equivalent.manifest.schema import load_manifest
-from equivalent.strategy.schema import load_strategy
-from equivalent.tests.fakes import FakeBuilder, write_program
-
-STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
+from equivalent.strategy.schema import Language
+from equivalent.tests.components.conftest import PORT_STRATEGY, strategy as strategy_named
+from equivalent.tests.fakes import OUTSIDE_FILE, FakeBuilder, built, write_program
 
 
 def _manifest(tmp_path):
@@ -18,19 +17,17 @@ def _manifest(tmp_path):
     return load_manifest(write_program(tmp_path) / "manifest.yaml")
 
 
-def _repo(tmp_path, files):
-    seed = tmp_path / "seed"
+def _repo(harness, files):
+    seed = harness.tmp_path / "seed"
     for name, content in files.items():
         path = seed / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
-    repo_dir = tmp_path / "repo"
-    init_baseline_repo(repo_dir, seed)
-    return repo_dir
+    return harness.repo(seed)
 
 
-def _tree(tmp_path):
-    return _repo(tmp_path, {
+def _tree(harness):
+    return _repo(harness, {
         "Makefile": "replay:\n\techo build\n",
         "src/mod_params.f90": "module mod_params\nend module\n",
         "src/mod_kernel.f90": "module mod_kernel\nend module\n",
@@ -38,21 +35,28 @@ def _tree(tmp_path):
     })
 
 
-def _check(tmp_path, builder, repo_dir=None):
+def _check(harness, repo_dir=None, builder=None):
+    if repo_dir is None:
+        _tree(harness)
     return build_replay.check(
-        repo_dir or _tree(tmp_path), "main", "ch04:step", "tree123",
-        load_strategy(STRATEGY_PATH), _manifest(tmp_path), builder,
+        harness.context(
+            region_id="ch04:step", phase="porting",
+            strategy=strategy_named(PORT_STRATEGY),
+            manifest=_manifest(harness.tmp_path),
+            builder=builder or harness.builder,
+        ),
+        {},
     )
 
 
-def test_the_whole_tree_goes_to_the_builder_not_a_filtered_source_list(tmp_path):
+def test_the_whole_tree_goes_to_the_builder_not_a_filtered_source_list(harness):
     # The build is the tree's own makefile, and a makefile reads files no
     # extension test would call source.
-    builder = FakeBuilder()
+    builder = harness.builder
 
-    result = _check(tmp_path, builder)
+    result = _check(harness)
 
-    assert result["verdict"] == "pass"
+    assert result.verdict == "pass"
     sent = {f["path"] for f in builder.build_calls[0]["tree"]}
     assert sent == {"Makefile", "src/mod_params.f90", "src/mod_kernel.f90", "README.md"}
     assert base64.b64decode(
@@ -60,12 +64,12 @@ def test_the_whole_tree_goes_to_the_builder_not_a_filtered_source_list(tmp_path)
     ) == b"how this code works\n"
 
 
-def test_the_build_recipe_comes_from_the_manifest_and_the_flags_from_the_strategy(tmp_path):
-    strategy = load_strategy(STRATEGY_PATH)
-    manifest = _manifest(tmp_path)
-    builder = FakeBuilder()
+def test_the_build_recipe_comes_from_the_manifest_and_the_flags_from_the_strategy(harness):
+    strategy = strategy_named(PORT_STRATEGY)
+    manifest = _manifest(harness.tmp_path)
+    builder = harness.builder
 
-    result = _check(tmp_path, builder)
+    result = _check(harness)
 
     call = builder.build_calls[0]
     assert call["makefile"] == manifest.build.makefile
@@ -80,54 +84,111 @@ def test_the_build_recipe_comes_from_the_manifest_and_the_flags_from_the_strateg
     assert call["flags"] == list(strategy.languages["fortran"].flags)
     assert call["link_flags"] == list(strategy.link_flags)
     assert call["source_patterns"] == list(manifest.source.patterns)
-    assert result["detail"]["flags"] == list(strategy.languages["fortran"].flags)
+    assert result.detail["flags"] == list(strategy.languages["fortran"].flags)
 
 
-def test_a_pass_records_every_compile_the_builder_saw(tmp_path):
+def test_conditional_gpu_module_is_required_only_by_a_strategy_with_cuda():
+    cpu = strategy_named("cpu_reference")
+    mixed = replace(cpu, languages={
+        **cpu.languages, "cuda": Language("nvcc", ("-O3",)),
+    })
+    recipe = building.Recipe(
+        makefile="Makefile",
+        targets=({
+            "role": "replay", "target": "replay", "executable": "replay",
+            "runtime_artifacts": [{
+                "path": "modules/kernel.ptx", "kind": "gpu_module",
+                "when_language": "cuda",
+            }],
+        },),
+        source_patterns=("src/*.f90",),
+    )
     builder = FakeBuilder()
 
-    result = _check(tmp_path, builder)
+    building.build_tree(builder, "cpu", [], cpu, recipe)
+    building.build_tree(builder, "mixed", [], mixed, recipe)
 
-    assert result["detail"]["compiles"][0]["inputs"] == ["src/mod_kernel.f90"]
-    assert result["detail"]["targets"]["replay"]["built"] is True
+    assert "runtime_artifacts" not in builder.build_calls[0]["targets"][0]
+    assert builder.build_calls[1]["targets"][0]["runtime_artifacts"] == [
+        {"path": "modules/kernel.ptx", "kind": "gpu_module"},
+    ]
+    assert builder.build_calls[1]["compiler"] is None
+    assert builder.build_calls[1]["toolchains"] == {
+        "fortran": {
+            "compiler": cpu.languages["fortran"].compiler,
+            "flags": list(cpu.languages["fortran"].flags),
+        },
+        "cuda": {"compiler": "nvcc", "flags": ["-O3"]},
+    }
 
 
-def test_fail_when_the_builder_reports_a_compile_error(tmp_path):
-    builder = FakeBuilder()
-    builder.build_ok = False
+@pytest.mark.parametrize("answer_kind", ["omitted", "changed_kind"])
+def test_a_successful_build_must_identify_each_requested_runtime_artifact(answer_kind):
+    strategy = strategy_named("cpu_reference")
+    recipe = building.Recipe(
+        makefile="Makefile",
+        targets=({
+            "role": "replay", "target": "replay", "executable": "replay",
+            "runtime_artifacts": [{"path": "lib/kernel.so", "kind": "shared_library"}],
+        },),
+        source_patterns=("src/*.f90",),
+    )
 
-    result = _check(tmp_path, builder)
+    def incomplete(request):
+        answer = built(request)
+        target = dict(answer.targets["replay"])
+        if answer_kind == "omitted":
+            target.pop("runtime_artifacts")
+        else:
+            target["runtime_artifacts"] = [
+                {**target["runtime_artifacts"][0], "kind": "gpu_module"},
+            ]
+        return replace(answer, targets={"replay": target})
 
-    assert result["verdict"] == "fail"
-    assert "log_tail" in result["detail"]
+    with pytest.raises(ComponentError, match="requested runtime artifacts"):
+        building.build_verdict(FakeBuilder(build=incomplete), "attempt", [], strategy, recipe)
 
 
-def test_a_build_whose_flags_never_reached_the_compiler_fails_naming_the_command(tmp_path):
+def test_a_pass_records_every_compile_the_builder_saw(harness):
+    result = _check(harness)
+
+    assert result.detail["compiles"][0]["inputs"] == ["src/mod_kernel.f90"]
+    assert result.detail["targets"]["replay"]["built"] is True
+
+
+def test_fail_when_the_builder_reports_a_compile_error(harness):
+    builder = FakeBuilder(build=partial(built, ok=False))
+
+    result = _check(harness, builder=builder)
+
+    assert result.verdict == "fail"
+    assert "log_tail" in result.detail
+
+
+def test_a_build_whose_flags_never_reached_the_compiler_fails_naming_the_command(harness):
     # The makefile set its own FFLAGS. It compiled, it linked, and what
     # ran on the GPU was not what the strategy says was measured.
-    builder = FakeBuilder()
-    builder.flags_reached = False
+    builder = FakeBuilder(build=partial(built, flags_reached_every_compile=False))
 
-    result = _check(tmp_path, builder)
+    result = _check(harness, builder=builder)
 
-    assert result["verdict"] == "fail"
-    assert result["detail"]["compiles_without_flags"] == [builder.build_calls[0]["flags"] + [
+    assert result.verdict == "fail"
+    assert result.detail["compiles_without_flags"] == [builder.build_calls[0]["flags"] + [
         "-o", "replay", "src/mod_kernel.f90",
     ]]
 
 
-def test_a_build_that_compiled_a_file_from_outside_the_tree_fails_naming_the_file(tmp_path):
-    builder = FakeBuilder()
-    builder.only_tree_source = False
+def test_a_build_that_compiled_a_file_from_outside_the_tree_fails_naming_the_file(harness):
+    builder = FakeBuilder(build=partial(built, compiled_only_tree_source=False))
 
-    result = _check(tmp_path, builder)
+    result = _check(harness, builder=builder)
 
-    assert result["verdict"] == "fail"
-    assert result["detail"]["files_outside_tree"] == [builder.outside_file]
+    assert result.verdict == "fail"
+    assert result.detail["files_outside_tree"] == [OUTSIDE_FILE]
 
 
-def test_raises_component_error_when_the_tree_holds_no_source(tmp_path):
-    repo_dir = _repo(tmp_path, {"README.md": "hello\n"})
+def test_raises_component_error_when_the_tree_holds_no_source(harness):
+    _repo(harness, {"README.md": "hello\n"})
 
     with pytest.raises(ComponentError):
-        _check(tmp_path, FakeBuilder(), repo_dir=repo_dir)
+        _check(harness, repo_dir=harness.repo_dir)

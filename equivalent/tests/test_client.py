@@ -4,10 +4,9 @@ from fastapi.testclient import TestClient
 
 from equivalent.client import GatewayClient
 from equivalent.gateway.app import create_app
-from equivalent.gateway.regions import RegionConfig
-from equivalent.gateway.submit import init_baseline_repo
-from equivalent.ledger.acceptance import PORTING
+from equivalent.tree import init_baseline_repo
 from equivalent.manifest.schema import load_manifest
+from equivalent.tests.gateway.conftest import region_config
 from equivalent.tests.fakes import write_program
 
 TOKEN = "test-token"
@@ -23,11 +22,8 @@ def _client_pair(tmp_path):
     init_baseline_repo(repo_dir, tmp_path / "seed")
     working = tmp_path / "working"
     working.mkdir()
-    cfg = RegionConfig(
-        region_id="ch04:step", code="tsunami", phase=PORTING, repo_dir=repo_dir,
-        spec_path="notes/regions/ch04-step.sese.yaml", ledger_dir=tmp_path / "ledger",
-        strategy_path=STRATEGY_PATH, baseline_strategy_path=BASELINE_STRATEGY_PATH,
-        working_copy_dir=working,
+    cfg = region_config(
+        tmp_path, repo_dir=repo_dir, working_copy_dir=working,
         manifest=load_manifest(write_program(tmp_path) / "manifest.yaml"),
     )
     app = create_app({cfg.region_id: cfg}, TOKEN)

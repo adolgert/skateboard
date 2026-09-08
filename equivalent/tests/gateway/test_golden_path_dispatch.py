@@ -4,27 +4,33 @@ equivalent/tests/fakes.py for why: no nvfortran/compute-sanitizer/GPU in
 this environment).
 """
 import base64
-import json
-from pathlib import Path
+from functools import partial
 
 from fastapi.testclient import TestClient
 
 from equivalent.capture import npy
 from equivalent.gateway.app import create_app
-from equivalent.gateway.regions import RegionConfig
-from equivalent.gateway.submit import init_baseline_repo
-from equivalent.ledger.acceptance import PORTING
-from equivalent.ledger.capture_sets import program_variable
+from equivalent.tree import init_baseline_repo
+from equivalent.components.program_outputs import program_variable
 from equivalent.ledger.store import LedgerStore
 from equivalent.manifest.schema import load_manifest
 from equivalent.strategy.schema import load_strategy
-from equivalent.tests.fakes import FakeBuilder, FakeOracle, timing_array, write_program
+from equivalent.tests.gateway.conftest import SPEC_PATH, STRATEGY_PATH, region_config
+from equivalent.tests.fakes import (
+    EXECUTABLE_IDENTITY,
+    FakeBuilder,
+    FakeOracle,
+    built,
+    property_run,
+    replayed,
+    sanitized,
+    timed,
+    timing_array,
+    write_program,
+)
 
 TOKEN = "test-token"
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "X-Session-Id": "sess-1", "X-Model-Id": "claude-sonnet-5"}
-STRATEGY_PATH = Path(__file__).resolve().parents[2] / "strategy" / "files" / "stdpar_managed.yaml"
-BASELINE_STRATEGY_PATH = STRATEGY_PATH.parent / "cpu_reference.yaml"
-SPEC_PATH = "notes/regions/ch04-step.sese.yaml"
 
 CLEAN_SOURCE = """\
 module mod_kernel
@@ -61,12 +67,8 @@ def _client(tmp_path):
     # A code that declares its own invariants, so the property check is
     # part of what this port is judged by.
     program = write_program(tmp_path, properties=True)
-    cfg = RegionConfig(
-        region_id="ch04:step", code="tsunami", phase=PORTING, repo_dir=repo_dir,
-        spec_path=SPEC_PATH,
-        ledger_dir=tmp_path / "ledger", strategy_path=STRATEGY_PATH,
-        baseline_strategy_path=BASELINE_STRATEGY_PATH,
-        working_copy_dir=working,
+    cfg = region_config(
+        tmp_path, repo_dir=repo_dir, working_copy_dir=working,
         manifest=load_manifest(program / "manifest.yaml"),
         visible_dataset_dir=program / "datasets" / "visible",
     )
@@ -89,12 +91,43 @@ def _run(client, cfg, action):
 GATES = (
     "sese_check", "build_replay", "run_replay", "sanitize",
     "regression_visible", "property_check", "regression_holdout", "time_baseline",
-    "program_regression", "time_port",
+    "program_regression", "time_port", "performance_check",
 )
+
+
+def test_a_check_is_never_reached_without_the_claims_its_row_requires(tmp_path):
+    # A check reads its prerequisite claims out of the context it is
+    # handed and never asks whether they are there. What makes that safe
+    # is here: the gateway refuses first, and names the action that would
+    # produce what is missing.
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in ("sese_check", "build_replay"):
+        _run(client, cfg, action)
+
+    body = _run(client, cfg, "regression_visible")
+
+    assert body["refused"] is True
+    missing = {row["predicateType"]: row for row in body["missing"]}
+    assert missing["gpu/executed"]["producing_action"] == "run_replay"
+    # And the oracle was never asked: the refusal happened before dispatch.
+    assert oracle.compare_calls == []
 
 
 def test_full_pipeline_reaches_acceptance(tmp_path):
     client, cfg, store, builder, oracle = _client(tmp_path)
+
+    def measured_speedup(request):
+        # The performance gate compares the baseline build with the port;
+        # every other timing check remains on the port's faster samples.
+        runs = [0.30] * request["repeats"] if "baseline" in request["attempt_id"] \
+            else [0.20] * request["repeats"]
+        return timed(request, runs_s=runs)
+
+    builder.answers["time"] = measured_speedup
 
     working = cfg.working_copy_dir
     (working / "notes" / "regions").mkdir(parents=True)
@@ -132,7 +165,7 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
     # matching the hash the oracle reported.
     for predicate_type in ("regression/visible", "regression/holdout"):
         claim = next(c for c in store.all_claims() if c.predicateType == predicate_type)
-        assert any(m.kind == "policy" and m.sha256 == "policyabc" for m in claim.materials)
+        assert any(m.kind == "policy" and m.sha256 == "f" * 64 for m in claim.materials)
 
     # The port's own program run was compared against the set the
     # baseline's run stored, and the claim names both that set and the
@@ -159,6 +192,24 @@ def test_full_pipeline_reaches_acceptance(tmp_path):
     port_claim = next(c for c in store.all_claims() if c.predicateType == "timing/port")
     assert build_claim.predicate.detail["flags"] == expected_flags
     assert port_claim.predicate.detail["flags"] == expected_flags
+    performance_claim = next(c for c in store.all_claims() if c.predicateType == "performance/speedup")
+    assert performance_claim.predicate.verdict == "pass"
+    assert {material.kind for material in performance_claim.materials} >= {"timing_claim"}
+
+    # The speedup is recorded for comparing ports later; acceptance does
+    # not rest on it, so re-measuring the baseline leaves the port
+    # accepted and asks only for a new comparison, which names the new
+    # baseline observation.
+    old_baseline = performance_claim.predicate.detail["baseline_claim_id"]
+    _run(client, cfg, "time_baseline")
+    after = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+    assert after["accepted"] is True
+    assert "performance/speedup" not in {row["predicateType"] for row in after["rows"]}
+
+    renewed = _run(client, cfg, "performance_check")
+    assert renewed["verdict"] == "pass"
+    renewed_claim = store.get_claim(renewed["claim_id"])
+    assert renewed_claim.predicate.detail["baseline_claim_id"] != old_baseline
 
 
 def test_sanitize_dispatch_writes_three_claims_and_is_a_duplicate_on_repeat(tmp_path):
@@ -179,6 +230,92 @@ def test_sanitize_dispatch_writes_three_claims_and_is_a_duplicate_on_repeat(tmp_
     assert second["claims"] == first["claims"]
     assert len(builder.sanitize_calls) == 1  # not called again
     assert store.all_requests()[-1].outcome == "duplicate"
+
+
+def test_initcheck_failure_blocks_visible_regression_and_acceptance(tmp_path):
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in ("sese_check", "build_replay", "run_replay"):
+        _run(client, cfg, action)
+
+    def initcheck_fails(request):
+        answer = sanitized(request)
+        return sanitized(request, ok=False, per_tool={
+            **answer.per_tool,
+            "initcheck": {"ok": False, "errors": 1, "log_tail": "uninitialized read"},
+        })
+
+    builder.answers["sanitize"] = initcheck_fails
+    sanitize_result = _run(client, cfg, "sanitize")
+    refused = _run(client, cfg, "regression_visible")
+    status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+
+    verdicts = {claim["predicateType"]: claim["verdict"]
+                for claim in sanitize_result["claims"]}
+    assert verdicts["sanitize/initcheck"] == "fail"
+    assert [item["predicateType"] for item in refused["missing"]] == [
+        "sanitize/initcheck"
+    ]
+    assert status["accepted"] is False
+
+
+def test_a_lost_builder_workspace_is_rebuilt_before_dependent_execution(tmp_path):
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    _run(client, cfg, "sese_check")
+    _run(client, cfg, "build_replay")
+    builder.artifact_records.clear()  # as after a builder-volume loss/restart
+
+    result = _run(client, cfg, "run_replay")
+
+    assert result["verdict"] == "pass"
+    assert len(builder.build_calls) == 2
+    assert len(builder.run_calls) == 1
+
+
+def test_runtime_binary_must_match_the_current_build_claim(tmp_path):
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    _run(client, cfg, "sese_check")
+    _run(client, cfg, "build_replay")
+    builder.answers["run"] = partial(replayed, executable_identity={
+        **EXECUTABLE_IDENTITY, "sha256": "c" * 64,
+    })
+
+    result = _run(client, cfg, "run_replay")
+
+    assert "does not match the current passing build claim" in result["error"]
+    assert not any(claim.predicateType == "gpu/executed" for claim in store.all_claims())
+
+
+def test_a_rebuilt_binary_cohort_makes_dependent_claims_stale(tmp_path):
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    for action in ("sese_check", "build_replay", "run_replay"):
+        _run(client, cfg, action)
+
+    builder.answers["build"] = partial(built, sha256="c" * 64)
+    builder.artifact_records.clear()
+    rebuilt = _run(client, cfg, "build_replay")
+    status = client.get("/status", params={"region": cfg.region_id}, headers=HEADERS).json()
+
+    assert rebuilt["verdict"] == "pass"
+    gpu = next(row for row in status["rows"] if row["predicateType"] == "gpu/executed")
+    assert gpu["status"] == "missing"
+    assert gpu["evidence_status"] == "stale"
+    assert status["accepted"] is False
 
 
 def test_holdout_receipt_is_verdict_only_but_the_stored_claim_keeps_its_detail(tmp_path):
@@ -238,15 +375,15 @@ def test_a_port_that_is_wrong_at_the_timing_size_cannot_be_timed(tmp_path):
     # run, and so the stored reference, is already behind us.
     drifted = cfg.manifest.timing.outputs[0]
 
-    def wrong_at_scale(outputs, run):
+    def wrong_at_scale(paths, run):
         return {
-            name: base64.b64encode(
-                npy.encode(timing_array(name) + (1.0 if name == drifted else 0.0))
+            path: base64.b64encode(
+                npy.encode(timing_array(path) + (1.0 if path == drifted else 0.0))
             ).decode()
-            for name in outputs
+            for path in paths
         }
 
-    builder.timing_outputs = wrong_at_scale
+    builder.answers["time"] = partial(timed, files=wrong_at_scale)
 
     body = _run(client, cfg, "program_regression")
     assert body["verdict"] == "fail"
@@ -272,9 +409,10 @@ def test_a_port_whose_invariants_do_not_hold_cannot_be_accepted(tmp_path):
     for action in GATES[: GATES.index("property_check")]:
         _run(client, cfg, action)
 
-    builder.properties_ok = False
-    builder.properties_counts = {"passed": 2, "failed": 1, "errors": 0}
-    builder.properties_log = "Falsifying example: test_mass_is_conserved(k=1)"
+    builder.answers["properties"] = partial(
+        property_run, ok=False, passed=2, failed=1, collected=3, executed=3,
+        log_tail="Falsifying example: test_mass_is_conserved(k=1)",
+    )
 
     body = _run(client, cfg, "property_check")
     assert body["verdict"] == "fail"
@@ -328,8 +466,51 @@ def test_how_many_examples_a_search_draws_can_be_asked_for(tmp_path):
     client.post(
         "/run",
         json={"action": "property_check", "region": cfg.region_id,
-              "config": {"seed": 5, "max_examples": 20}},
+              "config": {"seed": 5, "max_examples": 100}},
         headers=HEADERS,
     )
 
-    assert builder.properties_calls[0]["max_examples"] == 20
+    assert builder.properties_calls[0]["max_examples"] == 100
+
+
+def test_a_builder_that_cannot_be_asked_about_its_artifacts_is_not_a_lost_build(tmp_path):
+    # A failed call to the builder says nothing about whether the build
+    # is still there, so it must not be read as one that vanished and
+    # rebuilt: the gateway reports the service as unavailable instead.
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    _run(client, cfg, "sese_check")
+    _run(client, cfg, "build_replay")
+
+    builder.answers["artifacts"] = ConnectionError("connection reset")
+    response = client.post(
+        "/run", json={"action": "run_replay", "region": cfg.region_id, "config": {}},
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 503
+    assert len(builder.build_calls) == 1  # no rebuild
+    assert len(builder.run_calls) == 0
+
+
+def test_a_workspace_lost_to_a_restart_is_rebuilt_by_the_phases_own_build(tmp_path):
+    # The builder keeps one workspace per build and can lose it to a
+    # restart. What rebuilds it is whichever action files this phase's
+    # build claim -- for a port, the one build under the port's strategy.
+    client, cfg, store, builder, oracle = _client(tmp_path)
+    working = cfg.working_copy_dir
+    (working / "notes" / "regions").mkdir(parents=True)
+    (working / SPEC_PATH).write_text(SPEC)
+    client.post("/submit", json={"region": cfg.region_id}, headers=HEADERS)
+    _run(client, cfg, "sese_check")
+    _run(client, cfg, "build_replay")
+    builder.artifact_records.clear()
+
+    body = _run(client, cfg, "run_replay")
+
+    assert "error" not in body
+    assert len(builder.build_calls) == 2
+    assert len(builder.run_calls) == 1

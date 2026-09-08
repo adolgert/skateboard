@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from .subjects import Subject
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _CLAIM_FIELDS = frozenset(
     {"id", "ts", "subject", "predicateType", "predicate", "materials", "session", "version"}
@@ -53,10 +53,10 @@ class Predicate:
 class Claim:
     id: str
     ts: str
-    subject: tuple  # tuple[Subject, ...]
+    subject: tuple[Subject, ...]
     predicateType: str
     predicate: Predicate
-    materials: tuple  # tuple[Subject, ...]
+    materials: tuple[Subject, ...]
     session: str
     version: int = SCHEMA_VERSION
 
@@ -85,7 +85,10 @@ class Claim:
             predicate=Predicate.from_dict(d["predicate"]),
             materials=tuple(Subject.from_dict(s) for s in d.get("materials", [])),
             session=d["session"],
-            version=d.get("version", SCHEMA_VERSION),
+            # Records written before the version field existed have legacy
+            # semantics.  Keep them readable, but never infer that they were
+            # produced under the current evidence contract.
+            version=d.get("version", 1),
         )
 
 
@@ -147,5 +150,5 @@ class RequestLogLine:
             claim_id=d.get("claim_id"),
             missing=tuple(missing) if missing is not None else None,
             tool_call_id=d.get("tool_call_id"),
-            version=d.get("version", SCHEMA_VERSION),
+            version=d.get("version", 1),
         )

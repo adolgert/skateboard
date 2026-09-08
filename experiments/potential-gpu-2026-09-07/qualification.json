@@ -1,0 +1,265 @@
+{
+  "checks": {
+    "artifact_bound_to_executor": true,
+    "bound_executable_runs": true,
+    "credentials_and_network_absent": true,
+    "exact_scratch_and_cross_attempt_mounts": true,
+    "normal_descendants_cleaned": true,
+    "nsys_available_in_job": true,
+    "protected_compiler_audit": true,
+    "real_cpu_build": true,
+    "timed_out_descendants_cleaned": true,
+    "tree_harness_and_root_read_only": true
+  },
+  "cpu_isolation_ok": true,
+  "errors": {},
+  "evidence": {
+    "bound_executable_run": {
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\nWARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.\nUse 'docker run --gpus all' to start this container; see\nhttps://github.com/NVIDIA/nvidia-container-toolkit\n\nskateboard-cpu-job-ok\n"
+    },
+    "build": {
+      "command": [
+        "make",
+        "-f",
+        "Makefile",
+        "replay"
+      ],
+      "compiled_only_tree_source": true,
+      "compiler_audit": {
+        "collector": "strace/process+cwd",
+        "compiler_invocations": 1,
+        "language_invocations": {
+          "fortran": 1
+        },
+        "observed_executions": 9,
+        "protected": true
+      },
+      "compiles": [
+        {
+          "argv": [
+            "-O1",
+            "-o",
+            "replay",
+            "src/main.f90"
+          ],
+          "audit_errors": [],
+          "compiler": null,
+          "cwd": ".",
+          "has_flags": true,
+          "inputs": [
+            "src/main.f90"
+          ],
+          "kind": "compile",
+          "language": "fortran",
+          "link_inputs": [],
+          "output": "replay",
+          "outside": [],
+          "required_flags": [
+            "-O1"
+          ]
+        }
+      ],
+      "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+      "flags": [
+        "-O1"
+      ],
+      "flags_reached_every_compile": true,
+      "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+      "languages_compiled": [
+        "fortran"
+      ],
+      "link_flags": [],
+      "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\nWARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.\nUse 'docker run --gpus all' to start this container; see\nhttps://github.com/NVIDIA/nvidia-container-toolkit\n\nnvfortran -O1 -o replay src/main.f90 \n/bin/sh: 1: cannot create /run/evidence/result.json: Permission denied\nmake: [Makefile:2: replay] Error 2 (ignored)\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.e261a6a8b349\n",
+      "minfo_excerpt": "WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.",
+      "missing_targets": null,
+      "ok": true,
+      "stage": "build",
+      "targets": {
+        "replay": {
+          "built": true,
+          "executable": "replay",
+          "kind": "executable",
+          "role": "replay",
+          "roles": [
+            "replay"
+          ],
+          "sha256": "76d1845de4774827907a5bc87d1017a5fb73be5b2dae3a2ad611addaf07a423e",
+          "size": 17568
+        }
+      },
+      "toolchains": {
+        "fortran": {
+          "compiler": "nvfortran",
+          "flags": [
+            "-O1"
+          ]
+        }
+      }
+    },
+    "gpu_build": {
+      "command": [
+        "make",
+        "-f",
+        "Makefile",
+        "gpu_probe"
+      ],
+      "compiled_only_tree_source": true,
+      "compiler_audit": {
+        "collector": "strace/process+cwd",
+        "compiler_invocations": 1,
+        "language_invocations": {
+          "fortran": 1
+        },
+        "observed_executions": 87,
+        "protected": true
+      },
+      "compiles": [
+        {
+          "argv": [
+            "-O1",
+            "-acc=gpu",
+            "-o",
+            "gpu_probe",
+            "src/gpu_probe.f90"
+          ],
+          "audit_errors": [],
+          "compiler": null,
+          "cwd": ".",
+          "has_flags": true,
+          "inputs": [
+            "src/gpu_probe.f90"
+          ],
+          "kind": "compile",
+          "language": "fortran",
+          "link_inputs": [],
+          "output": "gpu_probe",
+          "outside": [],
+          "required_flags": [
+            "-O1",
+            "-acc=gpu"
+          ]
+        }
+      ],
+      "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+      "flags": [
+        "-O1",
+        "-acc=gpu"
+      ],
+      "flags_reached_every_compile": true,
+      "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+      "languages_compiled": [
+        "fortran"
+      ],
+      "link_flags": [],
+      "log_tail": "ccess file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f34e8afdc121\n",
+      "minfo_excerpt": "WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.",
+      "missing_targets": null,
+      "ok": true,
+      "stage": "build",
+      "targets": {
+        "gpu_probe": {
+          "built": true,
+          "executable": "gpu_probe",
+          "kind": "executable",
+          "role": "gpu_probe",
+          "roles": [
+            "gpu_probe"
+          ],
+          "sha256": "fe1c9345f6359a017070a5c38c96aeb22bba378b0f2237038f26333b3ae467c2",
+          "size": 136328
+        }
+      },
+      "toolchains": {
+        "fortran": {
+          "compiler": "nvfortran",
+          "flags": [
+            "-O1",
+            "-acc=gpu"
+          ]
+        }
+      }
+    },
+    "gpu_profile": {
+      "protected_result": {
+        "collector": "nsys/CUPTI_ACTIVITY_KIND_KERNEL",
+        "kernel_names": [
+          "qualification_gpu_4_gpu"
+        ],
+        "kernels_launched": 1,
+        "ok": true
+      },
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\nCollecting data...\nGenerating '/tmp/nsys-report-7f0d.qdstrm'\n\n[1/1] [0%                          ] profile.nsys-rep\n[1/1] [0%                          ] profile.nsys-rep\n[1/1] [==========49%               ] profile.nsys-rep\n[1/1] [=============58%            ] profile.nsys-rep\n[1/1] [===============67%          ] profile.nsys-rep\n[1/1] [================70%         ] profile.nsys-rep\n[1/1] [================71%         ] profile.nsys-rep\n[1/1] [========================100%] profile.nsys-rep\n[1/1] [========================100%] profile.nsys-rep\nGenerated:\n\t/tmp/profile-jeh88a_8/profile.nsys-rep\n"
+    },
+    "gpu_sanitizers": {
+      "executable_identity": {
+        "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+        "role": "gpu_probe",
+        "sha256": "fe1c9345f6359a017070a5c38c96aeb22bba378b0f2237038f26333b3ae467c2",
+        "size": 136328
+      },
+      "log_tail": "",
+      "ok": true,
+      "per_tool": {
+        "initcheck": {
+          "errors": 0,
+          "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n",
+          "ok": true
+        },
+        "memcheck": {
+          "errors": 0,
+          "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n",
+          "ok": true
+        },
+        "racecheck": {
+          "errors": 0,
+          "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)\n",
+          "ok": true
+        }
+      },
+      "stage": "sanitize"
+    },
+    "network_and_credentials": {
+      "returncode": 0,
+      "stderr_tail": "",
+      "stdout_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\nWARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.\nUse 'docker run --gpus all' to start this container; see\nhttps://github.com/NVIDIA/nvidia-container-toolkit\n\n"
+    }
+  },
+  "finished_at": "2026-09-07T22:14:15.204654+00:00",
+  "gpu_checks": {
+    "nsys_available_in_job": true,
+    "nvidia_driver_visible": true,
+    "protected_kernel_profile": true,
+    "required_sanitizers": true
+  },
+  "gpu_ready": true,
+  "gpu_status": "qualified",
+  "isolation": {
+    "backend": "docker",
+    "checks": {
+      "daemon": true,
+      "image": true,
+      "nvidia_driver": true,
+      "volume": true
+    },
+    "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+    "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+    "ok": true,
+    "versions": {
+      "docker_server": "29.1.3",
+      "nvidia_driver": [
+        "580.159.03"
+      ]
+    }
+  },
+  "limitations": [
+    "execve tracing proves the configured compiler ran with the recorded flags and sources; it does not prove the final executable consists exclusively of those compiler outputs"
+  ],
+  "ok": true,
+  "require_gpu": true,
+  "schema": "skateboard-builder-qualification-v2",
+  "started_at": "2026-09-07T22:14:04.660170+00:00"
+}

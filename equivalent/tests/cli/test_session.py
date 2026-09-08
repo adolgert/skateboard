@@ -10,17 +10,19 @@ import yaml
 
 from equivalent.cli import render, session
 from equivalent.cli.main import main
-from equivalent.gateway.submit import init_baseline_repo
+from equivalent.tree import init_baseline_repo
 from equivalent.ledger.acceptance import (
     ACCEPTANCE_REQUIREMENTS,
     ONBOARDING,
     ONBOARDING_REQUIREMENTS,
     PORTING,
 )
+from equivalent.ledger.evidence import FOUNDATION_PREDICATES, timing_claim_material
 from equivalent.ledger.records import Claim, Predicate, RequestLogLine
+from equivalent.ledger.status import compute_status
 from equivalent.ledger.store import LedgerStore
 from equivalent.ledger.subjects import Subject
-from equivalent.tests.fakes import write_program
+from equivalent.tests.fakes import build_claim_detail, write_program
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 GOLDEN_DIR = Path(__file__).parent / "golden"
@@ -52,16 +54,30 @@ def _sample_requests():
     ]
 
 
-def _claim(claim_id, ts, predicate_type, subject_kind, sha256, verdict, session_id):
+# The executable a build in these ledgers produced. A claim that rests on
+# a build only counts as current evidence when it names that executable.
+BINARY = Subject(kind="binary", sha256="e" * 64)
+BUILT = build_claim_detail(PORTING, BINARY.sha256)
+
+
+def _claim(claim_id, ts, predicate_type, subject_kind, sha256, verdict, session_id,
+           materials=(), detail=None):
     return Claim(
         id=claim_id,
         ts=ts,
         subject=(Subject(kind=subject_kind, sha256=sha256),),
         predicateType=predicate_type,
-        predicate=Predicate(tool="t", version="0.1", configHash="cfg", verdict=verdict, detail={}),
-        materials=(),
+        predicate=Predicate(
+            tool="t", version="0.1", configHash="cfg", verdict=verdict, detail=detail or {},
+        ),
+        materials=tuple(materials),
         session=session_id,
     )
+
+
+def _rests_on_the_build(predicate_type: str) -> bool:
+    """Whether a claim of this type has to name the build's executables."""
+    return predicate_type not in FOUNDATION_PREDICATES
 
 
 def _write_session(path, entries):
@@ -321,6 +337,90 @@ def test_a_session_that_never_finishes_a_tree_says_it_is_not_accepted(tmp_path):
     assert summary.fail_verdicts == 1
 
 
+def test_a_claim_reached_under_a_strategy_nobody_uses_finishes_nothing(tmp_path):
+    # One ledger read two ways. A claim whose materials are not the
+    # current ones is not evidence in the status table, so it cannot be
+    # what finished a tree in the summary of the session that filed it
+    # either -- otherwise a run would read as finished that the gateway
+    # would refuse to accept.
+    store = LedgerStore(tmp_path / "region")
+    tree, frozen = "a" * 64, "b" * 64
+    current = (Subject(kind="strategy", sha256="c" * 64),)
+    superseded = (Subject(kind="strategy", sha256="d" * 64),)
+    requests = [RequestLogLine(
+        ts="2026-01-01T00:00:00Z", session="sess-1", model="m", endpoint="submit", action="submit",
+        region="ch04:step", tree=tree, config_hash=None, outcome="submitted",
+    )]
+    for i, req in enumerate(ACCEPTANCE_REQUIREMENTS, start=1):
+        sha = frozen if req.subject_kind == "frozen" else tree
+        materials = superseded if req.predicate_type == "timing/port" else current
+        store.append_claim(_claim(
+            f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", req.predicate_type, req.subject_kind,
+            sha, "pass", "sess-1",
+            materials=(*materials, *((BINARY,) if _rests_on_the_build(req.predicate_type) else ())),
+            detail=BUILT if req.predicate_type == "build/replay" else None,
+        ))
+
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        tree=Subject(kind="tree", sha256=tree), frozen=Subject(kind="frozen", sha256=frozen),
+        baseline_tree=Subject(kind="tree", sha256="c" * 64),
+        required_materials=current, context_verified=True,
+    )
+    summary = session.summarize(
+        store, "sess-1", requests, [], session.join([], requests),
+        required_materials=current,
+    )
+
+    assert status["accepted"] is False
+    assert [row["predicateType"] for row in status["rows"] if row["status"] == "missing"] == [
+        "timing/port",
+    ]
+    assert summary.time_to_acceptance == "not accepted"
+
+
+def test_the_summary_and_the_status_table_agree_that_one_ledger_is_finished(tmp_path):
+    store = LedgerStore(tmp_path / "region")
+    tree, frozen = "a" * 64, "b" * 64
+    current = (Subject(kind="strategy", sha256="c" * 64),)
+    requests = [RequestLogLine(
+        ts="2026-01-01T00:00:00Z", session="sess-1", model="m", endpoint="submit", action="submit",
+        region="ch04:step", tree=tree, config_hash=None, outcome="submitted",
+    )]
+    baseline = _claim(
+        "baseline-time", "2026-01-01T00:00:00Z", "timing/baseline", "tree", "c" * 64,
+        "pass", "sess-1", materials=current,
+    )
+    store.append_claim(baseline)
+    claims = {}
+    for i, req in enumerate(ACCEPTANCE_REQUIREMENTS, start=1):
+        sha = frozen if req.subject_kind == "frozen" else tree
+        materials = (*current, *((BINARY,) if _rests_on_the_build(req.predicate_type) else ()))
+        if req.predicate_type == "performance/speedup":
+            materials = (*materials, timing_claim_material(claims["timing/port"]),
+                         timing_claim_material(baseline))
+        claims[req.predicate_type] = store.append_claim(_claim(
+            f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", req.predicate_type, req.subject_kind,
+            sha, "pass", "sess-1",
+            materials=materials,
+            detail=BUILT if req.predicate_type == "build/replay" else None,
+        ))
+
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        tree=Subject(kind="tree", sha256=tree), frozen=Subject(kind="frozen", sha256=frozen),
+        baseline_tree=Subject(kind="tree", sha256="c" * 64),
+        required_materials=current, context_verified=True,
+    )
+    summary = session.summarize(
+        store, "sess-1", requests, [], session.join([], requests),
+        required_materials=current,
+    )
+
+    assert status["accepted"] is True
+    assert summary.time_to_acceptance == f"{len(ACCEPTANCE_REQUIREMENTS)}s"
+
+
 def test_an_onboarding_session_is_measured_against_the_onboarding_requirements(tmp_path):
     # The same claims are a finished onboarding and not a finished port,
     # so which list a session is read against comes from its region.
@@ -350,7 +450,7 @@ def test_an_onboarding_session_is_measured_against_the_onboarding_requirements(t
 def test_the_summary_for_the_sample_session_matches_the_golden_file(tmp_path):
     store = LedgerStore(tmp_path / "region")
     store.append_claim(_claim(
-        "c-7", "2026-08-28T10:35:27Z", "sese/verified", "frozen", "def456", "pass", SAMPLE_SESSION,
+        "c-7", "2026-08-28T10:35:27Z", "sese/verified", "frozen", "def456".ljust(64, "0"), "pass", SAMPLE_SESSION,
     ))
     _, _, events = session.read_session(SAMPLE)
     requests = _sample_requests()

@@ -6,7 +6,7 @@ play, holding the same token the agent holds and able to do nothing the
 agent could not do. Everything it prints came back from the gateway.
 What it is for is to answer, in one run, whether a deployment can take a
 code that has only a name and a source tree all the way to ONBOARDED --
-the eight checks, in order, each one's evidence coming from the one
+the nine checks, in order, each one's evidence coming from the one
 before it.
 
 The part it plays is deliberately small. The tsunami baseline already
@@ -30,11 +30,11 @@ import shutil
 import sys
 from pathlib import Path
 
-from equivalent.cli.promote import BASELINE_DIR, MANIFEST_NAME, in_tree_manifest_text
 from equivalent.client import connect
+from equivalent.manifest.layout import BASELINE_DIR, MANIFEST_NAME, in_tree_manifest_text
 from equivalent.manifest.schema import IN_TREE_MANIFEST
 
-# The eight checks, in the order each one's evidence is produced. The
+# The nine checks, in the order each one's evidence is produced. The
 # gateway refuses any of them asked for early, so the order is not a
 # convenience here: it is the shape of the session.
 CHECKS = (
@@ -44,6 +44,7 @@ CHECKS = (
     "harness_replay",
     "harness_determinism",
     "harness_timing",
+    "harness_original",
     "harness_self_check",
     "harness_property",
 )
@@ -122,7 +123,7 @@ def walk(client, region: str, code: str, working: Path, programs: Path, config: 
         f"the onboarding strategy turned files away: {receipt['rejected']}",
     )
 
-    heading(5, "the eight checks, in the order their evidence is produced")
+    heading(5, "the nine checks, in the order their evidence is produced")
     for action in CHECKS:
         body = client.run(action, region)
         if body.get("refused"):

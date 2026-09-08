@@ -2,27 +2,42 @@ import json
 
 import pytest
 
+
 from equivalent.ledger.acceptance import (
     ACCEPTANCE_REQUIREMENTS,
+    Requirement,
     ONBOARDING,
     ONBOARDING_REQUIREMENTS,
     PORTING,
     requirements_for,
 )
+from equivalent.ledger.evidence import BUILD_PREDICATE, FOUNDATION_PREDICATES
 from equivalent.ledger.status import compute_history, compute_status
 from equivalent.ledger.store import LedgerStore
+from equivalent.ledger.subjects import Subject, hash_bytes
+from equivalent.tests.fakes import build_claim_detail
+
+# The executable the build in these ledgers produced. A claim that rests
+# on a build only counts when it names that executable, so a ledger that
+# is supposed to read as finished has to say so.
+BINARY = {"kind": "binary", "sha256": "e" * 64}
+BASELINE_TREE = Subject(kind="tree", sha256="c" * 64)
 
 
-def _claim(claim_id, ts, subject_kind, sha256, predicate_type, verdict):
+def _claim(claim_id, ts, subject_kind, sha256, predicate_type, verdict,
+           detail=None, materials=()):
     return {
         "id": claim_id,
         "ts": ts,
         "subject": [{"kind": subject_kind, "sha256": sha256}],
         "predicateType": predicate_type,
-        "predicate": {"tool": "t", "version": "0.1", "configHash": "cfg", "verdict": verdict, "detail": {}},
-        "materials": [],
+        "predicate": {
+            "tool": "t", "version": "0.1", "configHash": "cfg", "verdict": verdict,
+            "detail": detail or {},
+        },
+        "materials": list(materials),
         "session": "sess-1",
-        "version": 1,
+        "version": 2,
     }
 
 
@@ -31,11 +46,56 @@ def _write_claims(store, claims):
     store.claims_path.write_text(text)
 
 
-def _all_passing_claims(tree, frozen):
+def _all_passing_claims(tree, frozen, phase=PORTING):
+    """A ledger in which every requirement of one phase has passed.
+
+    The build claim names the executable it produced and every later
+    claim carries that executable among its materials, which is what a
+    real session leaves behind and what the reading below asks for.
+    """
     claims = []
-    for i, req in enumerate(ACCEPTANCE_REQUIREMENTS, start=1):
+    for i, req in enumerate(requirements_for(phase), start=1):
         sha = frozen if req.subject_kind == "frozen" else tree
-        claims.append(_claim(f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", req.subject_kind, sha, req.predicate_type, "pass"))
+        claims.append(_claim(
+            f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", req.subject_kind, sha,
+            req.predicate_type, "pass",
+            detail=(
+                build_claim_detail(phase, BINARY["sha256"])
+                if req.predicate_type == BUILD_PREDICATE[phase] else None
+            ),
+            materials=() if req.predicate_type in FOUNDATION_PREDICATES else (BINARY,),
+        ))
+    # A performance verdict compares two observations, rather than merely
+    # two binaries.  Give the synthetic finished port its current baseline
+    # and port timing observations, then make the verdict name those exact
+    # claim identities just as the component does.
+    if phase == PORTING:
+        baseline_id = "baseline-time"
+        claims.append(_claim(
+            # A baseline claim is filed against a tree subject.  Keep its
+            # timestamp before the port's evidence so the status reader's
+            # fallback current-tree selection remains the port tree.
+            baseline_id, "2026-01-01T00:00:00Z", "tree", "c" * 64,
+            "timing/baseline", "pass",
+        ))
+        by_predicate = {claim["predicateType"]: claim for claim in claims}
+        performance = by_predicate.get("performance/speedup")
+        port = by_predicate["timing/port"]
+        if performance is not None:
+          performance["materials"].extend([
+            {
+                "kind": "timing_claim",
+                "sha256": hash_bytes(
+                    f"equivalent:timing-claim:v1:timing/port:{port['id']}".encode()
+                ),
+            },
+            {
+                "kind": "timing_claim",
+                "sha256": hash_bytes(
+                    f"equivalent:timing-claim:v1:timing/baseline:{baseline_id}".encode()
+                ),
+            },
+        ])
     return claims
 
 
@@ -47,7 +107,11 @@ def test_status_reports_the_newer_tree(tmp_path):
         _claim("c-0002", "2026-01-02T00:00:00Z", "tree", tree_new, "build/replay", "pass"),
     ])
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
+        required_materials=(), context_verified=True,
+    )
     assert status["tree"] == tree_new
 
 
@@ -71,9 +135,35 @@ def test_status_is_accepted_when_every_requirement_passes_on_one_tree(tmp_path):
     store = LedgerStore(tmp_path / "region")
     _write_claims(store, _all_passing_claims(tree, frozen))
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
+        required_materials=(), context_verified=True,
+    )
     assert status["accepted"] is True
+    assert status["context_verified"] is True
+    assert "note" not in status
     assert all(row["status"] == "present" and row["verdict"] == "pass" for row in status["rows"])
+
+
+def test_a_reader_that_cannot_vouch_for_the_executables_is_told_why_it_is_not_accepted(tmp_path):
+    # Every requirement passed, and the reading is still withheld: what
+    # is missing is anyone able to say the executables these claims were
+    # reached against are the ones in place now.
+    tree, frozen = "a" * 64, "b" * 64
+    store = LedgerStore(tmp_path / "region")
+    _write_claims(store, _all_passing_claims(tree, frozen))
+
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
+        required_materials=(), context_verified=False,
+    )
+
+    assert status["accepted"] is False
+    assert status["context_verified"] is False
+    assert "executables" in status["note"]
+    assert all(row["status"] == "present" for row in status["rows"])
 
 
 def test_status_reports_a_removed_claim_as_missing_with_its_producing_action(tmp_path):
@@ -82,7 +172,11 @@ def test_status_reports_a_removed_claim_as_missing_with_its_producing_action(tmp
     claims = [c for c in _all_passing_claims(tree, frozen) if c["predicateType"] != "regression/holdout"]
     _write_claims(store, claims)
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
+        required_materials=(), context_verified=True,
+    )
     assert status["accepted"] is False
     missing = [row for row in status["rows"] if row["status"] == "missing"]
     assert len(missing) == 1
@@ -100,7 +194,11 @@ def test_a_failing_latest_claim_does_not_satisfy_a_requirement(tmp_path):
     claims.append(_claim("c-0099", "2026-01-02T00:00:00Z", "tree", tree, "build/replay", "fail"))
     _write_claims(store, claims)
 
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
+        required_materials=(), context_verified=True,
+    )
     assert status["accepted"] is False
     row = next(r for r in status["rows"] if r["predicateType"] == "build/replay")
     assert row["status"] == "missing"
@@ -111,21 +209,68 @@ def test_a_failing_latest_claim_does_not_satisfy_a_requirement(tmp_path):
 
 def test_status_on_an_empty_ledger_has_no_tree_and_is_not_accepted(tmp_path):
     store = LedgerStore(tmp_path / "region")
-    status = compute_status(store, ACCEPTANCE_REQUIREMENTS, PORTING)
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
+        required_materials=(), context_verified=True,
+    )
     assert status["tree"] is None
     assert status["accepted"] is False
     assert all(row["status"] == "missing" for row in status["rows"])
 
 
+def test_legacy_claim_is_reported_stale_and_cannot_satisfy_requirement(tmp_path):
+    tree = "a" * 64
+    store = LedgerStore(tmp_path / "region")
+    legacy = _claim("c-0001", "2026-01-01T00:00:00Z", "tree", tree, "build/replay", "pass")
+    legacy["version"] = 1
+    _write_claims(store, [legacy])
+
+    status = compute_status(
+        store,
+        [next(r for r in ACCEPTANCE_REQUIREMENTS if r.predicate_type == "build/replay")],
+        PORTING,
+        required_materials=(),
+        context_verified=True,
+    )
+
+    assert status["accepted"] is False
+    assert status["rows"][0]["status"] == "missing"
+    assert status["rows"][0]["evidence_status"] == "stale"
+    assert status["rows"][0]["claim_id"] == "c-0001"
+
+
+def test_changed_strategy_material_invalidates_an_otherwise_passing_claim(tmp_path):
+    tree = "a" * 64
+    store = LedgerStore(tmp_path / "region")
+    old_strategy = {"kind": "strategy", "sha256": "1" * 64}
+    new_strategy = Subject(kind="strategy", sha256="2" * 64)
+    claim = _claim("c-0001", "2026-01-01T00:00:00Z", "tree", tree, "build/replay", "pass")
+    claim["materials"] = [old_strategy]
+    _write_claims(store, [claim])
+
+    status = compute_status(
+        store,
+        [next(r for r in ACCEPTANCE_REQUIREMENTS if r.predicate_type == "build/replay")],
+        PORTING,
+        tree=Subject(kind="tree", sha256=tree),
+        required_materials=[new_strategy],
+        context_verified=True,
+    )
+
+    assert status["accepted"] is False
+    assert status["rows"][0]["evidence_status"] == "stale"
+
+
 def test_an_onboarding_region_is_judged_by_the_onboarding_list(tmp_path):
     tree = "3" * 64
     store = LedgerStore(tmp_path / "region")
-    _write_claims(store, [
-        _claim(f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", "tree", tree, req.predicate_type, "pass")
-        for i, req in enumerate(ONBOARDING_REQUIREMENTS, start=1)
-    ])
+    _write_claims(store, _all_passing_claims(tree, tree, ONBOARDING))
 
-    status = compute_status(store, requirements_for(ONBOARDING), ONBOARDING)
+    status = compute_status(
+        store, requirements_for(ONBOARDING), ONBOARDING,
+        required_materials=(), context_verified=True,
+    )
 
     assert status["phase"] == ONBOARDING
     assert [row["predicateType"] for row in status["rows"]] == [
@@ -140,12 +285,72 @@ def test_an_onboarding_region_is_judged_by_the_onboarding_list(tmp_path):
 def test_the_same_ledger_read_as_a_port_is_missing_everything(tmp_path):
     tree = "3" * 64
     store = LedgerStore(tmp_path / "region")
-    _write_claims(store, [
-        _claim(f"c-{i:04d}", f"2026-01-01T00:00:{i:02d}Z", "tree", tree, req.predicate_type, "pass")
-        for i, req in enumerate(ONBOARDING_REQUIREMENTS, start=1)
-    ])
+    _write_claims(store, _all_passing_claims(tree, tree, ONBOARDING))
 
-    status = compute_status(store, requirements_for(PORTING), PORTING)
+    status = compute_status(
+        store, requirements_for(PORTING), PORTING,
+        required_materials=(), context_verified=True,
+    )
 
     assert status["phase"] == PORTING
     assert all(row["status"] == "missing" for row in status["rows"])
+
+
+def test_the_answer_carries_the_word_its_phase_finishes_with(tmp_path):
+    # Which word a finished region is called by depends on the phase, and
+    # it travels with the answer so that a reader renders it rather than
+    # keeping a second copy of which word goes with which phase.
+    store = LedgerStore(tmp_path / "region")
+
+    porting = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
+        required_materials=(), context_verified=True,
+    )
+    onboarding = compute_status(
+        store, requirements_for(ONBOARDING), ONBOARDING,
+        required_materials=(), context_verified=True,
+    )
+
+    assert porting["finished_word"] == "ACCEPTED"
+    assert onboarding["finished_word"] == "ONBOARDED"
+
+
+def test_a_claim_that_does_not_name_the_current_build_does_not_meet_its_requirement(tmp_path):
+    # The caller does not say which claims rest on a build; the reading
+    # works that out from what it was already given. So a pass reached
+    # against an executable that is not what the current build produced
+    # cannot stand in for one that was.
+    tree, frozen = "a" * 64, "b" * 64
+    store = LedgerStore(tmp_path / "region")
+    claims = _all_passing_claims(tree, frozen)
+    for claim in claims:
+        if claim["predicateType"] == "gpu/executed":
+            claim["materials"] = []
+    _write_claims(store, claims)
+
+    status = compute_status(
+        store, ACCEPTANCE_REQUIREMENTS, PORTING,
+        baseline_tree=BASELINE_TREE,
+        required_materials=(), context_verified=True,
+    )
+
+    assert status["accepted"] is False
+    assert [row["predicateType"] for row in status["rows"] if row["status"] == "missing"] == [
+        "gpu/executed",
+    ]
+
+
+def test_a_requirement_about_neither_the_tree_nor_the_frozen_set_is_refused(tmp_path):
+    # The precondition table has a row that rests on a claim about the
+    # pristine baseline tree. A requirement is never about that, and
+    # reading an unknown kind as the frozen set would answer a question
+    # about the wrong subject while looking like it answered the right
+    # one.
+    store = LedgerStore(tmp_path / "region")
+
+    with pytest.raises(ValueError, match="baseline_tree"):
+        compute_status(
+            store, [Requirement("timing/baseline", "baseline_tree", "time_baseline")],
+            PORTING, required_materials=(), context_verified=True,
+        )

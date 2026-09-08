@@ -20,12 +20,11 @@ from __future__ import annotations
 import json
 import shlex
 import subprocess
-import tempfile
 from pathlib import Path
 
-from equivalent.gateway.submit import materialize_tree
-from equivalent.strategy.schema import Strategy
-
+from equivalent.ledger.vocabulary import PASS
+from .context import CheckContext
+from .result import CheckResult, failed
 from .errors import ComponentError
 
 
@@ -38,48 +37,65 @@ class AnalyzerError(ComponentError):
     """
 
 
-def check(repo_dir, ref: str, spec_path: str, strategy: Strategy) -> dict:
+def _reason(item: dict) -> str:
+    """One analyzer finding as the line a person reads it in.
+
+    A control-flow finding names where it is; a finding about the spec
+    itself has no line to name, so it says what is wrong instead.
+    """
+    if "reason" in item:
+        return f"spec: {item['reason']}"
+    return f"{item.get('label')}:{item.get('line')}: {str(item.get('keyword', '')).upper()}: {item.get('text')}"
+
+
+def check(ctx: CheckContext, config: dict) -> CheckResult:
     """Run the strategy's analyzer against the region's current tree.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}, "allow_globs": [...] | None}.
-    `allow_globs` is set only on a pass -- it is the region's new
-    allow-list, which the caller must use to compute the subject this
-    claim is filed against (see the fixed-point note in
-    equivalent.gateway.app), not the frozen value that was current before
-    this check ran.
+    A pass records the region's new allow-list in its detail. That list,
+    and not the frozen value that was current before this check ran, is
+    what the caller must use to compute the subject a later claim is
+    filed against (see the fixed-point note in equivalent.gateway.app).
     """
-    with tempfile.TemporaryDirectory() as scratch:
-        materialize_tree(repo_dir, ref, scratch)
-        spec_file = Path(scratch) / spec_path
-        result = subprocess.run(
-            [*shlex.split(strategy.analyzer_command), str(spec_file), "--repo-root", scratch, "--json"],
-            capture_output=True, text=True,
+    scratch = ctx.tree.directory
+    spec_file = Path(scratch) / ctx.spec_path
+    result = subprocess.run(
+        [*shlex.split(ctx.strategy.analyzer_command), str(spec_file),
+         "--repo-root", scratch, "--json"],
+        capture_output=True, text=True,
+    )
+    try:
+        analysis = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise AnalyzerError(
+            f"analyzer produced no usable output (exit {result.returncode}): {result.stderr[-2000:]}"
+        ) from exc
+
+    if analysis["verdict"] != PASS:
+        return failed(
+            {
+                "violations": analysis["violations"], "notes": analysis["notes"],
+                "resolved_ranges": analysis.get("resolved_ranges", []),
+                "range_count": analysis.get("range_count", 0),
+                "total_lines": analysis.get("total_lines", 0),
+            },
+            [_reason(item) for item in analysis["violations"]],
         )
-        try:
-            analysis = json.loads(result.stdout)
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise AnalyzerError(
-                f"analyzer produced no usable output (exit {result.returncode}): {result.stderr[-2000:]}"
-            ) from exc
 
-    if analysis["verdict"] != "pass":
-        return {
-            "verdict": "fail",
-            "detail": {"violations": analysis["violations"], "notes": analysis["notes"]},
-            "allow_globs": None,
-        }
-
-    candidate_globs = sorted({*analysis["src_files"], spec_path})
-    outside = [g for g in candidate_globs if not strategy.allows(g)]
+    candidate_globs = sorted({*analysis["src_files"], ctx.spec_path})
+    outside = [g for g in candidate_globs if not ctx.strategy.allows(g)]
     if outside:
-        return {
-            "verdict": "fail",
-            "detail": {"reason": "not covered by the strategy's allow_globs", "paths": outside},
-            "allow_globs": None,
-        }
+        return failed(
+            {"reason": "not covered by the strategy's allow_globs", "paths": outside},
+            [f"{path} is not covered by the strategy's allow_globs" for path in outside],
+        )
 
-    return {
-        "verdict": "pass",
-        "detail": {"file_list": analysis["src_files"], "allow_globs": candidate_globs},
-        "allow_globs": candidate_globs,
-    }
+    return CheckResult(
+        verdict=PASS,
+        detail={
+            "file_list": analysis["src_files"], "allow_globs": candidate_globs,
+            "resolved_ranges": analysis.get("resolved_ranges", []),
+            "range_count": analysis.get("range_count", 0),
+            "total_lines": analysis.get("total_lines", 0),
+            "notes": analysis.get("notes", []),
+        },
+    )

@@ -16,20 +16,25 @@ configuration, and because they are part of what the gateway hashes, a
 repeat at the same seed is the same search and comes back as the claim
 already filed, while a fresh seed is a new one.
 
-Nothing is judged here beyond pass or fail: the builder ran pytest on the
-code's own module, and what the module asserted is the code's business.
-What this adds is the record of which module was run, at which seed, over
-how many examples, and what the run printed -- which is where Hypothesis
-writes the minimized failing example a person needs.
+The builder's protected execution trace must observe the bound replay
+executable at least once. Pytest's counts still come from the submitted
+process and `max_examples` is a Hypothesis ceiling rather than an observed
+count, so the claim records both facts separately. What the module asserted
+remains the code owner's business.
 """
 from __future__ import annotations
 
 import random
 
-from equivalent.gateway.submit import attempt_id_for
+from equivalent.ledger.artifacts import binary_artifacts
+from equivalent.ledger.vocabulary import EXECUTABLE_IDENTITY_KEY, FAIL, PASS
 from equivalent.manifest.schema import Manifest
 
+from . import backend
+from .context import CheckContext
+from .result import CheckResult
 from .errors import ComponentError
+from .names import REPLAY_ROLE
 
 # How many examples each property draws when a request does not say. Large
 # enough that a search is worth calling one, small enough that a gate stays
@@ -56,7 +61,7 @@ def properties_module(manifest: Manifest) -> str:
 
 
 def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
-               *, seed=None, max_examples: int = DEFAULT_MAX_EXAMPLES) -> dict:
+               *, seed=None, max_examples: int = DEFAULT_MAX_EXAMPLES) -> CheckResult:
     """One property run and the verdict it becomes, wherever it was asked for.
 
     The same call and the same detail serve both the check a port faces
@@ -65,54 +70,119 @@ def run_module(builder, attempt_id: str, manifest: Manifest, cases: dict,
     the caller's to name. A seed of None is drawn here and written into
     the detail, because a search nobody can repeat is not evidence.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}. Raises
-    ComponentError if the builder could not be reached.
+    Raises ComponentError if the builder could not be reached, or answered
+    something that cannot be read as a property run at all.
     """
+    # The action table is the gate on a request's `max_examples`, checked
+    # before the gateway dispatches; a caller inside the harness passes a
+    # constant of its own.
+    if max_examples <= 0:
+        raise ComponentError("property max_examples must be a positive integer")
+    examples = max_examples
     drawn = random.SystemRandom().getrandbits(SEED_BITS) if seed is None else int(seed)
-    examples = int(max_examples)
     module = properties_module(manifest)
-    replay = manifest.build.targets["replay"]
+    replay = manifest.build.targets[REPLAY_ROLE]
 
-    try:
-        resp = builder.properties(
-            attempt_id, replay.executable, module, cases, drawn, examples,
+    resp = backend.properties(
+        builder, attempt_id, replay.executable, module, cases, drawn, examples,
+    )
+    artifacts = binary_artifacts(resp.executable_identity, executable=replay.executable)
+
+    problems = []
+    if resp.seed != drawn:
+        problems.append("builder returned a different seed from the property run requested")
+    if resp.max_examples != examples:
+        problems.append(
+            "builder returned a different max_examples from the property run requested"
         )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/properties call failed: {exc}") from exc
 
-    return {
-        "verdict": "pass" if resp.get("ok") else "fail",
-        "detail": {
-            "module": module,
-            "seed": drawn,
-            "max_examples": examples,
-            "passed": resp.get("passed", 0),
-            "failed": resp.get("failed", 0),
-            "errors": resp.get("errors", 0),
-            "log_tail": (resp.get("log_tail") or "")[-LOG_TAIL_CHARS:],
-        },
+    counts = resp.counts()
+    successful = (
+        counts["passed"] > 0
+        and counts["failed"] == 0
+        and counts["errors"] == 0
+        and counts["skipped"] == 0
+        and counts["deselected"] == 0
+        and counts["xfailed"] == 0
+        and counts["xpassed"] == 0
+        and counts["collected"] == counts["passed"]
+        and counts["executed"] == counts["passed"]
+    )
+    if counts["passed"] == 0:
+        problems.append("no property test passed")
+    if counts["skipped"]:
+        problems.append(f"{counts['skipped']} property test(s) were skipped")
+    expected_collected = sum(
+        counts[name]
+        for name in ("passed", "failed", "errors", "skipped", "xfailed", "xpassed")
+    )
+    expected_executed = sum(
+        counts[name] for name in ("passed", "failed", "errors", "xfailed", "xpassed")
+    )
+    if counts["collected"] != expected_collected or counts["executed"] != expected_executed:
+        problems.append("builder's property collection counts are internally inconsistent")
+    if counts["deselected"]:
+        problems.append(f"{counts['deselected']} property test(s) were deselected")
+    for name in ("xfailed", "xpassed"):
+        if counts[name]:
+            problems.append(f"{counts[name]} property test(s) were {name}")
+    if not resp.replays_observed:
+        problems.append(
+            "protected execution evidence observed no invocation of the bound replay executable"
+        )
+    if resp.ok is not successful:
+        problems.append("builder's property outcome is inconsistent with its test counts")
+
+    detail = {
+        "module": module,
+        "seed": drawn,
+        "max_examples": examples,
+        **counts,
+        "replays_observed": resp.replays_observed,
+        "counts_source": resp.counts_source,
+        "log_tail": resp.log_tail[-LOG_TAIL_CHARS:],
     }
+    if resp.executable_identity is not None:
+        detail[EXECUTABLE_IDENTITY_KEY] = resp.executable_identity
+    if problems:
+        detail["problems"] = problems
+        return CheckResult(
+            verdict=FAIL, detail=detail, reasons=tuple(problems), binary_artifacts=artifacts,
+        )
+    if not successful:
+        return CheckResult(
+            verdict=FAIL, detail=detail,
+            reasons=("the property run did not pass every test it collected",),
+            binary_artifacts=artifacts,
+        )
+    return CheckResult(verdict=PASS, detail=detail, binary_artifacts=artifacts)
 
 
-def check(region_id: str, tree_sha: str, manifest: Manifest, visible_cases: dict, builder,
-          *, seed=None, max_examples: int = DEFAULT_MAX_EXAMPLES) -> dict:
+def check(ctx: CheckContext, config: dict) -> CheckResult:
     """Run the code's properties on the submitted tree, and say what happened.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}. Raises
-    ComponentError when there is nothing to run -- a code that declares no
-    properties module, or a region with no visible dataset to draw a
-    corpus from -- because neither is a statement about whether this port
-    is correct.
+    A seed the request names is the same search again, and the gateway's
+    config hash carries it, so a repeat at that seed comes back as the
+    claim already filed. A request that names none has one drawn in the
+    run and written into the claim.
+
+    Raises ComponentError when there is nothing to run -- a code that
+    declares no properties module, or a region with no visible dataset to
+    draw a corpus from -- because neither is a statement about whether
+    this port is correct.
     """
+    manifest = ctx.provenance.manifest()
     if manifest.properties is None:
         raise ComponentError(
             f"code '{manifest.name}' declares no properties module, so there are no "
             f"invariants to run against this port"
         )
+    visible_cases = ctx.visible_cases
     if not visible_cases:
         raise ComponentError("no visible dataset configured for this region")
 
     return run_module(
-        builder, attempt_id_for(region_id, tree_sha), manifest, visible_cases,
-        seed=seed, max_examples=max_examples,
+        ctx.builder, ctx.provenance.attempt_id(), manifest, visible_cases,
+        seed=config.get("seed"),
+        max_examples=config.get("max_examples", DEFAULT_MAX_EXAMPLES),
     )

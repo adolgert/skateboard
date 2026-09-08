@@ -1,0 +1,30 @@
+# Human-reviewed and stored outside the coding agent's working copy.
+version: 1
+provenance: "REPLACE: upstream revision, reviewer, and any build/output adapter"
+source:
+  root: original
+  patterns: ["*.f90", "*.F90", "src/*.f90", "src/*.F90"]
+build:
+  makefile: Makefile
+  target: original
+  executable: original
+runs:
+  - name: odd-rectangular
+    original_args: ["13", "7"]
+    candidate_args: ["13", "7"]
+    budget_s: 120
+    outputs:
+      - original: field.npy
+        candidate: field.npy
+        comparison: array_exact
+  - name: transposed-rectangle
+    original_args: ["7", "13"]
+    candidate_args: ["7", "13"]
+    budget_s: 120
+    outputs:
+      - original: field.npy
+        candidate: field.npy
+        comparison: array_exact
+# For a justified floating-point change use comparison: array_tolerance and
+# tolerance: {abs: 1.0e-12, rel: 1.0e-10, ulp: 4} on that output. Calibrate
+# these numbers for the application; the example is not a recommended band.

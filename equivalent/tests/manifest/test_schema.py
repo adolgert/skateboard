@@ -112,6 +112,37 @@ def test_a_loaded_manifest_names_itself_as_a_subject(tmp_path):
     assert subject.sha256 == manifest.sha256
 
 
+def test_build_target_declares_typed_runtime_artifacts(tmp_path):
+    raw = copy.deepcopy(MANIFEST)
+    raw["build"]["targets"]["replay"]["runtime_artifacts"] = [
+        {"path": "lib/libkernel.so", "kind": "shared_library"},
+        {"path": "modules/kernel.ptx", "kind": "gpu_module", "when_language": "cuda"},
+        {"path": "modules/kernel.cubin", "kind": "gpu_module", "when_language": "ptx"},
+    ]
+
+    manifest = load_manifest(_write(tmp_path, raw))
+
+    assert [
+        (artifact.path, artifact.kind, artifact.when_language)
+        for artifact in manifest.build.targets["replay"].runtime_artifacts
+    ] == [
+        ("lib/libkernel.so", "shared_library", None),
+        ("modules/kernel.ptx", "gpu_module", "cuda"),
+        ("modules/kernel.cubin", "gpu_module", "ptx"),
+    ]
+
+
+@pytest.mark.parametrize("path", ["../kernel.ptx", "/tmp/kernel.ptx", "a/../../kernel.ptx"])
+def test_manifest_rejects_runtime_artifacts_outside_the_tree(tmp_path, path):
+    raw = copy.deepcopy(MANIFEST)
+    raw["build"]["targets"]["replay"]["runtime_artifacts"] = [
+        {"path": path, "kind": "gpu_module"},
+    ]
+
+    with pytest.raises(ValueError, match="normalized path inside the tree"):
+        load_manifest(_write(tmp_path, raw))
+
+
 @pytest.mark.parametrize("field", sorted(MANIFEST))
 def test_every_required_field_is_named_when_it_is_missing(tmp_path, field):
     raw = copy.deepcopy(MANIFEST)
@@ -277,6 +308,19 @@ def test_a_timing_run_declares_no_environment_by_default(tmp_path):
     manifest = load_manifest(_write(tmp_path, MANIFEST))
 
     assert manifest.timing.env == {}
+    assert manifest.timing.min_median_speedup is None
+
+
+def test_timing_performance_floor_is_loaded_and_must_be_a_real_speedup(tmp_path):
+    raw = copy.deepcopy(MANIFEST)
+    raw["timing"]["performance"] = {"min_median_speedup": 1.25}
+
+    assert load_manifest(_write(tmp_path, raw)).timing.min_median_speedup == 1.25
+
+    for invalid in (True, 1, 0.99, float("inf"), 10 ** 500):
+        raw["timing"]["performance"] = {"min_median_speedup": invalid}
+        with pytest.raises(ValueError, match="min_median_speedup"):
+            load_manifest(_write(tmp_path, raw))
 
 
 def test_the_timing_environment_is_carried_as_written(tmp_path):

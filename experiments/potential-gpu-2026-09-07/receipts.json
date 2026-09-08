@@ -1,0 +1,4650 @@
+[
+  {
+    "phase": "onboarding",
+    "action": "submit",
+    "result": {
+      "tree": "d8a2aab1eaceff6928254de827e731b7cabfb5782f29a4775399844bd0b5d1e6",
+      "frozen": "4232706740af946037d263cf477e729b27db8a9ba4da989d0e93dd45d309d064",
+      "rejected": [],
+      "not_sent": [],
+      "committed": true
+    }
+  },
+  {
+    "phase": "onboarding",
+    "action": "manifest_check",
+    "result": {
+      "claim_id": "c-0001",
+      "verdict": "pass",
+      "detail": {
+        "manifest_sha256": "a573b3eab323f2f30798b0900eecbf1a258c708cee371f1737ab5bc9f145471d",
+        "name": "potential",
+        "targets": {
+          "capture": "capture",
+          "replay": "replay",
+          "timing": "timing"
+        },
+        "inputs": [
+          "x",
+          "y",
+          "z",
+          "q"
+        ],
+        "outputs": [
+          "phi"
+        ],
+        "datasets": [
+          "holdout",
+          "visible"
+        ]
+      }
+    }
+  },
+  {
+    "phase": "onboarding",
+    "action": "harness_build",
+    "result": {
+      "claim_id": "c-0002",
+      "verdict": "pass",
+      "detail": {
+        "strategies": {
+          "cpu_reference": {
+            "attempt_id": "potential-onboard-19a2ef8f50c159f9-d8a2aab1eaceff6928254de827e731b7cabfb5782f29a4775399844bd0b5d1e6-cpu_reference-ebd2577b0115",
+            "flags": [
+              "-O2",
+              "-stdpar=multicore"
+            ],
+            "toolchains": {
+              "fortran": {
+                "compiler": "nvfortran",
+                "flags": [
+                  "-O2",
+                  "-stdpar=multicore"
+                ]
+              }
+            },
+            "languages_compiled": [
+              "fortran"
+            ],
+            "targets": {
+              "replay": {
+                "executable": "replay",
+                "built": true,
+                "sha256": "5f1c6bd56d7fd8cc5e84afc8f0ecb26f196d84230e7e8633029cb524956179b9",
+                "size": 240248,
+                "role": "replay",
+                "kind": "executable",
+                "roles": [
+                  "replay"
+                ]
+              },
+              "timing": {
+                "executable": "timing",
+                "built": true,
+                "sha256": "2e319ecdc5be5e0baf504d839a68d5daacd32ad601771c730cffc7621f0bc560",
+                "size": 244792,
+                "role": "timing",
+                "kind": "executable",
+                "roles": [
+                  "timing"
+                ]
+              },
+              "capture": {
+                "executable": "capture",
+                "built": true,
+                "sha256": "2e800f5061627d6030054fb44564660d34c3ce1e83792ec99bff86c555103465",
+                "size": 245160,
+                "role": "capture",
+                "kind": "executable",
+                "roles": [
+                  "capture"
+                ]
+              }
+            },
+            "compiles": [
+              {
+                "argv": [
+                  "-O2",
+                  "-stdpar=multicore",
+                  "-module",
+                  ".",
+                  "/opt/harness/npy_io.f90",
+                  "src/potential.f90",
+                  "src/initial.f90",
+                  "harness/replay.f90",
+                  "-o",
+                  "replay"
+                ],
+                "cwd": ".",
+                "language": "fortran",
+                "compiler": null,
+                "inputs": [
+                  "/opt/harness/npy_io.f90",
+                  "src/potential.f90",
+                  "src/initial.f90",
+                  "harness/replay.f90"
+                ],
+                "link_inputs": [],
+                "kind": "compile",
+                "output": "replay",
+                "required_flags": [
+                  "-O2",
+                  "-stdpar=multicore"
+                ],
+                "has_flags": true,
+                "outside": [],
+                "audit_errors": []
+              },
+              {
+                "argv": [
+                  "-O2",
+                  "-stdpar=multicore",
+                  "-module",
+                  ".",
+                  "/opt/harness/npy_io.f90",
+                  "src/potential.f90",
+                  "src/initial.f90",
+                  "harness/main.f90",
+                  "-o",
+                  "timing"
+                ],
+                "cwd": ".",
+                "language": "fortran",
+                "compiler": null,
+                "inputs": [
+                  "/opt/harness/npy_io.f90",
+                  "src/potential.f90",
+                  "src/initial.f90",
+                  "harness/main.f90"
+                ],
+                "link_inputs": [],
+                "kind": "compile",
+                "output": "timing",
+                "required_flags": [
+                  "-O2",
+                  "-stdpar=multicore"
+                ],
+                "has_flags": true,
+                "outside": [],
+                "audit_errors": []
+              },
+              {
+                "argv": [
+                  "-O2",
+                  "-stdpar=multicore",
+                  "-module",
+                  ".",
+                  "/opt/harness/npy_io.f90",
+                  "src/potential.f90",
+                  "src/initial.f90",
+                  "harness/capture.f90",
+                  "-o",
+                  "capture"
+                ],
+                "cwd": ".",
+                "language": "fortran",
+                "compiler": null,
+                "inputs": [
+                  "/opt/harness/npy_io.f90",
+                  "src/potential.f90",
+                  "src/initial.f90",
+                  "harness/capture.f90"
+                ],
+                "link_inputs": [],
+                "kind": "compile",
+                "output": "capture",
+                "required_flags": [
+                  "-O2",
+                  "-stdpar=multicore"
+                ],
+                "has_flags": true,
+                "outside": [],
+                "audit_errors": []
+              }
+            ],
+            "compiler_audit": {
+              "protected": true,
+              "collector": "strace/process+cwd",
+              "observed_executions": 95,
+              "compiler_invocations": 3,
+              "language_invocations": {
+                "fortran": 3
+              }
+            },
+            "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+            "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+            "minfo_excerpt": "WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.",
+            "log_tail": "src/potential.f90 src/initial.f90 harness/capture.f90  -o capture \nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.b9a8ed29c80c\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/replay.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/replay.f90:\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.b9a8ed29c80c\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/main.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/main.f90:\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.b9a8ed29c80c\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n"
+          },
+          "onboarding": {
+            "attempt_id": "potential-onboard-19a2ef8f50c159f9-d8a2aab1eaceff6928254de827e731b7cabfb5782f29a4775399844bd0b5d1e6-onboarding-a4963c49961a",
+            "flags": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel"
+            ],
+            "toolchains": {
+              "fortran": {
+                "compiler": "nvfortran",
+                "flags": [
+                  "-O2",
+                  "-stdpar=gpu",
+                  "-gpu=cc89,mem:managed",
+                  "-Minfo=accel"
+                ]
+              }
+            },
+            "languages_compiled": [
+              "fortran"
+            ],
+            "targets": {
+              "replay": {
+                "executable": "replay",
+                "built": true,
+                "sha256": "e43e35610a214214a560f6fb68a5d6180b004802cbba310e1f128b3df5a7ccf4",
+                "size": 307912,
+                "role": "replay",
+                "kind": "executable",
+                "roles": [
+                  "replay"
+                ]
+              },
+              "timing": {
+                "executable": "timing",
+                "built": true,
+                "sha256": "c940077db08f053dc5bbd3e5b2d5349f895fa59798652ce238d4efb81ec98286",
+                "size": 308376,
+                "role": "timing",
+                "kind": "executable",
+                "roles": [
+                  "timing"
+                ]
+              },
+              "capture": {
+                "executable": "capture",
+                "built": true,
+                "sha256": "d3b9569312d9a6c8186f82ce3ad5c202112475498aadff2119d40d0e1d476519",
+                "size": 308712,
+                "role": "capture",
+                "kind": "executable",
+                "roles": [
+                  "capture"
+                ]
+              }
+            },
+            "compiles": [
+              {
+                "argv": [
+                  "-O2",
+                  "-stdpar=gpu",
+                  "-gpu=cc89,mem:managed",
+                  "-Minfo=accel",
+                  "-module",
+                  ".",
+                  "/opt/harness/npy_io.f90",
+                  "src/potential.f90",
+                  "src/initial.f90",
+                  "harness/replay.f90",
+                  "-o",
+                  "replay"
+                ],
+                "cwd": ".",
+                "language": "fortran",
+                "compiler": null,
+                "inputs": [
+                  "/opt/harness/npy_io.f90",
+                  "src/potential.f90",
+                  "src/initial.f90",
+                  "harness/replay.f90"
+                ],
+                "link_inputs": [],
+                "kind": "compile",
+                "output": "replay",
+                "required_flags": [
+                  "-O2",
+                  "-stdpar=gpu",
+                  "-gpu=cc89,mem:managed",
+                  "-Minfo=accel"
+                ],
+                "has_flags": true,
+                "outside": [],
+                "audit_errors": []
+              },
+              {
+                "argv": [
+                  "-O2",
+                  "-stdpar=gpu",
+                  "-gpu=cc89,mem:managed",
+                  "-Minfo=accel",
+                  "-module",
+                  ".",
+                  "/opt/harness/npy_io.f90",
+                  "src/potential.f90",
+                  "src/initial.f90",
+                  "harness/main.f90",
+                  "-o",
+                  "timing"
+                ],
+                "cwd": ".",
+                "language": "fortran",
+                "compiler": null,
+                "inputs": [
+                  "/opt/harness/npy_io.f90",
+                  "src/potential.f90",
+                  "src/initial.f90",
+                  "harness/main.f90"
+                ],
+                "link_inputs": [],
+                "kind": "compile",
+                "output": "timing",
+                "required_flags": [
+                  "-O2",
+                  "-stdpar=gpu",
+                  "-gpu=cc89,mem:managed",
+                  "-Minfo=accel"
+                ],
+                "has_flags": true,
+                "outside": [],
+                "audit_errors": []
+              },
+              {
+                "argv": [
+                  "-O2",
+                  "-stdpar=gpu",
+                  "-gpu=cc89,mem:managed",
+                  "-Minfo=accel",
+                  "-module",
+                  ".",
+                  "/opt/harness/npy_io.f90",
+                  "src/potential.f90",
+                  "src/initial.f90",
+                  "harness/capture.f90",
+                  "-o",
+                  "capture"
+                ],
+                "cwd": ".",
+                "language": "fortran",
+                "compiler": null,
+                "inputs": [
+                  "/opt/harness/npy_io.f90",
+                  "src/potential.f90",
+                  "src/initial.f90",
+                  "harness/capture.f90"
+                ],
+                "link_inputs": [],
+                "kind": "compile",
+                "output": "capture",
+                "required_flags": [
+                  "-O2",
+                  "-stdpar=gpu",
+                  "-gpu=cc89,mem:managed",
+                  "-Minfo=accel"
+                ],
+                "has_flags": true,
+                "outside": [],
+                "audit_errors": []
+              }
+            ],
+            "compiler_audit": {
+              "protected": true,
+              "collector": "strace/process+cwd",
+              "observed_executions": 128,
+              "compiler_invocations": 3,
+              "language_invocations": {
+                "fortran": 3
+              }
+            },
+            "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+            "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+            "minfo_excerpt": "WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.\n      9, Generating NVIDIA GPU code\n          9, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x\n      9, Generating implicit copyout(phi(:)) [if not already present]\n         Generating implicit copyin(y(:),z(:),x(:),q(:)) [if not already present]\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code\n      9, Generating NVIDIA GPU code\n          9, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x\n      9, Generating implicit copyout(phi(:)) [if not already present]\n         Generating implicit copyin(y(:),z(:),x(:),q(:)) [if not already present]\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code\n      9, Generating NVIDIA GPU code\n          9, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x\n      9, Generating implicit copyout(phi(:)) [if not already present]\n         Generating implicit copyin(y(:),z(:),x(:),q(:)) [if not already present]\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code",
+            "log_tail": "(:)) [if not already present]\npoint_potential:\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8e1ca77c22ef\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8e1ca77c22ef\nsrc/initial.f90:\nharness/main.f90:\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8e1ca77c22ef\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8e1ca77c22ef\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8e1ca77c22ef\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\npotential:\n      9, Generating NVIDIA GPU code\n          9, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x\n      9, Generating implicit copyout(phi(:)) [if not already present]\n         Generating implicit copyin(y(:),z(:),x(:),q(:)) [if not already present]\npoint_potential:\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8e1ca77c22ef\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8e1ca77c22ef\nsrc/initial.f90:\nharness/capture.f90:\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8e1ca77c22ef\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8e1ca77c22ef\n"
+          }
+        },
+        "failed_strategies": [],
+        "targets_asked_for": [
+          "replay",
+          "timing",
+          "capture"
+        ],
+        "manifest_sha256": "a573b3eab323f2f30798b0900eecbf1a258c708cee371f1737ab5bc9f145471d"
+      }
+    }
+  },
+  {
+    "phase": "onboarding",
+    "action": "harness_capture",
+    "result": {
+      "claim_id": "c-0003",
+      "verdict": "pass",
+      "detail": {
+        "manifest_sha256": "a573b3eab323f2f30798b0900eecbf1a258c708cee371f1737ab5bc9f145471d",
+        "datasets": {
+          "holdout": {
+            "cases": 2,
+            "capture_set": "0194646b69a7473d2bbd1d747b308e5e4be7126475c726e000571bbe12afb607"
+          },
+          "visible": {
+            "cases": 2,
+            "capture_set": "e28a10b1313b9a597747172222e0cd565d23d22a163553c39127cf700f76270d"
+          }
+        },
+        "executable_identity": {
+          "sha256": "2e800f5061627d6030054fb44564660d34c3ce1e83792ec99bff86c555103465",
+          "size": 245160,
+          "role": "capture",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        }
+      }
+    }
+  },
+  {
+    "phase": "onboarding",
+    "action": "harness_replay",
+    "result": {
+      "claim_id": "c-0004",
+      "verdict": "pass",
+      "detail": {
+        "manifest_sha256": "a573b3eab323f2f30798b0900eecbf1a258c708cee371f1737ab5bc9f145471d",
+        "executable_identity": {
+          "sha256": "5f1c6bd56d7fd8cc5e84afc8f0ecb26f196d84230e7e8633029cb524956179b9",
+          "size": 240248,
+          "role": "replay",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        },
+        "datasets": {
+          "holdout": {
+            "cases": 2,
+            "capture_set": "0194646b69a7473d2bbd1d747b308e5e4be7126475c726e000571bbe12afb607"
+          },
+          "visible": {
+            "cases": 2,
+            "capture_set": "e28a10b1313b9a597747172222e0cd565d23d22a163553c39127cf700f76270d"
+          }
+        },
+        "datasets_that_disagreed": []
+      }
+    }
+  },
+  {
+    "phase": "onboarding",
+    "action": "harness_determinism",
+    "result": {
+      "claim_id": "c-0005",
+      "verdict": "pass",
+      "detail": {
+        "manifest_sha256": "a573b3eab323f2f30798b0900eecbf1a258c708cee371f1737ab5bc9f145471d",
+        "executable_identity": {
+          "sha256": "5f1c6bd56d7fd8cc5e84afc8f0ecb26f196d84230e7e8633029cb524956179b9",
+          "size": 240248,
+          "role": "replay",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        },
+        "datasets": {
+          "holdout": {
+            "capture_set": "0194646b69a7473d2bbd1d747b308e5e4be7126475c726e000571bbe12afb607",
+            "recaptured": "0194646b69a7473d2bbd1d747b308e5e4be7126475c726e000571bbe12afb607",
+            "same": true
+          },
+          "visible": {
+            "capture_set": "e28a10b1313b9a597747172222e0cd565d23d22a163553c39127cf700f76270d",
+            "recaptured": "e28a10b1313b9a597747172222e0cd565d23d22a163553c39127cf700f76270d",
+            "same": true
+          }
+        },
+        "replay": {
+          "dataset": "visible",
+          "cases": 2,
+          "executable_identity": {
+            "sha256": "5f1c6bd56d7fd8cc5e84afc8f0ecb26f196d84230e7e8633029cb524956179b9",
+            "size": 240248,
+            "role": "replay",
+            "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+          },
+          "same": true
+        },
+        "differed": []
+      }
+    }
+  },
+  {
+    "phase": "onboarding",
+    "action": "harness_timing",
+    "result": {
+      "claim_id": "c-0006",
+      "verdict": "pass",
+      "detail": {
+        "manifest_sha256": "a573b3eab323f2f30798b0900eecbf1a258c708cee371f1737ab5bc9f145471d",
+        "runs_s": [
+          1.2517624870088184,
+          1.426952659006929
+        ],
+        "gpu_exclusive": false,
+        "outputs": {
+          "phi.npy": "fbc5f2f098aef3b1fae26075e8d2a2f26686238c9ed6166d4009f54c3d8b48cf"
+        },
+        "declared_outputs": [
+          "phi.npy"
+        ],
+        "executable_identity": {
+          "sha256": "2e319ecdc5be5e0baf504d839a68d5daacd32ad601771c730cffc7621f0bc560",
+          "size": 244792,
+          "role": "timing",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        },
+        "program_set": "2381e01df4ecb84bace52b8f85e1e62b4f3e697c3b36e9cabab764203e22011f"
+      }
+    }
+  },
+  {
+    "phase": "onboarding",
+    "action": "harness_original",
+    "result": {
+      "claim_id": "c-0007",
+      "verdict": "pass",
+      "detail": {
+        "reference_sha256": "65c95edd042c186e1b06b2ea7426986309260dd9f686d57fe5a7e775e1a8d7d6",
+        "provenance": "Repository-owned charged-cloud application preserved before adding capture/replay and NPY output.",
+        "reference_build": {
+          "attempt_id": "potential-onboard-original-20c53703241ca56c-65c95edd042c186e1b06b2ea7426986309260dd9f686d57fe5a7e775e1a8d7d6-cpu_reference-ebd2577b0115",
+          "flags": [
+            "-O2",
+            "-stdpar=multicore"
+          ],
+          "toolchains": {
+            "fortran": {
+              "compiler": "nvfortran",
+              "flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ]
+            }
+          },
+          "languages_compiled": [
+            "fortran"
+          ],
+          "targets": {
+            "timing": {
+              "executable": "potential",
+              "built": true,
+              "sha256": "c78c20c563b29426f74f699c0c77b506355dea273fe8a1e4d35ecee4971abd3d",
+              "size": 25080,
+              "role": "timing",
+              "kind": "executable",
+              "roles": [
+                "timing"
+              ]
+            }
+          },
+          "compiles": [
+            {
+              "argv": [
+                "-O2",
+                "-stdpar=multicore",
+                "potential.f90",
+                "initial.f90",
+                "main.f90",
+                "-o",
+                "potential"
+              ],
+              "cwd": ".",
+              "language": "fortran",
+              "compiler": null,
+              "inputs": [
+                "potential.f90",
+                "initial.f90",
+                "main.f90"
+              ],
+              "link_inputs": [],
+              "kind": "compile",
+              "output": "potential",
+              "required_flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ],
+              "has_flags": true,
+              "outside": [],
+              "audit_errors": []
+            }
+          ],
+          "compiler_audit": {
+            "protected": true,
+            "collector": "strace/process+cwd",
+            "observed_executions": 26,
+            "compiler_invocations": 1,
+            "language_invocations": {
+              "fortran": 1
+            }
+          },
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+          "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+          "minfo_excerpt": "WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.",
+          "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\nWARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.\nUse 'docker run --gpus all' to start this container; see\nhttps://github.com/NVIDIA/nvidia-container-toolkit\n\nnvfortran -O2 -stdpar=multicore potential.f90 initial.f90 main.f90 -o potential \nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.ac1c0c9034bd\npotential.f90:\ninitial.f90:\nmain.f90:\npotential.f90:\ninitial.f90:\nmain.f90:\n"
+        },
+        "runs": [
+          {
+            "name": "odd-small",
+            "outputs": [
+              {
+                "original": "phi.bin",
+                "candidate": "phi.bin",
+                "comparison": "bytes",
+                "pass": true,
+                "original_artifacts": [
+                  "6f65b166104e7eac63289f02a652ebb5f372ff0c04e10933090203d79cf00132",
+                  "6f65b166104e7eac63289f02a652ebb5f372ff0c04e10933090203d79cf00132"
+                ],
+                "candidate_artifacts": [
+                  "6f65b166104e7eac63289f02a652ebb5f372ff0c04e10933090203d79cf00132",
+                  "6f65b166104e7eac63289f02a652ebb5f372ff0c04e10933090203d79cf00132"
+                ],
+                "deterministic": true,
+                "comparison_result": {
+                  "pass": true
+                }
+              }
+            ],
+            "pass": true,
+            "original_runs_s": [
+              0.3866417090030154,
+              0.3843045690009603
+            ],
+            "candidate_runs_s": [
+              0.3962264660076471,
+              0.38563527300721034
+            ],
+            "original_binary": {
+              "executable_identity": {
+                "sha256": "c78c20c563b29426f74f699c0c77b506355dea273fe8a1e4d35ecee4971abd3d",
+                "size": 25080,
+                "role": "timing",
+                "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+              }
+            },
+            "candidate_binary": {
+              "executable_identity": {
+                "sha256": "2e319ecdc5be5e0baf504d839a68d5daacd32ad601771c730cffc7621f0bc560",
+                "size": 244792,
+                "role": "timing",
+                "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+              }
+            }
+          },
+          {
+            "name": "evolved-cloud",
+            "outputs": [
+              {
+                "original": "phi.bin",
+                "candidate": "phi.bin",
+                "comparison": "bytes",
+                "pass": true,
+                "original_artifacts": [
+                  "ac8a17ada2cec90b0e7bba64547e0ac7b8c29b1f15187b061740e12f7e82c197",
+                  "ac8a17ada2cec90b0e7bba64547e0ac7b8c29b1f15187b061740e12f7e82c197"
+                ],
+                "candidate_artifacts": [
+                  "ac8a17ada2cec90b0e7bba64547e0ac7b8c29b1f15187b061740e12f7e82c197",
+                  "ac8a17ada2cec90b0e7bba64547e0ac7b8c29b1f15187b061740e12f7e82c197"
+                ],
+                "deterministic": true,
+                "comparison_result": {
+                  "pass": true
+                }
+              }
+            ],
+            "pass": true,
+            "original_runs_s": [
+              0.392687305007712,
+              0.394397829004447
+            ],
+            "candidate_runs_s": [
+              0.4020660870010033,
+              0.39576537400716916
+            ],
+            "original_binary": {
+              "executable_identity": {
+                "sha256": "c78c20c563b29426f74f699c0c77b506355dea273fe8a1e4d35ecee4971abd3d",
+                "size": 25080,
+                "role": "timing",
+                "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+              }
+            },
+            "candidate_binary": {
+              "executable_identity": {
+                "sha256": "2e319ecdc5be5e0baf504d839a68d5daacd32ad601771c730cffc7621f0bc560",
+                "size": 244792,
+                "role": "timing",
+                "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+              }
+            }
+          }
+        ],
+        "problems": []
+      }
+    }
+  },
+  {
+    "phase": "onboarding",
+    "action": "harness_self_check",
+    "result": {
+      "claim_id": "c-0008",
+      "verdict": "pass",
+      "detail": {
+        "manifest_sha256": "a573b3eab323f2f30798b0900eecbf1a258c708cee371f1737ab5bc9f145471d",
+        "policy_sha256": "14a6c3670097603d08eedee2099ff553c9341798e7d67ed339b7f4bff6686ef7",
+        "files": [
+          "src/potential.f90"
+        ],
+        "datasets": {
+          "visible": {
+            "cases": 2,
+            "capture_set": "e28a10b1313b9a597747172222e0cd565d23d22a163553c39127cf700f76270d"
+          }
+        },
+        "generated": 34,
+        "scored": 34,
+        "counts": {
+          "KILLED": 32,
+          "EQUIVALENT": 2
+        },
+        "gap": [],
+        "adequacy_policy": {
+          "all_generated_classified": true,
+          "incomplete_statuses_forbidden": [
+            "PENDING",
+            "RUNTIME_FAIL",
+            "SKIPPED"
+          ],
+          "minimum_killed": 1,
+          "maximum_tolerance_gap": 0
+        },
+        "incomplete": [],
+        "survivors": [
+          {
+            "id": "potential-0009-CRP-0001",
+            "file": "src/potential.f90",
+            "line": 9,
+            "op": "CRP",
+            "mutated": "    do concurrent (i=0:size(x))",
+            "note": "no output changed in any case"
+          },
+          {
+            "id": "potential-0019-CRP-0005",
+            "file": "src/potential.f90",
+            "line": 19,
+            "op": "CRP",
+            "mutated": "    do j=0,size(x)",
+            "note": "no output changed in any case"
+          }
+        ],
+        "build_failures": [],
+        "kept_dirs": [
+          "/work/potential-onboard-19a2ef8f50c159f9-d8a2aab1eaceff6928254de827e731b7cabfb5782f29a4775399844bd0b5d1e6-cpu_reference-ebd2577b0115/mutants/potential-0009-CRP-0001",
+          "/work/potential-onboard-19a2ef8f50c159f9-d8a2aab1eaceff6928254de827e731b7cabfb5782f29a4775399844bd0b5d1e6-cpu_reference-ebd2577b0115/mutants/potential-0019-CRP-0005"
+        ]
+      }
+    }
+  },
+  {
+    "phase": "onboarding",
+    "action": "harness_property",
+    "result": {
+      "claim_id": "c-0009",
+      "verdict": "pass",
+      "detail": {
+        "module": "harness/properties.py",
+        "seed": 42,
+        "max_examples": 100,
+        "passed": 1,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "deselected": 0,
+        "xfailed": 0,
+        "xpassed": 0,
+        "collected": 1,
+        "executed": 1,
+        "replays_observed": 200,
+        "counts_source": "pytest summary emitted by the submitted property process",
+        "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n.                                                                        [100%]\n=============================== warnings summary ===============================\nharness/properties.py::test_equation_and_charge_linearity\n  /usr/local/lib/python3.12/dist-packages/hypothesis/_settings.py:847: HypothesisWarning: The database setting is not configured, and the default location is unusable - falling back to an in-memory database for this session.  path=PosixPath('/job/tree/.hypothesis/examples')\n    self._fallback.database if self._database is not_set else self._database\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1 passed, 1 warning in 5.41s\n",
+        "executable_identity": {
+          "sha256": "5f1c6bd56d7fd8cc5e84afc8f0ecb26f196d84230e7e8633029cb524956179b9",
+          "size": 240248,
+          "role": "replay",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        }
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "submit",
+    "result": {
+      "tree": "d00a01aabc29882e5d2eda7bc9e84b5c2f3f314a993a0cfe0210940a4773d198",
+      "frozen": "9e243989d109fd713603ad6cb4bfe59165317b4c874217dd14f49d36ff4e2025",
+      "rejected": [
+        {
+          "path": "Makefile",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/capture.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/properties.py",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/replay.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/tolerances.json",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "initial.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "potential.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "src/initial.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "src/potential.f90",
+          "reason": "not_allowed"
+        }
+      ],
+      "not_sent": [],
+      "committed": true
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "sese_check",
+    "result": {
+      "claim_id": "c-0001",
+      "verdict": "pass",
+      "detail": {
+        "file_list": [
+          "src/potential.f90"
+        ],
+        "allow_globs": [
+          "notes/regions/potential.yaml",
+          "src/potential.f90"
+        ],
+        "resolved_ranges": [
+          {
+            "file": "src/potential.f90",
+            "label": "potential",
+            "declared": [
+              5,
+              12
+            ],
+            "actual": [
+              5,
+              12
+            ],
+            "procedure": {
+              "kind": "subroutine",
+              "name": "potential",
+              "range": [
+                5,
+                12
+              ]
+            }
+          },
+          {
+            "file": "src/potential.f90",
+            "label": "point_potential",
+            "declared": [
+              13,
+              25
+            ],
+            "actual": [
+              13,
+              25
+            ],
+            "procedure": {
+              "kind": "function",
+              "name": "point_potential",
+              "range": [
+                13,
+                25
+              ]
+            }
+          }
+        ],
+        "range_count": 2,
+        "total_lines": 21,
+        "notes": []
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "submit",
+    "result": {
+      "tree": "ae1b2b7b970ee55cdcd535c6290e047329836dfc4b96fbef0ea79c231f9e091b",
+      "frozen": "e0d4f0c66fc141acbb5f49e54e3ef6401b593d1ec7560c76834912803b9b504a",
+      "rejected": [
+        {
+          "path": "Makefile",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/capture.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/properties.py",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/replay.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/tolerances.json",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "initial.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "potential.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "src/initial.f90",
+          "reason": "not_allowed"
+        }
+      ],
+      "not_sent": [],
+      "committed": true
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "sese_check",
+    "result": {
+      "claim_id": "c-0002",
+      "verdict": "pass",
+      "detail": {
+        "file_list": [
+          "src/potential.f90"
+        ],
+        "allow_globs": [
+          "notes/regions/potential.yaml",
+          "src/potential.f90"
+        ],
+        "resolved_ranges": [
+          {
+            "file": "src/potential.f90",
+            "label": "potential",
+            "declared": [
+              5,
+              12
+            ],
+            "actual": [
+              5,
+              12
+            ],
+            "procedure": {
+              "kind": "subroutine",
+              "name": "potential",
+              "range": [
+                5,
+                12
+              ]
+            }
+          },
+          {
+            "file": "src/potential.f90",
+            "label": "point_potential",
+            "declared": [
+              13,
+              25
+            ],
+            "actual": [
+              13,
+              25
+            ],
+            "procedure": {
+              "kind": "function",
+              "name": "point_potential",
+              "range": [
+                13,
+                25
+              ]
+            }
+          }
+        ],
+        "range_count": 2,
+        "total_lines": 21,
+        "notes": []
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "build_replay",
+    "result": {
+      "claim_id": "c-0003",
+      "verdict": "pass",
+      "detail": {
+        "attempt_id": "potential-solve-d6afc0acf4160b7c-ae1b2b7b970ee55cdcd535c6290e047329836dfc4b96fbef0ea79c231f9e091b",
+        "flags": [
+          "-O2",
+          "-stdpar=gpu",
+          "-gpu=cc89,mem:managed",
+          "-Minfo=accel"
+        ],
+        "toolchains": {
+          "fortran": {
+            "compiler": "nvfortran",
+            "flags": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel"
+            ]
+          }
+        },
+        "languages_compiled": [
+          "fortran"
+        ],
+        "targets": {
+          "replay": {
+            "executable": "replay",
+            "built": true,
+            "sha256": "a1b18289a2fe29944cc64562fef8a87bd280d408785f12e2c5d33a00e1aa82cf",
+            "size": 252840,
+            "role": "replay",
+            "kind": "executable",
+            "roles": [
+              "replay"
+            ]
+          },
+          "timing": {
+            "executable": "timing",
+            "built": true,
+            "sha256": "4a373fb3d880f6f027b9d9f356882ceb9a585adadbc95b052656621383ac1c40",
+            "size": 257392,
+            "role": "timing",
+            "kind": "executable",
+            "roles": [
+              "timing"
+            ]
+          },
+          "capture": {
+            "executable": "capture",
+            "built": true,
+            "sha256": "57b7638e77afe3c85ef4710af885e0ed0d86ac67d85cd57e2ec2a6097284e3d2",
+            "size": 261832,
+            "role": "capture",
+            "kind": "executable",
+            "roles": [
+              "capture"
+            ]
+          }
+        },
+        "compiles": [
+          {
+            "argv": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/replay.f90",
+              "-o",
+              "replay"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": null,
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/replay.f90"
+            ],
+            "link_inputs": [],
+            "kind": "compile",
+            "output": "replay",
+            "required_flags": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          },
+          {
+            "argv": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/main.f90",
+              "-o",
+              "timing"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": null,
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/main.f90"
+            ],
+            "link_inputs": [],
+            "kind": "compile",
+            "output": "timing",
+            "required_flags": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          },
+          {
+            "argv": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/capture.f90",
+              "-o",
+              "capture"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": null,
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/capture.f90"
+            ],
+            "link_inputs": [],
+            "kind": "compile",
+            "output": "capture",
+            "required_flags": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          }
+        ],
+        "compiler_audit": {
+          "protected": true,
+          "collector": "strace/process+cwd",
+          "observed_executions": 113,
+          "compiler_invocations": 3,
+          "language_invocations": {
+            "fortran": 3
+          }
+        },
+        "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+        "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+        "minfo_excerpt": "WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.",
+        "log_tail": "red with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/replay.f90:\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.3645d38beb01\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.3645d38beb01\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.3645d38beb01\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/main.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/main.f90:\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.3645d38beb01\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.3645d38beb01\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.3645d38beb01\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.3645d38beb01\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.3645d38beb01\n"
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "run_replay",
+    "result": {
+      "claim_id": "c-0004",
+      "verdict": "fail",
+      "detail": {
+        "executable_identity": null,
+        "log_tail": "could not read nsys SQLite export: no such table: CUPTI_ACTIVITY_KIND_KERNEL"
+      },
+      "reasons": [
+        "the replay driver did not run to completion"
+      ]
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "submit",
+    "result": {
+      "tree": "179fb4c138a204464ba939251e601da20d29a2fd7a49042e117e0d733f900d40",
+      "frozen": "e0d4f0c66fc141acbb5f49e54e3ef6401b593d1ec7560c76834912803b9b504a",
+      "rejected": [
+        {
+          "path": "Makefile",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/capture.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/properties.py",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/replay.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/tolerances.json",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "initial.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "potential.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "src/initial.f90",
+          "reason": "not_allowed"
+        }
+      ],
+      "not_sent": [],
+      "committed": true
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "sese_check",
+    "result": {
+      "claim_id": "c-0005",
+      "verdict": "pass",
+      "detail": {
+        "file_list": [
+          "src/potential.f90"
+        ],
+        "allow_globs": [
+          "notes/regions/potential.yaml",
+          "src/potential.f90"
+        ],
+        "resolved_ranges": [
+          {
+            "file": "src/potential.f90",
+            "label": "potential",
+            "declared": [
+              5,
+              12
+            ],
+            "actual": [
+              5,
+              12
+            ],
+            "procedure": {
+              "kind": "subroutine",
+              "name": "potential",
+              "range": [
+                5,
+                12
+              ]
+            }
+          },
+          {
+            "file": "src/potential.f90",
+            "label": "point_potential",
+            "declared": [
+              13,
+              25
+            ],
+            "actual": [
+              13,
+              25
+            ],
+            "procedure": {
+              "kind": "function",
+              "name": "point_potential",
+              "range": [
+                13,
+                25
+              ]
+            }
+          }
+        ],
+        "range_count": 2,
+        "total_lines": 21,
+        "notes": []
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "build_replay",
+    "result": {
+      "claim_id": "c-0006",
+      "verdict": "pass",
+      "detail": {
+        "attempt_id": "potential-solve-d6afc0acf4160b7c-179fb4c138a204464ba939251e601da20d29a2fd7a49042e117e0d733f900d40",
+        "flags": [
+          "-O2",
+          "-stdpar=gpu",
+          "-gpu=cc89,mem:managed",
+          "-Minfo=accel"
+        ],
+        "toolchains": {
+          "fortran": {
+            "compiler": "nvfortran",
+            "flags": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel"
+            ]
+          }
+        },
+        "languages_compiled": [
+          "fortran"
+        ],
+        "targets": {
+          "replay": {
+            "executable": "replay",
+            "built": true,
+            "sha256": "993fac7895d27a9d4c7095f26f0d982b7653816d92b4f5a1329acfe1860865b3",
+            "size": 307912,
+            "role": "replay",
+            "kind": "executable",
+            "roles": [
+              "replay"
+            ]
+          },
+          "timing": {
+            "executable": "timing",
+            "built": true,
+            "sha256": "d25d10aa05c9bcd81f1350f9db846efe3ca1e31bcb05b9efedaad0ebc6af1b2f",
+            "size": 308376,
+            "role": "timing",
+            "kind": "executable",
+            "roles": [
+              "timing"
+            ]
+          },
+          "capture": {
+            "executable": "capture",
+            "built": true,
+            "sha256": "6d3a94729750adb3ba72ec7f6e4ba4992ad7dc3231df829629dbf4744144d24b",
+            "size": 308712,
+            "role": "capture",
+            "kind": "executable",
+            "roles": [
+              "capture"
+            ]
+          }
+        },
+        "compiles": [
+          {
+            "argv": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/replay.f90",
+              "-o",
+              "replay"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": null,
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/replay.f90"
+            ],
+            "link_inputs": [],
+            "kind": "compile",
+            "output": "replay",
+            "required_flags": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          },
+          {
+            "argv": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/main.f90",
+              "-o",
+              "timing"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": null,
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/main.f90"
+            ],
+            "link_inputs": [],
+            "kind": "compile",
+            "output": "timing",
+            "required_flags": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          },
+          {
+            "argv": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/capture.f90",
+              "-o",
+              "capture"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": null,
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/capture.f90"
+            ],
+            "link_inputs": [],
+            "kind": "compile",
+            "output": "capture",
+            "required_flags": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          }
+        ],
+        "compiler_audit": {
+          "protected": true,
+          "collector": "strace/process+cwd",
+          "observed_executions": 128,
+          "compiler_invocations": 3,
+          "language_invocations": {
+            "fortran": 3
+          }
+        },
+        "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+        "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+        "minfo_excerpt": "WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.\n      9, Generating NVIDIA GPU code\n          9, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x\n      9, Generating implicit copyout(phi(:)) [if not already present]\n         Generating implicit copyin(y(:),z(:),x(:),q(:)) [if not already present]\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code\n      9, Generating NVIDIA GPU code\n          9, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x\n      9, Generating implicit copyout(phi(:)) [if not already present]\n         Generating implicit copyin(y(:),z(:),x(:),q(:)) [if not already present]\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code\n      9, Generating NVIDIA GPU code\n          9, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x\n      9, Generating implicit copyout(phi(:)) [if not already present]\n         Generating implicit copyin(y(:),z(:),x(:),q(:)) [if not already present]\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code",
+        "log_tail": "(:)) [if not already present]\npoint_potential:\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.a7239b0b2509\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.a7239b0b2509\nsrc/initial.f90:\nharness/main.f90:\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.a7239b0b2509\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.a7239b0b2509\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.a7239b0b2509\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\npotential:\n      9, Generating NVIDIA GPU code\n          9, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x\n      9, Generating implicit copyout(phi(:)) [if not already present]\n         Generating implicit copyin(y(:),z(:),x(:),q(:)) [if not already present]\npoint_potential:\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.a7239b0b2509\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.a7239b0b2509\nsrc/initial.f90:\nharness/capture.f90:\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.a7239b0b2509\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.a7239b0b2509\n"
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "run_replay",
+    "result": {
+      "claim_id": "c-0007",
+      "verdict": "pass",
+      "detail": {
+        "executable_identity": {
+          "sha256": "993fac7895d27a9d4c7095f26f0d982b7653816d92b4f5a1329acfe1860865b3",
+          "size": 307912,
+          "role": "replay",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        },
+        "kernels_launched": 2,
+        "launches": [
+          [
+            "nsys",
+            "potential_module_potential_9_gpu",
+            "0"
+          ]
+        ],
+        "outputs": {
+          "case1": {
+            "phi": "k05VTVBZAQB2AHsnZGVzY3InOiAnPGY0JywgJ2ZvcnRyYW5fb3JkZXInOiBUcnVlLCAnc2hhcGUnOiAoMTI5LCApLCB9ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIApApHI9wOt1vb+pPr66F1a+XZdbvl2lrb9+xbG/SMSuPqEvjT70pjg+HGZOPZ17lT70HJu/R0CLv8vNRb+7ddw+rkkaPkOlPz7W7g2/oPxAv866N78BGBK/fC8IPtljJj6UXy4+9HntvYuzpL5+bsK+XJ9TPcIQiT7SwAQ/tzXSPtoxPD6nT3++xBPcva92AT4gVWq/Ll0hv1h49D5aM+e9cswKvjgRA72qmAy/8j8Gv1deEr+O06G+mDz4PGB3XbxwoCC9EiF0vn3lEL/Qp9q+S3wfvngPDj0AFqM+rBkDPnxfwL5LYsa+ulVXvrAM0rzyeZC+USqHv9y4gr2x0g6+eva3vcDomzxUe0W+MqKNv3iGdL+TOyk+WVgVPoQXGD4WwI69IwxLv2jsXb+GgTW/ZEbivoZHhz4mLum9/Xdxvu5M1L75o/G+XAzLvsGymL4HSLO/Q/9pPrI7CD6ghvc76m6HvZFnGb6Wwqu/0q6qv9aMdb9ItNA+dM+MPsqoCT4cQ0i/jeCBv9ANcr+x9je/C0jfPh5THD640S69GkCcvlsCC7/E7BO//hfGvePXHT4jDM0+F5OnPsSYdj2yyiC+7+Fovpga5Dyiung+hTBWv9iT8z4TRYg+huVtvtbM/73em7I9vowzv9D2Bb/GXQC/1NNhvbolx70QsHK8Swm3vq35zb4="
+          },
+          "case2": {
+            "phi": "k05VTVBZAQB2AHsnZGVzY3InOiAnPGY0JywgJ2ZvcnRyYW5fb3JkZXInOiBUcnVlLCAnc2hhcGUnOiAoMTI5LCApLCB9ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIArwnHI9sPJ1vbKqPr7gF1a+7JZbvkSlrb9NxbG/JMOuPpoujT6epTg+jGNOPaJ7lT7SHJu/IECLv2bNRb/2dNw+h0gaPo2kPz4D7w2/ffxAv5q6N7+6FxK/wTAIPrxiJj6LXS4+LHztvZuzpL5EbsK+mKFTPT4RiT5QwAQ/oDTSPo4wPD57UH++/hPcvRB3AT7RVGq/2Fwhv3p39D4MNue9Ys0KvigUA72lmAy/yj8GvzheEr/20qG+2C74PMCKXbyYpCC9WCF0voblEL+yp9q+Y3sfvggUDj04FaM+dxgDPvpfwL6bYsa+zlVXvnAI0rx2eZC+MCqHvyi8gr0S1A6+Nvi3vQjlmzwYe0W+IaKNvySGdL+bOSk+2lYVPq4WGD4IwY69LQxLv03sXb9EgTW/wkXivuZGhz5UMem9V3lxvlxN1L71o/G+BAzLvlKymL7hR7O//vxpPrA5CD5gWvc7vm+HvVdnGb50wqu/p66qv2qMdb9es9A+wM6MPhOoCT4vQ0i/d+CBv4oNcr9e9je/V0ffPqZRHD6w2C69lECcvl4CC7+e7BO/wBbGveXYHT4gC80+FJKnPgSTdj0WyyC+DeJovjAe5DxPu3g+HDBWv9CS8z5iRIg+QuZtvsbN/71unLI9kIwzv4D2Bb92XQC/cNphveYnx70wvHK8XQm3vov5zb4="
+          }
+        }
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "sanitize",
+    "result": {
+      "claims": [
+        {
+          "predicateType": "sanitize/memcheck",
+          "claim_id": "c-0008",
+          "verdict": "pass",
+          "detail": {
+            "errors": 0,
+            "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n",
+            "cases": [
+              "case1"
+            ],
+            "executable_identity": {
+              "sha256": "993fac7895d27a9d4c7095f26f0d982b7653816d92b4f5a1329acfe1860865b3",
+              "size": 307912,
+              "role": "replay",
+              "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+            }
+          }
+        },
+        {
+          "predicateType": "sanitize/racecheck",
+          "claim_id": "c-0009",
+          "verdict": "pass",
+          "detail": {
+            "errors": 0,
+            "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)\n",
+            "cases": [
+              "case1"
+            ],
+            "executable_identity": {
+              "sha256": "993fac7895d27a9d4c7095f26f0d982b7653816d92b4f5a1329acfe1860865b3",
+              "size": 307912,
+              "role": "replay",
+              "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+            }
+          }
+        },
+        {
+          "predicateType": "sanitize/initcheck",
+          "claim_id": "c-0010",
+          "verdict": "pass",
+          "detail": {
+            "errors": 0,
+            "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n",
+            "cases": [
+              "case1"
+            ],
+            "executable_identity": {
+              "sha256": "993fac7895d27a9d4c7095f26f0d982b7653816d92b4f5a1329acfe1860865b3",
+              "size": 307912,
+              "role": "replay",
+              "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "regression_visible",
+    "result": {
+      "claim_id": "c-0011",
+      "verdict": "fail",
+      "detail": {
+        "per_case": {
+          "case1": {
+            "pass": false,
+            "per_var": {
+              "phi": {
+                "pass": false,
+                "max_abs": 0.9100832939147949,
+                "max_rel": 22.962266347453294,
+                "max_ulp": 2075328061,
+                "n_bad": 129,
+                "n": 129,
+                "n_nonfinite": 0
+              }
+            },
+            "extra": []
+          },
+          "case2": {
+            "pass": false,
+            "per_var": {
+              "phi": {
+                "pass": false,
+                "max_abs": 0.910082221031189,
+                "max_rel": 22.972690974551917,
+                "max_ulp": 2075329509,
+                "n_bad": 129,
+                "n": 129,
+                "n_nonfinite": 0
+              }
+            },
+            "extra": []
+          }
+        },
+        "policy_sha256": "14a6c3670097603d08eedee2099ff553c9341798e7d67ed339b7f4bff6686ef7"
+      },
+      "reasons": [
+        "case 'case1' is outside the code's tolerance bands",
+        "case 'case2' is outside the code's tolerance bands"
+      ]
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "submit",
+    "result": {
+      "tree": "d00a01aabc29882e5d2eda7bc9e84b5c2f3f314a993a0cfe0210940a4773d198",
+      "frozen": "e0d4f0c66fc141acbb5f49e54e3ef6401b593d1ec7560c76834912803b9b504a",
+      "rejected": [
+        {
+          "path": "Makefile",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/capture.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/properties.py",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/replay.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/tolerances.json",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "initial.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "potential.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "src/initial.f90",
+          "reason": "not_allowed"
+        }
+      ],
+      "not_sent": [],
+      "committed": true
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "sese_check",
+    "result": {
+      "claim_id": "c-0001",
+      "verdict": "pass",
+      "detail": {
+        "allow_globs": [
+          "notes/regions/potential.yaml",
+          "src/potential.f90"
+        ],
+        "file_list": [
+          "src/potential.f90"
+        ],
+        "notes": [],
+        "range_count": 2,
+        "resolved_ranges": [
+          {
+            "actual": [
+              5,
+              12
+            ],
+            "declared": [
+              5,
+              12
+            ],
+            "file": "src/potential.f90",
+            "label": "potential",
+            "procedure": {
+              "kind": "subroutine",
+              "name": "potential",
+              "range": [
+                5,
+                12
+              ]
+            }
+          },
+          {
+            "actual": [
+              13,
+              25
+            ],
+            "declared": [
+              13,
+              25
+            ],
+            "file": "src/potential.f90",
+            "label": "point_potential",
+            "procedure": {
+              "kind": "function",
+              "name": "point_potential",
+              "range": [
+                13,
+                25
+              ]
+            }
+          }
+        ],
+        "total_lines": 21
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "build_replay",
+    "result": {
+      "claim_id": "c-0012",
+      "verdict": "pass",
+      "detail": {
+        "attempt_id": "potential-solve-d6afc0acf4160b7c-d00a01aabc29882e5d2eda7bc9e84b5c2f3f314a993a0cfe0210940a4773d198",
+        "flags": [
+          "-O2",
+          "-stdpar=gpu",
+          "-gpu=cc89,mem:managed",
+          "-Minfo=accel"
+        ],
+        "toolchains": {
+          "fortran": {
+            "compiler": "nvfortran",
+            "flags": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel"
+            ]
+          }
+        },
+        "languages_compiled": [
+          "fortran"
+        ],
+        "targets": {
+          "replay": {
+            "executable": "replay",
+            "built": true,
+            "sha256": "44503a1195acbe938a62941167e9b6f9099601105e5a3fe67e179ef504c97a89",
+            "size": 307912,
+            "role": "replay",
+            "kind": "executable",
+            "roles": [
+              "replay"
+            ]
+          },
+          "timing": {
+            "executable": "timing",
+            "built": true,
+            "sha256": "e3c2732e9b85d4e3b9d0c0b3dcb82535dd5775f1145922556cc9727ab63159f4",
+            "size": 308376,
+            "role": "timing",
+            "kind": "executable",
+            "roles": [
+              "timing"
+            ]
+          },
+          "capture": {
+            "executable": "capture",
+            "built": true,
+            "sha256": "3de223653a308bcff63564ec4443eb3f9fec7c8cabc70f23f26c5bc16994c73f",
+            "size": 308712,
+            "role": "capture",
+            "kind": "executable",
+            "roles": [
+              "capture"
+            ]
+          }
+        },
+        "compiles": [
+          {
+            "argv": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/replay.f90",
+              "-o",
+              "replay"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": null,
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/replay.f90"
+            ],
+            "link_inputs": [],
+            "kind": "compile",
+            "output": "replay",
+            "required_flags": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          },
+          {
+            "argv": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/main.f90",
+              "-o",
+              "timing"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": null,
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/main.f90"
+            ],
+            "link_inputs": [],
+            "kind": "compile",
+            "output": "timing",
+            "required_flags": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          },
+          {
+            "argv": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/capture.f90",
+              "-o",
+              "capture"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": null,
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/capture.f90"
+            ],
+            "link_inputs": [],
+            "kind": "compile",
+            "output": "capture",
+            "required_flags": [
+              "-O2",
+              "-stdpar=gpu",
+              "-gpu=cc89,mem:managed",
+              "-Minfo=accel"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          }
+        ],
+        "compiler_audit": {
+          "protected": true,
+          "collector": "strace/process+cwd",
+          "observed_executions": 128,
+          "compiler_invocations": 3,
+          "language_invocations": {
+            "fortran": 3
+          }
+        },
+        "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+        "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+        "minfo_excerpt": "WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.\n      9, Generating NVIDIA GPU code\n          9, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x\n      9, Generating implicit copyout(phi(:)) [if not already present]\n         Generating implicit copyin(y(:),z(:),x(:),q(:)) [if not already present]\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code\n      9, Generating NVIDIA GPU code\n          9, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x\n      9, Generating implicit copyout(phi(:)) [if not already present]\n         Generating implicit copyin(y(:),z(:),x(:),q(:)) [if not already present]\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code\n      9, Generating NVIDIA GPU code\n          9, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x\n      9, Generating implicit copyout(phi(:)) [if not already present]\n         Generating implicit copyin(y(:),z(:),x(:),q(:)) [if not already present]\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code",
+        "log_tail": "(:)) [if not already present]\npoint_potential:\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f464a76dc9ef\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f464a76dc9ef\nsrc/initial.f90:\nharness/main.f90:\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f464a76dc9ef\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f464a76dc9ef\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f464a76dc9ef\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\npotential:\n      9, Generating NVIDIA GPU code\n          9, Loop parallelized across CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x\n      9, Generating implicit copyout(phi(:)) [if not already present]\n         Generating implicit copyin(y(:),z(:),x(:),q(:)) [if not already present]\npoint_potential:\n     13, Generating implicit acc routine seq\n         Generating implicit acc routine seq\n         Generating NVIDIA GPU code\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f464a76dc9ef\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f464a76dc9ef\nsrc/initial.f90:\nharness/capture.f90:\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f464a76dc9ef\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.f464a76dc9ef\n"
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "run_replay",
+    "result": {
+      "claim_id": "c-0013",
+      "verdict": "pass",
+      "detail": {
+        "executable_identity": {
+          "sha256": "44503a1195acbe938a62941167e9b6f9099601105e5a3fe67e179ef504c97a89",
+          "size": 307912,
+          "role": "replay",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        },
+        "kernels_launched": 2,
+        "launches": [
+          [
+            "nsys",
+            "potential_module_potential_9_gpu",
+            "0"
+          ]
+        ],
+        "outputs": {
+          "case1": {
+            "phi": "k05VTVBZAQB2AHsnZGVzY3InOiAnPGY0JywgJ2ZvcnRyYW5fb3JkZXInOiBUcnVlLCAnc2hhcGUnOiAoMTI5LCApLCB9ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAoocnE+OL+9PS4d4r1WUTe+hIGjvnMVDcCJIRPA53YfP4DDHD87bAQ/UK1fPqLNCj+5vgLAmXnrv3ogor86pU0/ZCiZPqb1lz6HxD2/XU2mvyxQpr9qz4O/rDrPPrWwUz5zMyA/0MKavaitGL/gbzS/TttOPs+BGT/z4IM/zQFfP5gMwD5s5gu/5uWOvk6ocD75S62/1js/v0opXT8U/aK+7Y32vnaxib4p+1+/0upBv6RIHL+LJ1i+4N36vUqJoL6oVYa9tLnwvniQPb+C1gS/mCBmvWYshT7yJfA++jDvPZedHL/kECG/EgJ+vnTM4j0A80C8+snIv0LUXL4QTbO+oPAdvkt5HD7og0u9oW7Rv+okur9YwfE9ke0gPrSojT7s5bu9L+qKvxhEpb9rJ5a/aGM4v3pVtz5sPi+9AwYdvqjT875wLCq/4IMnv6NOBr+3OQ/AltQBP+ho0T4BzGM+LOuyPS6waL5tJQ/AF1kPwPKlvr927lQ/dGQhP+y6hD6gcJW/3+jZvwQw0L+e4Zy/5dg/P3cpjT56LIQ+yHeivhAbdb/E8Im/dF8VPfjX4z7y22Q/j+tTP2HwPz72Qpy+ypjPvt5q7j0hZA4/hZCIvx37bD/5BfQ+bnATv57ExL75rwA+aet6v1YpHL8St/W+DpKHvn655L7AfHe+kHUWv9ISH78="
+          },
+          "case2": {
+            "phi": "k05VTVBZAQB2AHsnZGVzY3InOiAnPGY0JywgJ2ZvcnRyYW5fb3JkZXInOiBUcnVlLCAnc2hhcGUnOiAoMTI5LCApLCB9ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAqib3E+wrq9PQwg4r3+UTe+PIGjvmMVDcByIRPAMnYfP9DCHD/BawQ/cKxfPrvNCj+kvgLAXnnrvzggor+3pE0/lCeZPj71lz61xD2/RU2mv/xPpr80z4O/YDvPPiyvUz60MiA/PMaavcStGL+6bzS/Y9xOPiGCGT+b4IM/EQFfP4ALwD6Y5gu/BOaOvsyocD7XS62/TTs/v6ooXT8I/qK+mY72vrWxib4p+1+/nupBv5NIHL8UJli+PuL6vQaKoL4IWIa947nwvqGQPb921gS/qBtmvVUthT7uJPA+KC7vPe2dHL8bESG/PgJ+vv7N4j2g10C8vcnIv4TWXL4BTrO+sfEdvuJ4HD7QgUu9im7Rv68kur8cvPE92+sgPhqojT4E57u9RuqKv/9Dpb88J5a/4mI4v71Utz5IRi+9AQgdvk7U875yLCq/o4Mnv1pOBr+gOQ/A4NMBP7Jn0T4nymM+FOqyPfCvaL5VJQ/A/FgPwKilvr+87VQ/DmQhP7S6hD6ocJW/tujZv9Qv0L9l4Zy/Ydg/P4IojT4xK4Q+gXiivgYbdb+j8Im/3GIVPa7Y4z5S22Q/0upTP27uPz4zQ5y+zJjPvjps7j1xZA4/QpCIv236bD8EBfQ+qnATv+7ExL4tsAA+Out6v+YoHL9MtvW+HZOHvlK65L6ffXe+onUWv7gSH78="
+          }
+        }
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "sanitize",
+    "result": {
+      "claims": [
+        {
+          "predicateType": "sanitize/memcheck",
+          "claim_id": "c-0014",
+          "verdict": "pass",
+          "detail": {
+            "errors": 0,
+            "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n",
+            "cases": [
+              "case1"
+            ],
+            "executable_identity": {
+              "sha256": "44503a1195acbe938a62941167e9b6f9099601105e5a3fe67e179ef504c97a89",
+              "size": 307912,
+              "role": "replay",
+              "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+            }
+          }
+        },
+        {
+          "predicateType": "sanitize/racecheck",
+          "claim_id": "c-0015",
+          "verdict": "pass",
+          "detail": {
+            "errors": 0,
+            "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)\n",
+            "cases": [
+              "case1"
+            ],
+            "executable_identity": {
+              "sha256": "44503a1195acbe938a62941167e9b6f9099601105e5a3fe67e179ef504c97a89",
+              "size": 307912,
+              "role": "replay",
+              "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+            }
+          }
+        },
+        {
+          "predicateType": "sanitize/initcheck",
+          "claim_id": "c-0016",
+          "verdict": "pass",
+          "detail": {
+            "errors": 0,
+            "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n",
+            "cases": [
+              "case1"
+            ],
+            "executable_identity": {
+              "sha256": "44503a1195acbe938a62941167e9b6f9099601105e5a3fe67e179ef504c97a89",
+              "size": 307912,
+              "role": "replay",
+              "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "regression_visible",
+    "result": {
+      "claim_id": "c-0017",
+      "verdict": "pass",
+      "detail": {
+        "per_case": {
+          "case1": {
+            "pass": true,
+            "per_var": {
+              "phi": {
+                "pass": true,
+                "max_abs": 9.5367431640625e-07,
+                "max_rel": 5.567675090727796e-05,
+                "max_ulp": 704,
+                "n_bad": 0,
+                "n": 129,
+                "n_nonfinite": 0
+              }
+            },
+            "extra": []
+          },
+          "case2": {
+            "pass": true,
+            "per_var": {
+              "phi": {
+                "pass": true,
+                "max_abs": 1.2516975402832031e-06,
+                "max_rel": 5.063791108489193e-05,
+                "max_ulp": 640,
+                "n_bad": 0,
+                "n": 129,
+                "n_nonfinite": 0
+              }
+            },
+            "extra": []
+          }
+        },
+        "policy_sha256": "14a6c3670097603d08eedee2099ff553c9341798e7d67ed339b7f4bff6686ef7"
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "property_check",
+    "result": {
+      "claim_id": "c-0018",
+      "verdict": "pass",
+      "detail": {
+        "module": "harness/properties.py",
+        "seed": 42,
+        "max_examples": 100,
+        "passed": 1,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "deselected": 0,
+        "xfailed": 0,
+        "xpassed": 0,
+        "collected": 1,
+        "executed": 1,
+        "replays_observed": 200,
+        "counts_source": "pytest summary emitted by the submitted property process",
+        "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n.                                                                        [100%]\n=============================== warnings summary ===============================\nharness/properties.py::test_equation_and_charge_linearity\n  /usr/local/lib/python3.12/dist-packages/hypothesis/_settings.py:847: HypothesisWarning: The database setting is not configured, and the default location is unusable - falling back to an in-memory database for this session.  path=PosixPath('/job/tree/.hypothesis/examples')\n    self._fallback.database if self._database is not_set else self._database\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1 passed, 1 warning in 54.97s\n",
+        "executable_identity": {
+          "sha256": "44503a1195acbe938a62941167e9b6f9099601105e5a3fe67e179ef504c97a89",
+          "size": 307912,
+          "role": "replay",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        }
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "regression_holdout",
+    "result": {
+      "claim_id": "c-0019",
+      "verdict": "pass"
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "time_baseline",
+    "result": {
+      "claim_id": "c-0020",
+      "verdict": "pass",
+      "detail": {
+        "runs_s": [
+          1.2631889919866808,
+          1.2863298490119632,
+          1.3124479219986824,
+          1.2704924900026526,
+          1.3234763280051993
+        ],
+        "gpu_exclusive": false,
+        "measurement_scope": "end_to_end_isolated_job_wall_time",
+        "executable": "timing",
+        "args": [
+          "32768",
+          "2",
+          "30"
+        ],
+        "env": {
+          "OMP_NUM_THREADS": "8"
+        },
+        "outputs": {
+          "phi.npy": "fbc5f2f098aef3b1fae26075e8d2a2f26686238c9ed6166d4009f54c3d8b48cf"
+        },
+        "executable_identity": {
+          "sha256": "bcc88b6e00c35f3663eb3687f8113c1d23a9104963df3b1f430e603db35aaf26",
+          "size": 244792,
+          "role": "timing",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        },
+        "strategy": "cpu_reference",
+        "flags": [
+          "-O2",
+          "-stdpar=multicore"
+        ],
+        "build": {
+          "attempt_id": "potential-solve-baseline-b47f49973b1fc0c6-9e243989d109fd713603ad6cb4bfe59165317b4c874217dd14f49d36ff4e2025",
+          "flags": [
+            "-O2",
+            "-stdpar=multicore"
+          ],
+          "toolchains": {
+            "fortran": {
+              "compiler": "nvfortran",
+              "flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ]
+            }
+          },
+          "languages_compiled": [
+            "fortran"
+          ],
+          "targets": {
+            "replay": {
+              "executable": "replay",
+              "built": true,
+              "sha256": "bdfec767969be91368d978fd4b3c6eec846be4d449d26aeb1164328c8921b9d3",
+              "size": 240248,
+              "role": "replay",
+              "kind": "executable",
+              "roles": [
+                "replay"
+              ]
+            },
+            "timing": {
+              "executable": "timing",
+              "built": true,
+              "sha256": "bcc88b6e00c35f3663eb3687f8113c1d23a9104963df3b1f430e603db35aaf26",
+              "size": 244792,
+              "role": "timing",
+              "kind": "executable",
+              "roles": [
+                "timing"
+              ]
+            },
+            "capture": {
+              "executable": "capture",
+              "built": true,
+              "sha256": "fcf0d319c18d70b15f88697e06ca60c0e711acd40137fa62ce271bf43695ff0f",
+              "size": 245160,
+              "role": "capture",
+              "kind": "executable",
+              "roles": [
+                "capture"
+              ]
+            }
+          },
+          "compiles": [
+            {
+              "argv": [
+                "-O2",
+                "-stdpar=multicore",
+                "-module",
+                ".",
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/replay.f90",
+                "-o",
+                "replay"
+              ],
+              "cwd": ".",
+              "language": "fortran",
+              "compiler": null,
+              "inputs": [
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/replay.f90"
+              ],
+              "link_inputs": [],
+              "kind": "compile",
+              "output": "replay",
+              "required_flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ],
+              "has_flags": true,
+              "outside": [],
+              "audit_errors": []
+            },
+            {
+              "argv": [
+                "-O2",
+                "-stdpar=multicore",
+                "-module",
+                ".",
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/main.f90",
+                "-o",
+                "timing"
+              ],
+              "cwd": ".",
+              "language": "fortran",
+              "compiler": null,
+              "inputs": [
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/main.f90"
+              ],
+              "link_inputs": [],
+              "kind": "compile",
+              "output": "timing",
+              "required_flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ],
+              "has_flags": true,
+              "outside": [],
+              "audit_errors": []
+            },
+            {
+              "argv": [
+                "-O2",
+                "-stdpar=multicore",
+                "-module",
+                ".",
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/capture.f90",
+                "-o",
+                "capture"
+              ],
+              "cwd": ".",
+              "language": "fortran",
+              "compiler": null,
+              "inputs": [
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/capture.f90"
+              ],
+              "link_inputs": [],
+              "kind": "compile",
+              "output": "capture",
+              "required_flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ],
+              "has_flags": true,
+              "outside": [],
+              "audit_errors": []
+            }
+          ],
+          "compiler_audit": {
+            "protected": true,
+            "collector": "strace/process+cwd",
+            "observed_executions": 95,
+            "compiler_invocations": 3,
+            "language_invocations": {
+              "fortran": 3
+            }
+          },
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+          "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+          "minfo_excerpt": "WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.",
+          "log_tail": "src/potential.f90 src/initial.f90 harness/capture.f90  -o capture \nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8f60c3f662cd\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/replay.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/replay.f90:\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8f60c3f662cd\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/main.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/main.f90:\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8f60c3f662cd\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n"
+        },
+        "program_set": "2381e01df4ecb84bace52b8f85e1e62b4f3e697c3b36e9cabab764203e22011f"
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "program_regression",
+    "result": {
+      "claim_id": "c-0021",
+      "verdict": "pass",
+      "detail": {
+        "policy_sha256": "14a6c3670097603d08eedee2099ff553c9341798e7d67ed339b7f4bff6686ef7",
+        "program_set": "2381e01df4ecb84bace52b8f85e1e62b4f3e697c3b36e9cabab764203e22011f",
+        "per_var": {
+          "phi": {
+            "pass": true,
+            "max_abs": 0.00010728836059570312,
+            "max_rel": 7.5227272727272725,
+            "max_ulp": 1841266689,
+            "n_bad": 0,
+            "n": 32768,
+            "n_nonfinite": 0
+          }
+        },
+        "runs_s": [
+          0.8809259060071781
+        ],
+        "executable_identity": {
+          "sha256": "e3c2732e9b85d4e3b9d0c0b3dcb82535dd5775f1145922556cc9727ab63159f4",
+          "size": 308376,
+          "role": "timing",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        }
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "time_port",
+    "result": {
+      "claim_id": "c-0022",
+      "verdict": "pass",
+      "detail": {
+        "runs_s": [
+          0.8113287390006008,
+          0.8409350340079982,
+          0.8926695880072657,
+          0.8264465599932009,
+          0.8388769900047919
+        ],
+        "gpu_exclusive": false,
+        "measurement_scope": "end_to_end_isolated_job_wall_time",
+        "executable": "timing",
+        "args": [
+          "32768",
+          "2",
+          "30"
+        ],
+        "env": {
+          "OMP_NUM_THREADS": "8"
+        },
+        "outputs": {
+          "phi.npy": "30622c3013f3cebf0ca8da4438b254d39a131fa5c32c46d64bc90d978cbeb032"
+        },
+        "executable_identity": {
+          "sha256": "e3c2732e9b85d4e3b9d0c0b3dcb82535dd5775f1145922556cc9727ab63159f4",
+          "size": 308376,
+          "role": "timing",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        },
+        "flags": [
+          "-O2",
+          "-stdpar=gpu",
+          "-gpu=cc89,mem:managed",
+          "-Minfo=accel"
+        ],
+        "program_set": "2381e01df4ecb84bace52b8f85e1e62b4f3e697c3b36e9cabab764203e22011f",
+        "policy_sha256": "14a6c3670097603d08eedee2099ff553c9341798e7d67ed339b7f4bff6686ef7",
+        "compared_repetitions": 5,
+        "per_run": [
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 0.00010728836059570312,
+              "max_rel": 7.5227272727272725,
+              "max_ulp": 1841266689,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          },
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 0.00010728836059570312,
+              "max_rel": 7.5227272727272725,
+              "max_ulp": 1841266689,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          },
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 0.00010728836059570312,
+              "max_rel": 7.5227272727272725,
+              "max_ulp": 1841266689,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          },
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 0.00010728836059570312,
+              "max_rel": 7.5227272727272725,
+              "max_ulp": 1841266689,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          },
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 0.00010728836059570312,
+              "max_rel": 7.5227272727272725,
+              "max_ulp": 1841266689,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "phase": "fortran",
+    "action": "performance_check",
+    "result": {
+      "claim_id": "c-0023",
+      "verdict": "pass",
+      "detail": {
+        "baseline_claim_id": "c-0020",
+        "port_claim_id": "c-0022",
+        "baseline_samples_s": [
+          1.2631889919866808,
+          1.2863298490119632,
+          1.3124479219986824,
+          1.2704924900026526,
+          1.3234763280051993
+        ],
+        "port_samples_s": [
+          0.8113287390006008,
+          0.8409350340079982,
+          0.8926695880072657,
+          0.8264465599932009,
+          0.8388769900047919
+        ],
+        "baseline_median_s": 1.2863298490119632,
+        "port_median_s": 0.8388769900047919,
+        "median_speedup": 1.533395079777567,
+        "min_median_speedup": 1.1,
+        "minimum_samples": 5,
+        "measurement_scope": "end_to_end_isolated_job_wall_time",
+        "gpu_exclusivity_required": false
+      }
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "submit",
+    "result": {
+      "tree": "5fb1a399fdd959ed33941ffee122b2d2f8b86a00cfd31d48a2f5540bfb47c25a",
+      "frozen": "9e243989d109fd713603ad6cb4bfe59165317b4c874217dd14f49d36ff4e2025",
+      "rejected": [
+        {
+          "path": "Makefile",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/capture.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/properties.py",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/replay.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/tolerances.json",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "initial.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "potential.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "src/initial.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "src/potential.f90",
+          "reason": "not_allowed"
+        }
+      ],
+      "not_sent": [],
+      "committed": true
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "sese_check",
+    "result": {
+      "claim_id": "c-0001",
+      "verdict": "pass",
+      "detail": {
+        "file_list": [
+          "src/potential.cu",
+          "src/potential.f90"
+        ],
+        "allow_globs": [
+          "notes/regions/potential.yaml",
+          "src/potential.cu",
+          "src/potential.f90"
+        ],
+        "resolved_ranges": [
+          {
+            "file": "src/potential.f90",
+            "label": "potential",
+            "declared": [
+              5,
+              12
+            ],
+            "actual": [
+              5,
+              12
+            ],
+            "procedure": {
+              "kind": "subroutine",
+              "name": "potential",
+              "range": [
+                5,
+                12
+              ]
+            }
+          },
+          {
+            "file": "src/potential.f90",
+            "label": "point_potential",
+            "declared": [
+              13,
+              25
+            ],
+            "actual": [
+              13,
+              25
+            ],
+            "procedure": {
+              "kind": "function",
+              "name": "point_potential",
+              "range": [
+                13,
+                25
+              ]
+            }
+          }
+        ],
+        "range_count": 2,
+        "total_lines": 21,
+        "notes": [
+          {
+            "label": "src/potential.cu",
+            "line": 0,
+            "text": "",
+            "note": "opaque foreign source: control flow, call closure and effects were not analyzed",
+            "present": false
+          }
+        ]
+      }
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "submit",
+    "result": {
+      "tree": "f2daa138b225edfb2ea06507c4bfc8d35675f19105bbf2cba8771635f585ba17",
+      "frozen": "e0d4f0c66fc141acbb5f49e54e3ef6401b593d1ec7560c76834912803b9b504a",
+      "rejected": [
+        {
+          "path": "Makefile",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/capture.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/properties.py",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/replay.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/tolerances.json",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "initial.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "potential.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "src/initial.f90",
+          "reason": "not_allowed"
+        }
+      ],
+      "not_sent": [],
+      "committed": true
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "sese_check",
+    "result": {
+      "claim_id": "c-0002",
+      "verdict": "pass",
+      "detail": {
+        "file_list": [
+          "src/potential.cu",
+          "src/potential.f90"
+        ],
+        "allow_globs": [
+          "notes/regions/potential.yaml",
+          "src/potential.cu",
+          "src/potential.f90"
+        ],
+        "resolved_ranges": [
+          {
+            "file": "src/potential.f90",
+            "label": "potential",
+            "declared": [
+              13,
+              17
+            ],
+            "actual": [
+              13,
+              17
+            ],
+            "procedure": {
+              "kind": "subroutine",
+              "name": "potential",
+              "range": [
+                13,
+                17
+              ]
+            }
+          }
+        ],
+        "range_count": 1,
+        "total_lines": 5,
+        "notes": [
+          {
+            "label": "src/potential.cu",
+            "line": 0,
+            "text": "",
+            "note": "opaque foreign source: control flow, call closure and effects were not analyzed",
+            "present": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "build_replay",
+    "result": {
+      "claim_id": "c-0003",
+      "verdict": "pass",
+      "detail": {
+        "attempt_id": "potential-solve-d6afc0acf4160b7c-f2daa138b225edfb2ea06507c4bfc8d35675f19105bbf2cba8771635f585ba17",
+        "flags": [],
+        "toolchains": {
+          "fortran": {
+            "compiler": "nvfortran",
+            "flags": [
+              "-O2"
+            ]
+          },
+          "cuda": {
+            "compiler": "nvcc",
+            "flags": [
+              "-O2",
+              "-arch=sm_89",
+              "--fmad=false"
+            ]
+          }
+        },
+        "languages_compiled": [
+          "cuda",
+          "fortran"
+        ],
+        "targets": {
+          "replay": {
+            "executable": "replay",
+            "built": true,
+            "sha256": "af16cb9877cc05684bb88f3f0375cb894a172e87ca1731d941dcc4f38c2f3919",
+            "size": 296624,
+            "role": "replay",
+            "kind": "executable",
+            "roles": [
+              "replay"
+            ]
+          },
+          "timing": {
+            "executable": "timing",
+            "built": true,
+            "sha256": "b46041a8960e78f4589c5f28d6678812d2d43cad0d1d99620f1f5b18a20556b9",
+            "size": 301184,
+            "role": "timing",
+            "kind": "executable",
+            "roles": [
+              "timing"
+            ]
+          },
+          "capture": {
+            "executable": "capture",
+            "built": true,
+            "sha256": "fe8a61cdeb0a64eba0be2dddc37cd13d29f0bfdc53fcffb953892a29fe8fd88c",
+            "size": 301512,
+            "role": "capture",
+            "kind": "executable",
+            "roles": [
+              "capture"
+            ]
+          }
+        },
+        "compiles": [
+          {
+            "argv": [
+              "-O2",
+              "-arch=sm_89",
+              "--fmad=false",
+              "-c",
+              "src/potential.cu",
+              "-o",
+              "potential_gpu.o"
+            ],
+            "cwd": ".",
+            "language": "cuda",
+            "compiler": "nvcc",
+            "inputs": [
+              "src/potential.cu"
+            ],
+            "link_inputs": [],
+            "kind": "compile",
+            "output": "potential_gpu.o",
+            "required_flags": [
+              "-O2",
+              "-arch=sm_89",
+              "--fmad=false"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          },
+          {
+            "argv": [
+              "-O2",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/replay.f90",
+              "potential_gpu.o",
+              "-o",
+              "replay",
+              "-cuda",
+              "-c++libs"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": "nvfortran",
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/replay.f90"
+            ],
+            "link_inputs": [
+              "potential_gpu.o"
+            ],
+            "kind": "compile",
+            "output": "replay",
+            "required_flags": [
+              "-O2"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          },
+          {
+            "argv": [
+              "-O2",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/main.f90",
+              "potential_gpu.o",
+              "-o",
+              "timing",
+              "-cuda",
+              "-c++libs"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": "nvfortran",
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/main.f90"
+            ],
+            "link_inputs": [
+              "potential_gpu.o"
+            ],
+            "kind": "compile",
+            "output": "timing",
+            "required_flags": [
+              "-O2"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          },
+          {
+            "argv": [
+              "-O2",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/capture.f90",
+              "potential_gpu.o",
+              "-o",
+              "capture",
+              "-cuda",
+              "-c++libs"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": "nvfortran",
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/capture.f90"
+            ],
+            "link_inputs": [
+              "potential_gpu.o"
+            ],
+            "kind": "compile",
+            "output": "capture",
+            "required_flags": [
+              "-O2"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          }
+        ],
+        "compiler_audit": {
+          "protected": true,
+          "collector": "strace/process+cwd",
+          "observed_executions": 309,
+          "compiler_invocations": 4,
+          "language_invocations": {
+            "cuda": 1,
+            "fortran": 3
+          }
+        },
+        "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+        "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+        "minfo_excerpt": "WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.",
+        "log_tail": "/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.7ddfb9157611\n"
+      }
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "run_replay",
+    "result": {
+      "claim_id": "c-0004",
+      "verdict": "pass",
+      "detail": {
+        "executable_identity": {
+          "sha256": "af16cb9877cc05684bb88f3f0375cb894a172e87ca1731d941dcc4f38c2f3919",
+          "size": 296624,
+          "role": "replay",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        },
+        "kernels_launched": 2,
+        "launches": [
+          [
+            "nsys",
+            "charged_cloud",
+            "0"
+          ]
+        ],
+        "outputs": {
+          "case1": {
+            "phi": "k05VTVBZAQB2AHsnZGVzY3InOiAnPGY0JywgJ2ZvcnRyYW5fb3JkZXInOiBUcnVlLCAnc2hhcGUnOiAoMTI5LCApLCB9ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAopcnE+WL+9PQ4d4r1WUTe+jIGjvnMVDcCLIRPA53YfP4DDHD83bAQ/UK1fPqLNCj+7vgLAlXnrv34gor86pU0/ZCiZPq71lz6BxD2/W02mvyxQpr9uz4O/rDrPPrWwUz53MyA/wMKavbatGL/ibzS/VttOPtWBGT/z4IM/1QFfP6AMwD5k5gu/5uWOvkyocD4ATK2/1Ds/v0opXT8c/aK+7Y32vnyxib4n+1+/zupBv6ZIHL+JJ1i+4N36vUqJoL6wVYa9srnwvnqQPb9+1gS/mCBmvW4shT7wJfA+KjHvPZWdHL/kECG/EgJ+vozM4j0g8UC8+MnIvzrUXL4qTbO+gvAdvkt5HD7gg0u9oW7Rv+wkur84wfE9se0gPrSojT7c5bu9MeqKvxZEpb9rJ5a/ZmM4v4tVtz5cPi+9/wUdvrDT875yLCq/4oMnv6NOBr+3OQ/AjtQBP/Bo0T4RzGM+HOuyPRqwaL5tJQ/AF1kPwPOlvr927lQ/bGQhP/S6hD6gcJW/3+jZvwgw0L+e4Zy/5dg/P3cpjT6CLIQ+yneivhAbdb/E8Im/VF8VPfDX4z7v22Q/j+tTP1HwPz72Qpy+wpjPvr5q7j0jZA4/hZCIvx37bD8JBvQ+cnATv6zExL4psAA+aet6v14pHL8Mt/W+DpKHvoa55L6wfHe+jHUWv9YSH78="
+          },
+          "case2": {
+            "phi": "k05VTVBZAQB2AHsnZGVzY3InOiAnPGY0JywgJ2ZvcnRyYW5fb3JkZXInOiBUcnVlLCAnc2hhcGUnOiAoMTI5LCApLCB9ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIArCb3E+pLq9PcQf4r3+UTe+RIGjvmMVDcByIRPAMnYfP9HCHD/CawQ/aKxfPrPNCj+ivgLAYXnrvzggor+3pE0/nCeZPj71lz61xD2/SU2mvwBQpr82z4O/WDvPPgyvUz64MiA/BMaavbytGL+4bzS/U9xOPiGCGT+Z4IM/GQFfP5ILwD6U5gu/AOaOvryocD7XS62/TTs/v6koXT8Y/qK+kY72vrOxib4p+1+/nupBv49IHL/6JVi+fuL6vQiKoL74V4a94rnwvqGQPb9y1gS/ZBtmvVYthT7mJPA+YC7vPe+dHL8hESG/HgJ+vt7N4j3g2EC8v8nIv3zWXL4BTrO+sPEdvsJ4HD7QgUu9jG7Rv68kur/cu/E92+sgPhKojT705ru9RuqKvwFEpb88J5a/4WI4v51Utz5IRi+9BQgdvk7U8754LCq/q4Mnv1ZOBr+gOQ/A4NMBP6Jn0T4nymM+1OmyPfKvaL5VJQ/A/FgPwKilvr/E7VQ/BmQhP6y6hD6mcJW/tujZv9gv0L9n4Zy/W9g/P4IojT45K4Q+eXiivgYbdb+l8Im/lGIVPaLY4z5O22Q/0+pTP17uPz4pQ5y+0JjPvlps7j1pZA4/QpCIv2H6bD8EBfQ+rnATv+7ExL4tsAA+Mut6v+ooHL9OtvW+G5OHvmK65L57fXe+oHUWv7wSH78="
+          }
+        }
+      }
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "sanitize",
+    "result": {
+      "claims": [
+        {
+          "predicateType": "sanitize/memcheck",
+          "claim_id": "c-0005",
+          "verdict": "pass",
+          "detail": {
+            "errors": 0,
+            "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n",
+            "cases": [
+              "case1",
+              "case2"
+            ],
+            "executable_identity": {
+              "sha256": "af16cb9877cc05684bb88f3f0375cb894a172e87ca1731d941dcc4f38c2f3919",
+              "size": 296624,
+              "role": "replay",
+              "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+            }
+          }
+        },
+        {
+          "predicateType": "sanitize/racecheck",
+          "claim_id": "c-0006",
+          "verdict": "pass",
+          "detail": {
+            "errors": 0,
+            "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)\n",
+            "cases": [
+              "case1",
+              "case2"
+            ],
+            "executable_identity": {
+              "sha256": "af16cb9877cc05684bb88f3f0375cb894a172e87ca1731d941dcc4f38c2f3919",
+              "size": 296624,
+              "role": "replay",
+              "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+            }
+          }
+        },
+        {
+          "predicateType": "sanitize/initcheck",
+          "claim_id": "c-0007",
+          "verdict": "pass",
+          "detail": {
+            "errors": 0,
+            "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n",
+            "cases": [
+              "case1",
+              "case2"
+            ],
+            "executable_identity": {
+              "sha256": "af16cb9877cc05684bb88f3f0375cb894a172e87ca1731d941dcc4f38c2f3919",
+              "size": 296624,
+              "role": "replay",
+              "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "regression_visible",
+    "result": {
+      "claim_id": "c-0008",
+      "verdict": "pass",
+      "detail": {
+        "per_case": {
+          "case1": {
+            "pass": true,
+            "per_var": {
+              "phi": {
+                "pass": true,
+                "max_abs": 1.1324882507324219e-06,
+                "max_rel": 1.7715329834133898e-05,
+                "max_ulp": 224,
+                "n_bad": 0,
+                "n": 129,
+                "n_nonfinite": 0
+              }
+            },
+            "extra": []
+          },
+          "case2": {
+            "pass": true,
+            "per_var": {
+              "phi": {
+                "pass": true,
+                "max_abs": 1.1920928955078125e-06,
+                "max_rel": 2.5318955542445964e-05,
+                "max_ulp": 320,
+                "n_bad": 0,
+                "n": 129,
+                "n_nonfinite": 0
+              }
+            },
+            "extra": []
+          }
+        },
+        "policy_sha256": "14a6c3670097603d08eedee2099ff553c9341798e7d67ed339b7f4bff6686ef7"
+      }
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "property_check",
+    "result": {
+      "claim_id": "c-0009",
+      "verdict": "pass",
+      "detail": {
+        "module": "harness/properties.py",
+        "seed": 42,
+        "max_examples": 100,
+        "passed": 1,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "deselected": 0,
+        "xfailed": 0,
+        "xpassed": 0,
+        "collected": 1,
+        "executed": 1,
+        "replays_observed": 200,
+        "counts_source": "pytest summary emitted by the submitted property process",
+        "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n.                                                                        [100%]\n=============================== warnings summary ===============================\nharness/properties.py::test_equation_and_charge_linearity\n  /usr/local/lib/python3.12/dist-packages/hypothesis/_settings.py:847: HypothesisWarning: The database setting is not configured, and the default location is unusable - falling back to an in-memory database for this session.  path=PosixPath('/job/tree/.hypothesis/examples')\n    self._fallback.database if self._database is not_set else self._database\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1 passed, 1 warning in 68.87s (0:01:08)\n",
+        "executable_identity": {
+          "sha256": "af16cb9877cc05684bb88f3f0375cb894a172e87ca1731d941dcc4f38c2f3919",
+          "size": 296624,
+          "role": "replay",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        }
+      }
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "regression_holdout",
+    "result": {
+      "claim_id": "c-0010",
+      "verdict": "pass"
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "time_baseline",
+    "result": {
+      "claim_id": "c-0011",
+      "verdict": "pass",
+      "detail": {
+        "runs_s": [
+          1.3093326030066237,
+          1.3811338250088738,
+          1.2450169030053075,
+          1.352318971999921,
+          1.3594958870089613
+        ],
+        "gpu_exclusive": false,
+        "measurement_scope": "end_to_end_isolated_job_wall_time",
+        "executable": "timing",
+        "args": [
+          "32768",
+          "2",
+          "30"
+        ],
+        "env": {
+          "OMP_NUM_THREADS": "8"
+        },
+        "outputs": {
+          "phi.npy": "fbc5f2f098aef3b1fae26075e8d2a2f26686238c9ed6166d4009f54c3d8b48cf"
+        },
+        "executable_identity": {
+          "sha256": "47b142a62d947c642ff91a23260e9021e0044ae965ab5875b2f13a3df02cb7fd",
+          "size": 244792,
+          "role": "timing",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        },
+        "strategy": "cpu_reference",
+        "flags": [
+          "-O2",
+          "-stdpar=multicore"
+        ],
+        "build": {
+          "attempt_id": "potential-solve-baseline-b47f49973b1fc0c6-9e243989d109fd713603ad6cb4bfe59165317b4c874217dd14f49d36ff4e2025",
+          "flags": [
+            "-O2",
+            "-stdpar=multicore"
+          ],
+          "toolchains": {
+            "fortran": {
+              "compiler": "nvfortran",
+              "flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ]
+            }
+          },
+          "languages_compiled": [
+            "fortran"
+          ],
+          "targets": {
+            "replay": {
+              "executable": "replay",
+              "built": true,
+              "sha256": "d3dcb1e5ce191ada22c709b2502ee980edb3f8ee2bdf5078b6173f5772bfe1f1",
+              "size": 240248,
+              "role": "replay",
+              "kind": "executable",
+              "roles": [
+                "replay"
+              ]
+            },
+            "timing": {
+              "executable": "timing",
+              "built": true,
+              "sha256": "47b142a62d947c642ff91a23260e9021e0044ae965ab5875b2f13a3df02cb7fd",
+              "size": 244792,
+              "role": "timing",
+              "kind": "executable",
+              "roles": [
+                "timing"
+              ]
+            },
+            "capture": {
+              "executable": "capture",
+              "built": true,
+              "sha256": "1203eb76f22f082b1399b28fc82e5951e972b1266b0fd00d4016bfd26536825d",
+              "size": 245160,
+              "role": "capture",
+              "kind": "executable",
+              "roles": [
+                "capture"
+              ]
+            }
+          },
+          "compiles": [
+            {
+              "argv": [
+                "-O2",
+                "-stdpar=multicore",
+                "-module",
+                ".",
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/replay.f90",
+                "-o",
+                "replay"
+              ],
+              "cwd": ".",
+              "language": "fortran",
+              "compiler": null,
+              "inputs": [
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/replay.f90"
+              ],
+              "link_inputs": [],
+              "kind": "compile",
+              "output": "replay",
+              "required_flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ],
+              "has_flags": true,
+              "outside": [],
+              "audit_errors": []
+            },
+            {
+              "argv": [
+                "-O2",
+                "-stdpar=multicore",
+                "-module",
+                ".",
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/main.f90",
+                "-o",
+                "timing"
+              ],
+              "cwd": ".",
+              "language": "fortran",
+              "compiler": null,
+              "inputs": [
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/main.f90"
+              ],
+              "link_inputs": [],
+              "kind": "compile",
+              "output": "timing",
+              "required_flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ],
+              "has_flags": true,
+              "outside": [],
+              "audit_errors": []
+            },
+            {
+              "argv": [
+                "-O2",
+                "-stdpar=multicore",
+                "-module",
+                ".",
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/capture.f90",
+                "-o",
+                "capture"
+              ],
+              "cwd": ".",
+              "language": "fortran",
+              "compiler": null,
+              "inputs": [
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/capture.f90"
+              ],
+              "link_inputs": [],
+              "kind": "compile",
+              "output": "capture",
+              "required_flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ],
+              "has_flags": true,
+              "outside": [],
+              "audit_errors": []
+            }
+          ],
+          "compiler_audit": {
+            "protected": true,
+            "collector": "strace/process+cwd",
+            "observed_executions": 95,
+            "compiler_invocations": 3,
+            "language_invocations": {
+              "fortran": 3
+            }
+          },
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+          "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+          "minfo_excerpt": "WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.",
+          "log_tail": "src/potential.f90 src/initial.f90 harness/capture.f90  -o capture \nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.dbba74ccda18\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/replay.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/replay.f90:\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.dbba74ccda18\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/main.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/main.f90:\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.dbba74ccda18\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n"
+        },
+        "program_set": "2381e01df4ecb84bace52b8f85e1e62b4f3e697c3b36e9cabab764203e22011f"
+      }
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "program_regression",
+    "result": {
+      "claim_id": "c-0012",
+      "verdict": "pass",
+      "detail": {
+        "policy_sha256": "14a6c3670097603d08eedee2099ff553c9341798e7d67ed339b7f4bff6686ef7",
+        "program_set": "2381e01df4ecb84bace52b8f85e1e62b4f3e697c3b36e9cabab764203e22011f",
+        "per_var": {
+          "phi": {
+            "pass": true,
+            "max_abs": 9.584426879882812e-05,
+            "max_rel": 5.431818181818182,
+            "max_ulp": 1836253185,
+            "n_bad": 0,
+            "n": 32768,
+            "n_nonfinite": 0
+          }
+        },
+        "runs_s": [
+          0.9150001250091009
+        ],
+        "executable_identity": {
+          "sha256": "b46041a8960e78f4589c5f28d6678812d2d43cad0d1d99620f1f5b18a20556b9",
+          "size": 301184,
+          "role": "timing",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        }
+      }
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "time_port",
+    "result": {
+      "claim_id": "c-0013",
+      "verdict": "pass",
+      "detail": {
+        "runs_s": [
+          0.8982170820090687,
+          0.9075689739984227,
+          0.9079388129903236,
+          0.8995593969884794,
+          0.9054945700045209
+        ],
+        "gpu_exclusive": false,
+        "measurement_scope": "end_to_end_isolated_job_wall_time",
+        "executable": "timing",
+        "args": [
+          "32768",
+          "2",
+          "30"
+        ],
+        "env": {
+          "OMP_NUM_THREADS": "8"
+        },
+        "outputs": {
+          "phi.npy": "92f46e0e1ecb4d5b1c70ac99a91e0ec8f7627a6b15fdacb12639b65213e26d9c"
+        },
+        "executable_identity": {
+          "sha256": "b46041a8960e78f4589c5f28d6678812d2d43cad0d1d99620f1f5b18a20556b9",
+          "size": 301184,
+          "role": "timing",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        },
+        "flags": [],
+        "program_set": "2381e01df4ecb84bace52b8f85e1e62b4f3e697c3b36e9cabab764203e22011f",
+        "policy_sha256": "14a6c3670097603d08eedee2099ff553c9341798e7d67ed339b7f4bff6686ef7",
+        "compared_repetitions": 5,
+        "per_run": [
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 9.584426879882812e-05,
+              "max_rel": 5.431818181818182,
+              "max_ulp": 1836253185,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          },
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 9.584426879882812e-05,
+              "max_rel": 5.431818181818182,
+              "max_ulp": 1836253185,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          },
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 9.584426879882812e-05,
+              "max_rel": 5.431818181818182,
+              "max_ulp": 1836253185,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          },
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 9.584426879882812e-05,
+              "max_rel": 5.431818181818182,
+              "max_ulp": 1836253185,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          },
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 9.584426879882812e-05,
+              "max_rel": 5.431818181818182,
+              "max_ulp": 1836253185,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "phase": "cuda",
+    "action": "performance_check",
+    "result": {
+      "claim_id": "c-0014",
+      "verdict": "pass",
+      "detail": {
+        "baseline_claim_id": "c-0011",
+        "port_claim_id": "c-0013",
+        "baseline_samples_s": [
+          1.3093326030066237,
+          1.3811338250088738,
+          1.2450169030053075,
+          1.352318971999921,
+          1.3594958870089613
+        ],
+        "port_samples_s": [
+          0.8982170820090687,
+          0.9075689739984227,
+          0.9079388129903236,
+          0.8995593969884794,
+          0.9054945700045209
+        ],
+        "baseline_median_s": 1.352318971999921,
+        "port_median_s": 0.9054945700045209,
+        "median_speedup": 1.4934589524851254,
+        "min_median_speedup": 1.1,
+        "minimum_samples": 5,
+        "measurement_scope": "end_to_end_isolated_job_wall_time",
+        "gpu_exclusivity_required": false
+      }
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "submit",
+    "result": {
+      "tree": "f246d565d7b1d4e8ffe82365a56b655e757dcd5eb7db08ebf0d359c544a8a5d0",
+      "frozen": "9e243989d109fd713603ad6cb4bfe59165317b4c874217dd14f49d36ff4e2025",
+      "rejected": [
+        {
+          "path": "Makefile",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/capture.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/properties.py",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/replay.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/tolerances.json",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "initial.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "potential.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "src/initial.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "src/potential.f90",
+          "reason": "not_allowed"
+        }
+      ],
+      "not_sent": [],
+      "committed": true
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "sese_check",
+    "result": {
+      "claim_id": "c-0001",
+      "verdict": "pass",
+      "detail": {
+        "file_list": [
+          "src/potential.cpp",
+          "src/potential.f90",
+          "src/potential.ptx"
+        ],
+        "allow_globs": [
+          "notes/regions/potential.yaml",
+          "src/potential.cpp",
+          "src/potential.f90",
+          "src/potential.ptx"
+        ],
+        "resolved_ranges": [
+          {
+            "file": "src/potential.f90",
+            "label": "potential",
+            "declared": [
+              5,
+              12
+            ],
+            "actual": [
+              5,
+              12
+            ],
+            "procedure": {
+              "kind": "subroutine",
+              "name": "potential",
+              "range": [
+                5,
+                12
+              ]
+            }
+          },
+          {
+            "file": "src/potential.f90",
+            "label": "point_potential",
+            "declared": [
+              13,
+              25
+            ],
+            "actual": [
+              13,
+              25
+            ],
+            "procedure": {
+              "kind": "function",
+              "name": "point_potential",
+              "range": [
+                13,
+                25
+              ]
+            }
+          }
+        ],
+        "range_count": 2,
+        "total_lines": 21,
+        "notes": [
+          {
+            "label": "src/potential.cpp",
+            "line": 0,
+            "text": "",
+            "note": "opaque foreign source: control flow, call closure and effects were not analyzed",
+            "present": false
+          },
+          {
+            "label": "src/potential.ptx",
+            "line": 0,
+            "text": "",
+            "note": "opaque foreign source: control flow, call closure and effects were not analyzed",
+            "present": false
+          }
+        ]
+      }
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "submit",
+    "result": {
+      "tree": "773d646d4b721e4a1b57e43413d85ed952e2c9bff99e35c45f87aeadecb0a368",
+      "frozen": "e0d4f0c66fc141acbb5f49e54e3ef6401b593d1ec7560c76834912803b9b504a",
+      "rejected": [
+        {
+          "path": "Makefile",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/capture.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/properties.py",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/replay.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "harness/tolerances.json",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "initial.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "main.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "potential.f90",
+          "reason": "not_allowed"
+        },
+        {
+          "path": "src/initial.f90",
+          "reason": "not_allowed"
+        }
+      ],
+      "not_sent": [],
+      "committed": true
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "sese_check",
+    "result": {
+      "claim_id": "c-0002",
+      "verdict": "pass",
+      "detail": {
+        "file_list": [
+          "src/potential.cpp",
+          "src/potential.f90",
+          "src/potential.ptx"
+        ],
+        "allow_globs": [
+          "notes/regions/potential.yaml",
+          "src/potential.cpp",
+          "src/potential.f90",
+          "src/potential.ptx"
+        ],
+        "resolved_ranges": [
+          {
+            "file": "src/potential.f90",
+            "label": "potential",
+            "declared": [
+              13,
+              17
+            ],
+            "actual": [
+              13,
+              17
+            ],
+            "procedure": {
+              "kind": "subroutine",
+              "name": "potential",
+              "range": [
+                13,
+                17
+              ]
+            }
+          }
+        ],
+        "range_count": 1,
+        "total_lines": 5,
+        "notes": [
+          {
+            "label": "src/potential.cpp",
+            "line": 0,
+            "text": "",
+            "note": "opaque foreign source: control flow, call closure and effects were not analyzed",
+            "present": true
+          },
+          {
+            "label": "src/potential.ptx",
+            "line": 0,
+            "text": "",
+            "note": "opaque foreign source: control flow, call closure and effects were not analyzed",
+            "present": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "build_replay",
+    "result": {
+      "claim_id": "c-0003",
+      "verdict": "pass",
+      "detail": {
+        "attempt_id": "potential-solve-d6afc0acf4160b7c-773d646d4b721e4a1b57e43413d85ed952e2c9bff99e35c45f87aeadecb0a368",
+        "flags": [],
+        "toolchains": {
+          "fortran": {
+            "compiler": "nvfortran",
+            "flags": [
+              "-O2"
+            ]
+          },
+          "cxx": {
+            "compiler": "nvc++",
+            "flags": [
+              "-O2",
+              "-cuda"
+            ]
+          },
+          "ptx": {
+            "compiler": "ptxas",
+            "flags": [
+              "-arch=sm_89"
+            ]
+          }
+        },
+        "languages_compiled": [
+          "cxx",
+          "fortran",
+          "ptx"
+        ],
+        "targets": {
+          "replay": {
+            "executable": "replay",
+            "built": true,
+            "runtime_artifacts": [
+              {
+                "path": "potential.cubin",
+                "kind": "gpu_module",
+                "sha256": "29b52808d3426b6ede7ae02c223450550dfd4f7c47ee4b01874039695cee0bb6",
+                "size": 6824
+              }
+            ],
+            "sha256": "813fc94584f38cd682723cc8eb86ebab3dcd0be7689282c248c54e88c0429d26",
+            "size": 291184,
+            "role": "replay",
+            "kind": "executable",
+            "roles": [
+              "replay"
+            ]
+          },
+          "timing": {
+            "executable": "timing",
+            "built": true,
+            "runtime_artifacts": [
+              {
+                "path": "potential.cubin",
+                "kind": "gpu_module",
+                "sha256": "29b52808d3426b6ede7ae02c223450550dfd4f7c47ee4b01874039695cee0bb6",
+                "size": 6824
+              }
+            ],
+            "sha256": "90a5f20f197d7b1fae81c025d16f4653a09b94886c4b912fbbf6f6f54881e6c2",
+            "size": 295744,
+            "role": "timing",
+            "kind": "executable",
+            "roles": [
+              "timing"
+            ]
+          },
+          "capture": {
+            "executable": "capture",
+            "built": true,
+            "runtime_artifacts": [
+              {
+                "path": "potential.cubin",
+                "kind": "gpu_module",
+                "sha256": "29b52808d3426b6ede7ae02c223450550dfd4f7c47ee4b01874039695cee0bb6",
+                "size": 6824
+              }
+            ],
+            "sha256": "f13034f873278e754b2f7c67120e8bfa1f61a4c41b6b43f8c74d72c835713c5f",
+            "size": 296080,
+            "role": "capture",
+            "kind": "executable",
+            "roles": [
+              "capture"
+            ]
+          }
+        },
+        "compiles": [
+          {
+            "argv": [
+              "-O2",
+              "-cuda",
+              "-c",
+              "src/potential.cpp",
+              "-o",
+              "potential_gpu.o"
+            ],
+            "cwd": ".",
+            "language": "cxx",
+            "compiler": "nvc++",
+            "inputs": [
+              "src/potential.cpp"
+            ],
+            "link_inputs": [],
+            "kind": "compile",
+            "output": "potential_gpu.o",
+            "required_flags": [
+              "-O2",
+              "-cuda"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          },
+          {
+            "argv": [
+              "-arch=sm_89",
+              "src/potential.ptx",
+              "-o",
+              "potential.cubin"
+            ],
+            "cwd": ".",
+            "language": "ptx",
+            "compiler": "ptxas",
+            "inputs": [
+              "src/potential.ptx"
+            ],
+            "link_inputs": [],
+            "kind": "compile",
+            "output": "potential.cubin",
+            "required_flags": [
+              "-arch=sm_89"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          },
+          {
+            "argv": [
+              "-O2",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/replay.f90",
+              "potential_gpu.o",
+              "-o",
+              "replay",
+              "-cuda",
+              "-c++libs",
+              "-L/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib/stubs",
+              "-lcuda"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": "nvfortran",
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/replay.f90"
+            ],
+            "link_inputs": [
+              "potential_gpu.o"
+            ],
+            "kind": "compile",
+            "output": "replay",
+            "required_flags": [
+              "-O2"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          },
+          {
+            "argv": [
+              "-O2",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/main.f90",
+              "potential_gpu.o",
+              "-o",
+              "timing",
+              "-cuda",
+              "-c++libs",
+              "-L/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib/stubs",
+              "-lcuda"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": "nvfortran",
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/main.f90"
+            ],
+            "link_inputs": [
+              "potential_gpu.o"
+            ],
+            "kind": "compile",
+            "output": "timing",
+            "required_flags": [
+              "-O2"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          },
+          {
+            "argv": [
+              "-O2",
+              "-module",
+              ".",
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/capture.f90",
+              "potential_gpu.o",
+              "-o",
+              "capture",
+              "-cuda",
+              "-c++libs",
+              "-L/opt/nvidia/hpc_sdk/Linux_x86_64/25.9/cuda/13.0/targets/x86_64-linux/lib/stubs",
+              "-lcuda"
+            ],
+            "cwd": ".",
+            "language": "fortran",
+            "compiler": "nvfortran",
+            "inputs": [
+              "/opt/harness/npy_io.f90",
+              "src/potential.f90",
+              "src/initial.f90",
+              "harness/capture.f90"
+            ],
+            "link_inputs": [
+              "potential_gpu.o"
+            ],
+            "kind": "compile",
+            "output": "capture",
+            "required_flags": [
+              "-O2"
+            ],
+            "has_flags": true,
+            "outside": [],
+            "audit_errors": []
+          }
+        ],
+        "compiler_audit": {
+          "protected": true,
+          "collector": "strace/process+cwd",
+          "observed_executions": 292,
+          "compiler_invocations": 5,
+          "language_invocations": {
+            "cxx": 1,
+            "ptx": 1,
+            "fortran": 3
+          }
+        },
+        "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+        "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+        "minfo_excerpt": "WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.",
+        "log_tail": "/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\nnvdd-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.240e51d0ded4\n"
+      }
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "run_replay",
+    "result": {
+      "claim_id": "c-0004",
+      "verdict": "pass",
+      "detail": {
+        "executable_identity": {
+          "sha256": "813fc94584f38cd682723cc8eb86ebab3dcd0be7689282c248c54e88c0429d26",
+          "size": 291184,
+          "role": "replay",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        },
+        "kernels_launched": 2,
+        "launches": [
+          [
+            "nsys",
+            "charged_cloud",
+            "0"
+          ]
+        ],
+        "outputs": {
+          "case1": {
+            "phi": "k05VTVBZAQB2AHsnZGVzY3InOiAnPGY0JywgJ2ZvcnRyYW5fb3JkZXInOiBUcnVlLCAnc2hhcGUnOiAoMTI5LCApLCB9ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAopcnE+OL+9Pd4c4r1OUTe+lIGjvnUVDcCKIRPA5XYfP37DHD83bAQ/UK1fPqPNCj+7vgLAlXnrv3ogor86pU0/VCiZPp71lz6BxD2/W02mvy5Qpr9sz4O/rDrPPtWwUz5zMyA/0MKavbCtGL/gbzS/TttOPtWBGT/14IM/zQFfP6AMwD5o5gu/6OWOvm6ocD79S62/1Ds/v0kpXT8M/aK+7Y32vnSxib4n+1+/zupBv6ZIHL+pJ1i+8N36vUqJoL64VYa9tLnwvnyQPb9+1gS/mCBmvWYshT7wJfA+KjHvPZWdHL/kECG/IgJ+vnTM4j0A8kC89snIv0rUXL4mTbO+mvAdvjt5HD6gg0u9oW7Rv+gkur8wwfE9j+0gPrSojT7c5bu9MeqKvxhEpb9pJ5a/aGM4v4tVtz6cPi+97wUdvrDT8752LCq/4oMnv6hOBr+1OQ/AltQBP+Bo0T4BzGM+LOuyPS6waL5tJQ/AF1kPwPKlvr927lQ/bGQhPwS7hD6ecJW/3+jZvwQw0L+e4Zy/5tg/P3cpjT5+LIQ+zneivhAbdb/E8Im/VF8VPfDX4z7v22Q/j+tTP1HwPz7uQpy+xpjPvs5q7j0jZA4/hZCIvx37bD8JBvQ+cnATv57ExL4ZsAA+aet6v14pHL8Kt/W+DpKHvna55L7AfHe+kHUWv9ISH78="
+          },
+          "case2": {
+            "phi": "k05VTVBZAQB2AHsnZGVzY3InOiAnPGY0JywgJ2ZvcnRyYW5fb3JkZXInOiBUcnVlLCAnc2hhcGUnOiAoMTI5LCApLCB9ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAqhb3E+pLq9Pcwf4r3+UTe+RIGjvmMVDcByIRPAKnYfP8/CHD/BawQ/cqxfPrvNCj+ivgLAYXnrvzggor+7pE0/pCeZPj71lz67xD2/R02mv/5Ppr80z4O/XDvPPhyvUz64MiA/QMaavcCtGL+8bzS/W9xOPiGCGT+d4IM/GQFfP4ALwD6W5gu/BOaOvryocD7SS62/TTs/v6ooXT8Y/qK+lY72vrWxib4p+1+/nupBv5dIHL8MJli+gOL6vQCKoL4oWIa94rnwvqOQPb941gS/dBtmvVUthT7wJPA+aC7vPe+dHL8bESG/PgJ+vt7N4j3g2EC8v8nIv3zWXL4FTrO+r/EdvsN4HD7QgUu9iG7Rv68kur/8u/E92+sgPhqojT4I57u9SOqKvwNEpb88J5a/4WI4v61Utz5oRi+9AQgdvkbU8754LCq/qYMnv1ROBr+gOQ/A4NMBP6Fn0T4nymM+9OmyPfSvaL5VJQ/A/FgPwKilvr/E7VQ/BmQhP6y6hD6mcJW/tujZv88v0L9l4Zy/Ydg/P3MojT45K4Q+gXiivgAbdb+n8Im/gGIVPZ7Y4z5O22Q/0+pTP27uPz4pQ5y+1pjPvhJs7j1pZA4/QpCIv2H6bD8FBfQ+qnATv9bExL4tsAA+Nut6v+4oHL9MtvW+HZOHvlC65L5zfXe+oHUWv7wSH78="
+          }
+        }
+      }
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "sanitize",
+    "result": {
+      "claims": [
+        {
+          "predicateType": "sanitize/memcheck",
+          "claim_id": "c-0005",
+          "verdict": "pass",
+          "detail": {
+            "errors": 0,
+            "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n",
+            "cases": [
+              "case1",
+              "case2"
+            ],
+            "executable_identity": {
+              "sha256": "813fc94584f38cd682723cc8eb86ebab3dcd0be7689282c248c54e88c0429d26",
+              "size": 291184,
+              "role": "replay",
+              "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+            }
+          }
+        },
+        {
+          "predicateType": "sanitize/racecheck",
+          "claim_id": "c-0006",
+          "verdict": "pass",
+          "detail": {
+            "errors": 0,
+            "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)\n",
+            "cases": [
+              "case1",
+              "case2"
+            ],
+            "executable_identity": {
+              "sha256": "813fc94584f38cd682723cc8eb86ebab3dcd0be7689282c248c54e88c0429d26",
+              "size": 291184,
+              "role": "replay",
+              "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+            }
+          }
+        },
+        {
+          "predicateType": "sanitize/initcheck",
+          "claim_id": "c-0007",
+          "verdict": "pass",
+          "detail": {
+            "errors": 0,
+            "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n========= COMPUTE-SANITIZER\n========= ERROR SUMMARY: 0 errors\n",
+            "cases": [
+              "case1",
+              "case2"
+            ],
+            "executable_identity": {
+              "sha256": "813fc94584f38cd682723cc8eb86ebab3dcd0be7689282c248c54e88c0429d26",
+              "size": 291184,
+              "role": "replay",
+              "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "regression_visible",
+    "result": {
+      "claim_id": "c-0008",
+      "verdict": "pass",
+      "detail": {
+        "per_case": {
+          "case1": {
+            "pass": true,
+            "per_var": {
+              "phi": {
+                "pass": true,
+                "max_abs": 1.0132789611816406e-06,
+                "max_rel": 3.5430659668267796e-05,
+                "max_ulp": 448,
+                "n_bad": 0,
+                "n": 129,
+                "n_nonfinite": 0
+              }
+            },
+            "extra": []
+          },
+          "case2": {
+            "pass": true,
+            "per_var": {
+              "phi": {
+                "pass": true,
+                "max_abs": 1.1920928955078125e-06,
+                "max_rel": 2.5318955542445964e-05,
+                "max_ulp": 320,
+                "n_bad": 0,
+                "n": 129,
+                "n_nonfinite": 0
+              }
+            },
+            "extra": []
+          }
+        },
+        "policy_sha256": "14a6c3670097603d08eedee2099ff553c9341798e7d67ed339b7f4bff6686ef7"
+      }
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "property_check",
+    "result": {
+      "claim_id": "c-0009",
+      "verdict": "pass",
+      "detail": {
+        "module": "harness/properties.py",
+        "seed": 42,
+        "max_examples": 100,
+        "passed": 1,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "deselected": 0,
+        "xfailed": 0,
+        "xpassed": 0,
+        "collected": 1,
+        "executed": 1,
+        "replays_observed": 200,
+        "counts_source": "pytest summary emitted by the submitted property process",
+        "log_tail": "\n====================\n== NVIDIA HPC SDK ==\n====================\n \nNVIDIA HPC SDK version 25.9\n \nCopyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.\n\n.                                                                        [100%]\n=============================== warnings summary ===============================\nharness/properties.py::test_equation_and_charge_linearity\n  /usr/local/lib/python3.12/dist-packages/hypothesis/_settings.py:847: HypothesisWarning: The database setting is not configured, and the default location is unusable - falling back to an in-memory database for this session.  path=PosixPath('/job/tree/.hypothesis/examples')\n    self._fallback.database if self._database is not_set else self._database\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1 passed, 1 warning in 70.92s (0:01:10)\n",
+        "executable_identity": {
+          "sha256": "813fc94584f38cd682723cc8eb86ebab3dcd0be7689282c248c54e88c0429d26",
+          "size": 291184,
+          "role": "replay",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        }
+      }
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "regression_holdout",
+    "result": {
+      "claim_id": "c-0010",
+      "verdict": "pass"
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "time_baseline",
+    "result": {
+      "claim_id": "c-0011",
+      "verdict": "pass",
+      "detail": {
+        "runs_s": [
+          1.3964546209899709,
+          1.2957989429996815,
+          1.5536579479958164,
+          1.3919126940018032,
+          1.3960881319944747
+        ],
+        "gpu_exclusive": false,
+        "measurement_scope": "end_to_end_isolated_job_wall_time",
+        "executable": "timing",
+        "args": [
+          "32768",
+          "2",
+          "30"
+        ],
+        "env": {
+          "OMP_NUM_THREADS": "8"
+        },
+        "outputs": {
+          "phi.npy": "fbc5f2f098aef3b1fae26075e8d2a2f26686238c9ed6166d4009f54c3d8b48cf"
+        },
+        "executable_identity": {
+          "sha256": "d557ac1ab45b1df3d0468dd7317c8af8977782830819d6d29ad4d935c6c772aa",
+          "size": 244792,
+          "role": "timing",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        },
+        "strategy": "cpu_reference",
+        "flags": [
+          "-O2",
+          "-stdpar=multicore"
+        ],
+        "build": {
+          "attempt_id": "potential-solve-baseline-b47f49973b1fc0c6-9e243989d109fd713603ad6cb4bfe59165317b4c874217dd14f49d36ff4e2025",
+          "flags": [
+            "-O2",
+            "-stdpar=multicore"
+          ],
+          "toolchains": {
+            "fortran": {
+              "compiler": "nvfortran",
+              "flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ]
+            }
+          },
+          "languages_compiled": [
+            "fortran"
+          ],
+          "targets": {
+            "replay": {
+              "executable": "replay",
+              "built": true,
+              "sha256": "8f9b590fc1c075eab70ba867b6cbb1459f55248baa1d92f9b240d5046bb300d0",
+              "size": 240248,
+              "role": "replay",
+              "kind": "executable",
+              "roles": [
+                "replay"
+              ]
+            },
+            "timing": {
+              "executable": "timing",
+              "built": true,
+              "sha256": "d557ac1ab45b1df3d0468dd7317c8af8977782830819d6d29ad4d935c6c772aa",
+              "size": 244792,
+              "role": "timing",
+              "kind": "executable",
+              "roles": [
+                "timing"
+              ]
+            },
+            "capture": {
+              "executable": "capture",
+              "built": true,
+              "sha256": "96b670ebc2399da3e5b9ed00e8a32b2757d71276e37f1a4d78caeb619d2be04c",
+              "size": 245160,
+              "role": "capture",
+              "kind": "executable",
+              "roles": [
+                "capture"
+              ]
+            }
+          },
+          "compiles": [
+            {
+              "argv": [
+                "-O2",
+                "-stdpar=multicore",
+                "-module",
+                ".",
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/replay.f90",
+                "-o",
+                "replay"
+              ],
+              "cwd": ".",
+              "language": "fortran",
+              "compiler": null,
+              "inputs": [
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/replay.f90"
+              ],
+              "link_inputs": [],
+              "kind": "compile",
+              "output": "replay",
+              "required_flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ],
+              "has_flags": true,
+              "outside": [],
+              "audit_errors": []
+            },
+            {
+              "argv": [
+                "-O2",
+                "-stdpar=multicore",
+                "-module",
+                ".",
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/main.f90",
+                "-o",
+                "timing"
+              ],
+              "cwd": ".",
+              "language": "fortran",
+              "compiler": null,
+              "inputs": [
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/main.f90"
+              ],
+              "link_inputs": [],
+              "kind": "compile",
+              "output": "timing",
+              "required_flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ],
+              "has_flags": true,
+              "outside": [],
+              "audit_errors": []
+            },
+            {
+              "argv": [
+                "-O2",
+                "-stdpar=multicore",
+                "-module",
+                ".",
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/capture.f90",
+                "-o",
+                "capture"
+              ],
+              "cwd": ".",
+              "language": "fortran",
+              "compiler": null,
+              "inputs": [
+                "/opt/harness/npy_io.f90",
+                "src/potential.f90",
+                "src/initial.f90",
+                "harness/capture.f90"
+              ],
+              "link_inputs": [],
+              "kind": "compile",
+              "output": "capture",
+              "required_flags": [
+                "-O2",
+                "-stdpar=multicore"
+              ],
+              "has_flags": true,
+              "outside": [],
+              "audit_errors": []
+            }
+          ],
+          "compiler_audit": {
+            "protected": true,
+            "collector": "strace/process+cwd",
+            "observed_executions": 95,
+            "compiler_invocations": 3,
+            "language_invocations": {
+              "fortran": 3
+            }
+          },
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10",
+          "image_id": "sha256:ae867662f1d0524f2a8dcad3b32c491bb31c68d7525f068509f18f0878778851",
+          "minfo_excerpt": "WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.",
+          "log_tail": "src/potential.f90 src/initial.f90 harness/capture.f90  -o capture \nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8831ca84fc02\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/replay.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/replay.f90:\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8831ca84fc02\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/main.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/main.f90:\nnvfortran-Warning-Unable to access file /root/.config/NVIDIA/nvhpc/25.9/localrc.8831ca84fc02\n/opt/harness/npy_io.f90:\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n/opt/harness/npy_io.f90:\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 256)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 311)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 366)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 421)\nNVFORTRAN-W-0435-Array declared with zero size (/opt/harness/npy_io.f90: 476)\nsrc/potential.f90:\nsrc/initial.f90:\nharness/capture.f90:\n"
+        },
+        "program_set": "2381e01df4ecb84bace52b8f85e1e62b4f3e697c3b36e9cabab764203e22011f"
+      }
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "program_regression",
+    "result": {
+      "claim_id": "c-0012",
+      "verdict": "pass",
+      "detail": {
+        "policy_sha256": "14a6c3670097603d08eedee2099ff553c9341798e7d67ed339b7f4bff6686ef7",
+        "program_set": "2381e01df4ecb84bace52b8f85e1e62b4f3e697c3b36e9cabab764203e22011f",
+        "per_var": {
+          "phi": {
+            "pass": true,
+            "max_abs": 9.107589721679688e-05,
+            "max_rel": 5.5227272727272725,
+            "max_ulp": 1836515329,
+            "n_bad": 0,
+            "n": 32768,
+            "n_nonfinite": 0
+          }
+        },
+        "runs_s": [
+          1.0243595380015904
+        ],
+        "executable_identity": {
+          "sha256": "90a5f20f197d7b1fae81c025d16f4653a09b94886c4b912fbbf6f6f54881e6c2",
+          "size": 295744,
+          "role": "timing",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        }
+      }
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "time_port",
+    "result": {
+      "claim_id": "c-0013",
+      "verdict": "pass",
+      "detail": {
+        "runs_s": [
+          0.9780546930123819,
+          0.960997023008531,
+          0.971637376002036,
+          0.978321179994964,
+          0.9688820949959336
+        ],
+        "gpu_exclusive": false,
+        "measurement_scope": "end_to_end_isolated_job_wall_time",
+        "executable": "timing",
+        "args": [
+          "32768",
+          "2",
+          "30"
+        ],
+        "env": {
+          "OMP_NUM_THREADS": "8"
+        },
+        "outputs": {
+          "phi.npy": "168d8d5c096ec97397e2db54119b98ec55bf2306c95c0af2e71b004515ebe643"
+        },
+        "executable_identity": {
+          "sha256": "90a5f20f197d7b1fae81c025d16f4653a09b94886c4b912fbbf6f6f54881e6c2",
+          "size": 295744,
+          "role": "timing",
+          "executor_identity": "f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10"
+        },
+        "flags": [],
+        "program_set": "2381e01df4ecb84bace52b8f85e1e62b4f3e697c3b36e9cabab764203e22011f",
+        "policy_sha256": "14a6c3670097603d08eedee2099ff553c9341798e7d67ed339b7f4bff6686ef7",
+        "compared_repetitions": 5,
+        "per_run": [
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 9.107589721679688e-05,
+              "max_rel": 5.5227272727272725,
+              "max_ulp": 1836515329,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          },
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 9.107589721679688e-05,
+              "max_rel": 5.5227272727272725,
+              "max_ulp": 1836515329,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          },
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 9.107589721679688e-05,
+              "max_rel": 5.5227272727272725,
+              "max_ulp": 1836515329,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          },
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 9.107589721679688e-05,
+              "max_rel": 5.5227272727272725,
+              "max_ulp": 1836515329,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          },
+          {
+            "phi": {
+              "pass": true,
+              "max_abs": 9.107589721679688e-05,
+              "max_rel": 5.5227272727272725,
+              "max_ulp": 1836515329,
+              "n_bad": 0,
+              "n": 32768,
+              "n_nonfinite": 0
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "phase": "ptx",
+    "action": "performance_check",
+    "result": {
+      "claim_id": "c-0014",
+      "verdict": "pass",
+      "detail": {
+        "baseline_claim_id": "c-0011",
+        "port_claim_id": "c-0013",
+        "baseline_samples_s": [
+          1.3964546209899709,
+          1.2957989429996815,
+          1.5536579479958164,
+          1.3919126940018032,
+          1.3960881319944747
+        ],
+        "port_samples_s": [
+          0.9780546930123819,
+          0.960997023008531,
+          0.971637376002036,
+          0.978321179994964,
+          0.9688820949959336
+        ],
+        "baseline_median_s": 1.3960881319944747,
+        "port_median_s": 0.971637376002036,
+        "median_speedup": 1.436840704645299,
+        "min_median_speedup": 1.1,
+        "minimum_samples": 5,
+        "measurement_scope": "end_to_end_isolated_job_wall_time",
+        "gpu_exclusivity_required": false
+      }
+    }
+  }
+]

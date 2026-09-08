@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -76,15 +76,17 @@ describe("a real pi session: the wire and the session file agree", () => {
     faux.setResponses([fauxAssistantMessage([fauxToolCall("sese_check", {})]), fauxAssistantMessage("done")]);
 
     const sessionDir = mkdtempSync(path.join(tmpdir(), "equivalent-pi-sessions-"));
+    const agentDir = mkdtempSync(path.join(tmpdir(), "equivalent-pi-agent-"));
     const loader = new DefaultResourceLoader({
       cwd: process.cwd(),
-      agentDir: getAgentDir(),
+      agentDir,
       additionalExtensionPaths: [EXTENSION_PATH],
       extensionFactories: [(pi: any) => pi.registerProvider(faux.provider)],
     });
     await loader.reload();
 
     const { session } = await createAgentSession({
+      agentDir,
       model: faux.getModel(),
       resourceLoader: loader,
       sessionManager: SessionManager.create(process.cwd(), sessionDir),

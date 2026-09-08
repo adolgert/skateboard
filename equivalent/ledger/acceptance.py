@@ -17,79 +17,53 @@ Trust role: the definition of done. A requirement missing from either
 list lets a region be finished without that evidence; the gateway's /run
 gate and /status both derive from them.
 
-This lives in the ledger package, not next to the gateway's precondition
-table, because the ledger CLI must be able to check claims against it
-without the gateway installed. The table's "accept" row imports this
-list rather than writing a second copy.
+This lives in the ledger package because the ledger CLI must be able to
+check claims against it without the gateway installed. The workflow catalog
+owns the action definitions; this module derives requirements from their
+acceptance roles and applies manifest conditions.
 
-Matches the first demonstration harness's actual gate: sanitize/initcheck
-is recorded but does not block acceptance there (only memcheck/racecheck
-do), and timing/baseline is a one-time claim made on the baseline tree, not
-a requirement of any individual port.
+All three sanitizer modes block acceptance.  In particular, an initcheck
+failure cannot be hidden behind passing memcheck and racecheck claims.
+Timing/baseline is a one-time claim made on the baseline tree, not a claim
+about a port. A port's measured speedup (performance/speedup) is recorded
+so ports can be compared later; acceptance does not depend on it.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .workflow import (
+    ACTIONS, AcceptanceRole, FINISHED_WORD, ONBOARDING, PHASES, PORTING,
+)
+
 
 @dataclass(frozen=True)
 class Requirement:
     predicate_type: str
+    # Which subject the claim that meets this has to be about: the tree
+    # that was submitted, or the baseline files the allow-list holds
+    # still around it. The precondition table beside this uses a wider
+    # vocabulary -- one of its rows rests on a claim about the pristine
+    # baseline tree -- but a requirement is only ever about these two.
     subject_kind: str  # "tree" or "frozen"
     producing_action: str
 
 
-# The two phases a region can be in. A region config names one, and it is
-# what picks the requirement list, the action rows, and the word `status`
-# prints when everything on the list has passed.
-ONBOARDING = "onboarding"
-PORTING = "porting"
-PHASES = (ONBOARDING, PORTING)
+def _requirements(phase: str, role: AcceptanceRole) -> tuple[Requirement, ...]:
+    return tuple(
+        Requirement(predicate.name, action.subject_kind, action.name)
+        for action in ACTIONS if action.phase == phase and action.acceptance is role
+        for predicate in action.predicates
+    )
 
-ACCEPTANCE_REQUIREMENTS = (
-    Requirement("sese/verified", "frozen", "sese_check"),
-    Requirement("build/replay", "tree", "build_replay"),
-    Requirement("gpu/executed", "tree", "run_replay"),
-    Requirement("sanitize/memcheck", "tree", "sanitize"),
-    Requirement("sanitize/racecheck", "tree", "sanitize"),
-    Requirement("regression/visible", "tree", "regression_visible"),
-    Requirement("regression/holdout", "tree", "regression_holdout"),
-    Requirement("program/regression", "tree", "program_regression"),
-    Requirement("timing/port", "tree", "time_port"),
-)
 
-# What a port has to pass as well when its code declares invariants of its
-# own. It is separate from the list above rather than in it because
-# whether it applies is a fact about the code, not about porting.
-CONDITIONAL_REQUIREMENTS = (
-    Requirement("regression/property", "tree", "property_check"),
-)
-
-# Everything an onboarding session has to leave behind before a person
-# reviews what passed and promotes it. All of it is about the tree the
-# agent submitted: onboarding rewrites the build, the drivers, and the
-# manifest, so there is no part of the tree an earlier claim still covers.
-ONBOARDING_REQUIREMENTS = (
-    Requirement("manifest/valid", "tree", "manifest_check"),
-    Requirement("harness/builds", "tree", "harness_build"),
-    Requirement("harness/captured", "tree", "harness_capture"),
-    Requirement("harness/replays", "tree", "harness_replay"),
-    Requirement("harness/deterministic", "tree", "harness_determinism"),
-    Requirement("harness/times", "tree", "harness_timing"),
-    Requirement("harness/self_check", "tree", "harness_self_check"),
-    Requirement("harness/properties", "tree", "harness_property"),
-)
-
+ACCEPTANCE_REQUIREMENTS = _requirements(PORTING, AcceptanceRole.REQUIRED)
+CONDITIONAL_REQUIREMENTS = _requirements(PORTING, AcceptanceRole.PROPERTIES)
+ONBOARDING_REQUIREMENTS = _requirements(ONBOARDING, AcceptanceRole.REQUIRED)
 REQUIREMENTS_BY_PHASE = {
     ONBOARDING: ONBOARDING_REQUIREMENTS,
     PORTING: ACCEPTANCE_REQUIREMENTS,
 }
-
-# What `status` calls a region that has met every requirement of its
-# phase. The words differ because the two mean different things: an
-# onboarded code is ready to be reviewed and promoted, an accepted port
-# is ready to be merged.
-FINISHED_WORD = {ONBOARDING: "ONBOARDED", PORTING: "ACCEPTED"}
 
 
 def acceptance_requirements(manifest=None) -> tuple:

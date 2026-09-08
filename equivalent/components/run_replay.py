@@ -23,11 +23,19 @@ from __future__ import annotations
 import base64
 
 from equivalent.capture import npy
-from equivalent.gateway.submit import attempt_id_for
+from equivalent.ledger.artifacts import binary_artifacts
+from equivalent.ledger.vocabulary import EXECUTABLE_IDENTITY_KEY, PASS
 from equivalent.manifest.schema import Manifest
-from equivalent.strategy.schema import Strategy
 
+from . import backend
+from .context import CheckContext
+from .result import CheckResult, failed
 from .errors import ComponentError
+from .names import REPLAY_ROLE
+
+# What this check's verdict is filed as. Spelled here because this is
+# where it is written; the visible regression reads the same claim.
+RUN_PREDICATE = "gpu/executed"
 
 
 def _output_problems(manifest: Manifest, outputs: dict) -> list:
@@ -54,52 +62,55 @@ def _output_problems(manifest: Manifest, outputs: dict) -> list:
     return problems
 
 
-def check(region_id: str, tree_sha: str, strategy: Strategy, manifest: Manifest,
-          visible_cases: dict, builder) -> dict:
+def check(ctx: CheckContext, config: dict) -> CheckResult:
+    manifest = ctx.provenance.manifest()
+    visible_cases = ctx.visible_cases
     if not visible_cases:
         raise ComponentError("no visible dataset configured for this region")
 
-    replay = manifest.build.targets["replay"]
-    attempt_id = attempt_id_for(region_id, tree_sha)
-    try:
-        resp = builder.run(
-            attempt_id, replay.executable, visible_cases,
-            notify=strategy.device_proof.notify, mandatory=strategy.device_proof.mandatory,
+    replay = manifest.build.targets[REPLAY_ROLE]
+    resp = backend.replay(
+        ctx.builder, ctx.provenance.attempt_id(), replay.executable, visible_cases,
+        notify=ctx.strategy.device_proof.notify,
+        mandatory=ctx.strategy.device_proof.mandatory,
+        profile=True,
+    )
+
+    measured = {EXECUTABLE_IDENTITY_KEY: resp.executable_identity}
+    artifacts = binary_artifacts(resp.executable_identity, executable=replay.executable)
+
+    if not resp.ok:
+        return failed(
+            {**measured, "log_tail": resp.log_tail},
+            ["the replay driver did not run to completion"], binary_artifacts=artifacts,
         )
-    except Exception as exc:
-        raise ComponentError(f"builder /v1/run call failed: {exc}") from exc
 
-    if not resp.get("ok"):
-        return {"verdict": "fail", "detail": {"log_tail": resp.get("log_tail", "")}}
-
-    problems = _output_problems(manifest, resp.get("outputs", {}))
+    problems = _output_problems(manifest, resp.outputs)
     if problems:
-        return {
-            "verdict": "fail",
-            "detail": {
-                "outputs_rejected": problems,
-                "hint": f"the replay driver must write every output code "
-                        f"'{manifest.name}' declares, with the declared type and rank",
-            },
-        }
+        hint = (f"the replay driver must write every output code "
+                f"'{manifest.name}' declares, with the declared type and rank")
+        return failed(
+            {**measured, "outputs_rejected": problems, "hint": hint},
+            [*problems, hint], binary_artifacts=artifacts,
+        )
 
-    kernels = resp.get("kernels_launched", 0)
+    kernels = resp.kernels_launched
     if kernels <= 0:
-        return {
-            "verdict": "fail",
-            "detail": {
-                "kernels_launched": 0,
-                "hint": "code compiled but no GPU kernel launched; loops must be do concurrent / omp target for nvfortran to offload them",
-            },
-        }
-    return {
-        "verdict": "pass",
-        "detail": {
-            "kernels_launched": kernels,
+        hint = ("code compiled but no GPU kernel launched; the selected GPU toolchain "
+                "must execute device work during replay")
+        return failed(
+            {**measured, "kernels_launched": 0, "hint": hint}, [hint],
+            binary_artifacts=artifacts,
+        )
+    return CheckResult(
+        verdict=PASS,
+        detail={
+            **measured, "kernels_launched": kernels,
             # Where the builder's runtime said the launches came from --
             # file, function, and line, one entry per distinct source
             # line. A reviewer reads this against the region's own code.
-            "launches": resp.get("launches", []),
-            "outputs": resp["outputs"],
+            "launches": resp.launches,
+            "outputs": resp.outputs,
         },
-    }
+        binary_artifacts=artifacts,
+    )

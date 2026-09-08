@@ -25,16 +25,23 @@ directory can be moved or mounted anywhere without editing the file.
 Every other path -- the makefile, the tolerance policy, the properties
 module -- is relative to the source tree root, so the same text reads
 the same whether the manifest sits beside that tree or inside it.
+
+Complete manifests may set `timing.performance.min_median_speedup`, a
+baseline-median / port-median floor the performance check reports against.
+Most do not: acceptance does not depend on speed, and a port's measured
+speedup is recorded either way so that ports can be compared later.
 """
 from __future__ import annotations
 
-import fnmatch
 from dataclasses import dataclass
-from pathlib import Path
+import math
+from pathlib import Path, PurePosixPath
 
 import yaml
 
-from equivalent.ledger.subjects import Subject, hash_bytes
+from equivalent.capture.variables import DTYPES, MAX_RANK, Variable
+from equivalent.ledger.loading import check_keys
+from equivalent.ledger.subjects import Subject, glob_matches, hash_bytes
 
 VERSION = 1
 
@@ -56,13 +63,18 @@ IN_TREE_SOURCE_ROOT = "."
 REQUIRED_SOURCE_FIELDS = ("root", "patterns")
 REQUIRED_BUILD_FIELDS = ("makefile", "targets")
 REQUIRED_TARGET_FIELDS = ("target", "executable")
+OPTIONAL_TARGET_FIELDS = ("runtime_artifacts",)
+REQUIRED_RUNTIME_ARTIFACT_FIELDS = ("path", "kind")
+OPTIONAL_RUNTIME_ARTIFACT_FIELDS = ("when_language",)
+RUNTIME_ARTIFACT_KINDS = ("shared_library", "gpu_module")
+RUNTIME_ARTIFACT_LANGUAGES = ("fortran", "c", "cxx", "cuda", "ptx")
 REQUIRED_INTERFACE_FIELDS = ("module", "entry", "files", "inputs", "outputs")
 REQUIRED_VARIABLE_FIELDS = ("name", "dtype", "rank")
 REQUIRED_DATASET_FIELDS = ("args",)
 REQUIRED_TIMING_FIELDS = ("args", "outputs", "budget_s")
 # The timing run may need a few environment variables set to be a fair
 # measurement. They are values, not code: strings in, strings out.
-OPTIONAL_TIMING_FIELDS = ("env",)
+OPTIONAL_TIMING_FIELDS = ("env", "performance")
 
 # The build target every code must offer: the replay driver is what every
 # regression check runs. `timing` and `capture` are named the same way but
@@ -72,12 +84,6 @@ REQUIRED_BUILD_TARGET = "replay"
 # two must be, and they must not be the same run twice.
 REQUIRED_DATASETS = ("visible", "holdout")
 
-# The types the capture format and the comparator can carry, spelled the
-# way the manifest writes them. Anything else would reach the harness as a
-# type no reader knows the width of.
-DTYPES = ("f32", "f64", "i32", "i64", "l")
-MAX_RANK = 4
-
 
 @dataclass(frozen=True)
 class Source:
@@ -86,22 +92,23 @@ class Source:
 
 
 @dataclass(frozen=True)
+class RuntimeArtifact:
+    path: str  # file the executable loads at runtime, relative to the tree
+    kind: str  # shared_library or gpu_module
+    when_language: str | None = None
+
+
+@dataclass(frozen=True)
 class BuildTarget:
     target: str  # what `make` is asked for
     executable: str  # what that target leaves in the tree
+    runtime_artifacts: tuple[RuntimeArtifact, ...] = ()
 
 
 @dataclass(frozen=True)
 class Build:
     makefile: str  # relative to the tree root
-    targets: dict  # {role: BuildTarget}
-
-
-@dataclass(frozen=True)
-class Variable:
-    name: str
-    dtype: str  # one of DTYPES
-    rank: int  # 0..MAX_RANK
+    targets: dict[str, BuildTarget]  # keyed by role
 
 
 @dataclass(frozen=True)
@@ -127,6 +134,9 @@ class Timing:
     outputs: tuple  # files the timing run writes, compared per port
     budget_s: int
     env: dict  # {name: value} added to the timing run's environment
+    # An optional floor for the performance check: baseline median over
+    # port median. None when the manifest declares none, which is usual.
+    min_median_speedup: float | None
 
 
 @dataclass(frozen=True)
@@ -138,7 +148,7 @@ class Manifest:
     # present together; the loader accepts no state in between.
     build: Build | None
     interface: Interface | None
-    datasets: dict | None  # {name: Dataset}
+    datasets: dict[str, Dataset] | None
     timing: Timing | None
     tolerances: Path | None  # resolved against the source tree root
     properties: Path | None  # a pytest module of invariants, or none declared
@@ -167,21 +177,6 @@ class Manifest:
         return Subject(kind="manifest", sha256=self.sha256)
 
 
-def _check_keys(given, required, where: str, *, optional=(), allow_extra: bool = False) -> None:
-    if not isinstance(given, dict):
-        raise ValueError(f"{where} is not a mapping")
-    missing = [field for field in required if field not in given]
-    if missing:
-        raise ValueError(f"{where} missing field(s): {missing}")
-    if allow_extra:
-        return
-    unknown = sorted(set(given) - set(required) - set(optional))
-    if unknown:
-        raise ValueError(
-            f"{where} has unknown key(s): {unknown}; allowed: {sorted((*required, *optional))}"
-        )
-
-
 def _name(value, where: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{where} is {value!r}; it must be a non-empty name")
@@ -192,8 +187,21 @@ def _resolve(directory: Path, value, where: str) -> Path:
     return directory / _name(value, where)
 
 
+def _relative_file(value, where: str) -> str:
+    """A normalized relative POSIX file path, with no route outside the tree."""
+    name = _name(value, where)
+    path = PurePosixPath(name)
+    if (
+        "\\" in name or path.is_absolute() or path == PurePosixPath(".")
+        or any(part in ("", ".", "..") for part in path.parts)
+        or path.as_posix() != name
+    ):
+        raise ValueError(f"{where} is {value!r}; it must be a normalized path inside the tree")
+    return name
+
+
 def _load_source(raw: dict, directory: Path, where: str) -> Source:
-    _check_keys(raw, REQUIRED_SOURCE_FIELDS, f"{where} source")
+    check_keys(raw, REQUIRED_SOURCE_FIELDS, f"{where} source")
     root = _resolve(directory, raw["root"], f"{where} source root")
     if not root.is_dir():
         raise ValueError(f"{where} source root {raw['root']!r} is not a directory ({root})")
@@ -204,14 +212,50 @@ def _load_source(raw: dict, directory: Path, where: str) -> Source:
 
 
 def _load_build(raw: dict, where: str) -> Build:
-    _check_keys(raw, REQUIRED_BUILD_FIELDS, f"{where} build")
+    check_keys(raw, REQUIRED_BUILD_FIELDS, f"{where} build")
     targets = {}
     for role, spec in raw["targets"].items():
         target_where = f"{where} build target '{role}'"
-        _check_keys(spec, REQUIRED_TARGET_FIELDS, target_where)
+        check_keys(spec, REQUIRED_TARGET_FIELDS, target_where, optional=OPTIONAL_TARGET_FIELDS)
+        raw_artifacts = spec.get("runtime_artifacts", [])
+        if not isinstance(raw_artifacts, list):
+            raise ValueError(f"{target_where} runtime_artifacts must be a list")
+        runtime_artifacts = []
+        for artifact in raw_artifacts:
+            artifact_where = f"{target_where} runtime artifact"
+            if not isinstance(artifact, dict):
+                raise ValueError(f"{artifact_where} must be an object")
+            check_keys(
+                artifact, REQUIRED_RUNTIME_ARTIFACT_FIELDS, artifact_where,
+                optional=OPTIONAL_RUNTIME_ARTIFACT_FIELDS,
+            )
+            kind = artifact["kind"]
+            if kind not in RUNTIME_ARTIFACT_KINDS:
+                raise ValueError(
+                    f"{artifact_where} kind is {kind!r}; it must be one of "
+                    f"{list(RUNTIME_ARTIFACT_KINDS)}"
+                )
+            when_language = artifact.get("when_language")
+            if when_language is not None and when_language not in RUNTIME_ARTIFACT_LANGUAGES:
+                raise ValueError(
+                    f"{artifact_where} when_language is {when_language!r}; it must be one of "
+                    f"{list(RUNTIME_ARTIFACT_LANGUAGES)}"
+                )
+            runtime_artifacts.append(RuntimeArtifact(
+                path=_relative_file(artifact["path"], f"{artifact_where} path"),
+                kind=kind,
+                when_language=when_language,
+            ))
+        artifact_paths = [artifact.path for artifact in runtime_artifacts]
+        if len(artifact_paths) != len(set(artifact_paths)):
+            raise ValueError(f"{target_where} names the same runtime artifact more than once")
+        executable = _relative_file(spec["executable"], f"{target_where} executable")
+        if executable in artifact_paths:
+            raise ValueError(f"{target_where} names its executable as a runtime artifact")
         targets[role] = BuildTarget(
             target=_name(spec["target"], f"{target_where} target"),
-            executable=_name(spec["executable"], f"{target_where} executable"),
+            executable=executable,
+            runtime_artifacts=tuple(runtime_artifacts),
         )
     if REQUIRED_BUILD_TARGET not in targets:
         raise ValueError(
@@ -222,7 +266,7 @@ def _load_build(raw: dict, where: str) -> Build:
 
 
 def _load_variable(raw: dict, where: str) -> Variable:
-    _check_keys(raw, REQUIRED_VARIABLE_FIELDS, where)
+    check_keys(raw, REQUIRED_VARIABLE_FIELDS, where)
     name = _name(raw["name"], f"{where} name")
     if raw["dtype"] not in DTYPES:
         raise ValueError(
@@ -239,7 +283,7 @@ def _load_variable(raw: dict, where: str) -> Variable:
 
 
 def _load_interface(raw: dict, where: str) -> Interface:
-    _check_keys(raw, REQUIRED_INTERFACE_FIELDS, f"{where} interface")
+    check_keys(raw, REQUIRED_INTERFACE_FIELDS, f"{where} interface")
     files = tuple(_name(f, f"{where} interface file") for f in raw["files"])
     if not files:
         # A region nobody can point at is a region nobody can port or
@@ -261,11 +305,11 @@ def _load_interface(raw: dict, where: str) -> Interface:
 def _load_datasets(raw: dict, where: str) -> dict:
     # Named datasets beyond the two required ones are allowed, so a code
     # can declare more without this reader being taught each name.
-    _check_keys(raw, REQUIRED_DATASETS, f"{where} datasets", allow_extra=True)
+    check_keys(raw, REQUIRED_DATASETS, f"{where} datasets", allow_extra=True)
     datasets = {}
     for name, spec in raw.items():
         dataset_where = f"{where} dataset '{name}'"
-        _check_keys(spec, REQUIRED_DATASET_FIELDS, dataset_where)
+        check_keys(spec, REQUIRED_DATASET_FIELDS, dataset_where)
         datasets[name] = Dataset(args=tuple(str(a) for a in spec["args"]))
     if datasets["visible"].args == datasets["holdout"].args:
         raise ValueError(
@@ -277,7 +321,7 @@ def _load_datasets(raw: dict, where: str) -> dict:
 
 
 def _load_timing(raw: dict, where: str) -> Timing:
-    _check_keys(raw, REQUIRED_TIMING_FIELDS, f"{where} timing", optional=OPTIONAL_TIMING_FIELDS)
+    check_keys(raw, REQUIRED_TIMING_FIELDS, f"{where} timing", optional=OPTIONAL_TIMING_FIELDS)
     budget = raw["budget_s"]
     if not isinstance(budget, (int, float)) or isinstance(budget, bool) or budget <= 0:
         raise ValueError(f"{where} timing budget_s is {budget!r}; it must be a positive number")
@@ -286,7 +330,33 @@ def _load_timing(raw: dict, where: str) -> Timing:
         outputs=tuple(_name(o, f"{where} timing output") for o in raw["outputs"]),
         budget_s=budget,
         env=_load_timing_env(raw.get("env"), f"{where} timing env"),
+        min_median_speedup=_load_min_median_speedup(
+            raw.get("performance"), f"{where} timing performance",
+        ),
     )
+
+
+def _load_min_median_speedup(raw, where: str) -> float | None:
+    """The floor the performance check reports against, if the manifest declares one."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"{where} is not an object")
+    check_keys(raw, ("min_median_speedup",), where)
+    value = raw["min_median_speedup"]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"{where} min_median_speedup is {value!r}; it must be a finite number above 1"
+        )
+    try:
+        measured = float(value)
+    except OverflowError:
+        measured = float("inf")
+    if not math.isfinite(measured) or measured <= 1:
+        raise ValueError(
+            f"{where} min_median_speedup is {value!r}; it must be a finite number above 1"
+        )
+    return measured
 
 
 def _load_timing_env(raw, where: str) -> dict:
@@ -345,7 +415,7 @@ def load_manifest(path, *, source_base=None) -> Manifest:
     where = f"manifest {path}"
     raw_bytes = path.read_bytes()
     raw = yaml.safe_load(raw_bytes)
-    _check_keys(raw, REQUIRED_FIELDS, where, optional=COMPLETING_FIELDS)
+    check_keys(raw, REQUIRED_FIELDS, where, optional=COMPLETING_FIELDS)
     if raw["version"] != VERSION:
         raise ValueError(f"{where} has version {raw['version']!r}; this reader understands {VERSION}")
 
@@ -367,8 +437,8 @@ def load_manifest(path, *, source_base=None) -> Manifest:
     _in_tree_path(source.root, build.makefile, f"{where} build makefile")
 
     interface = _load_interface(raw["interface"], where)
-    for path in interface.files:
-        _in_tree_path(source.root, path, f"{where} interface file")
+    for interface_file in interface.files:
+        _in_tree_path(source.root, interface_file, f"{where} interface file")
 
     properties = None
     if raw["properties"] is not None:
@@ -403,32 +473,10 @@ def load_tree_manifest(tree_dir) -> Manifest:
     return manifest
 
 
-def _normalized(path: str) -> str:
-    path = path.replace("\\", "/")
-    while path.startswith("./"):
-        path = path[2:]
-    return path
-
-
-def _matches(path: str, pattern: str) -> bool:
-    """Does one source pattern cover this path.
-
-    Matching ignores case, because Fortran spells the same extension both
-    ways and the tree may hold either. A leading "**/" means "at any
-    depth, including none", so "**/*.f90" covers both mod_kernel.f90 and
-    src/mod_kernel.f90. Elsewhere "*" already crosses "/", so no other
-    pattern needs the prefix.
-
-    The comparison lower-cases both sides and then matches
-    case-sensitively rather than leaving the choice to fnmatch, whose own
-    case rule follows the operating system.
-    """
-    lowered = _normalized(path).lower()
-    pattern = pattern.lower()
-    if pattern.startswith("**/"):
-        rest = pattern[3:]
-        return fnmatch.fnmatchcase(lowered, rest) or fnmatch.fnmatchcase(lowered, f"*/{rest}")
-    return fnmatch.fnmatchcase(lowered, pattern)
+# The builder has its own copy of the matching rule, because it runs in
+# an image this package is not installed in, and a test compares the two
+# answer for answer under the name the rule had while it lived here.
+_matches = glob_matches
 
 
 def source_files(manifest: Manifest, paths) -> list:
@@ -437,4 +485,4 @@ def source_files(manifest: Manifest, paths) -> list:
     The order given is the order returned, so a caller that sorted its
     paths keeps that order.
     """
-    return [p for p in paths if any(_matches(p, pattern) for pattern in manifest.source.patterns)]
+    return [p for p in paths if any(glob_matches(p, pattern) for pattern in manifest.source.patterns)]

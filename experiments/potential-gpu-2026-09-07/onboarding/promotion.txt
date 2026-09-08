@@ -1,0 +1,13 @@
+wrote /promotion/potential/manifest.yaml
+wrote /promotion/potential/baseline/ (11 files)
+wrote /promotion/potential/captures/holdout/
+wrote /promotion/potential/datasets/visible/
+wrote /promotion/potential/captures/visible/
+
+next, by hand:
+  git add /promotion/potential && git commit -m 'onboard potential'
+  add a region for 'potential' to deploy/gateway.<code>.yaml with phase: porting, a
+    spec_path, a strategy, a baseline_strategy, and visible_dataset: visible
+  set EQUIVALENT_CODE=potential in deploy/.env
+  cd deploy && ./down.sh && ./up.sh
+    -- the oracle bakes the captures in, so it has to be built again

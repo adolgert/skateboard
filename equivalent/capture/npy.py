@@ -26,7 +26,7 @@ from pathlib import Path
 
 import numpy as np
 
-from equivalent.manifest.schema import Variable
+from equivalent.capture.variables import Variable
 
 # How the manifest's dtype names spell themselves for numpy. Explicit
 # byte order, because these files are read on a machine other than the

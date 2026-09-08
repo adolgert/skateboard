@@ -55,6 +55,20 @@ def test_a_reader_with_no_manifest_reads_the_fixed_list():
     assert requirements_for(PORTING) == ACCEPTANCE_REQUIREMENTS
 
 
+def test_all_sanitizer_modes_are_required_for_acceptance():
+    sanitizer_requirements = {
+        req.predicate_type: req.producing_action
+        for req in ACCEPTANCE_REQUIREMENTS
+        if req.predicate_type.startswith("sanitize/")
+    }
+
+    assert sanitizer_requirements == {
+        "sanitize/memcheck": "sanitize",
+        "sanitize/racecheck": "sanitize",
+        "sanitize/initcheck": "sanitize",
+    }
+
+
 def test_the_conditional_requirement_names_the_action_that_would_produce_it():
     (requirement,) = CONDITIONAL_REQUIREMENTS
 
@@ -82,11 +96,11 @@ def test_status_shows_the_property_requirement_only_for_a_code_that_has_one(tmp_
 
     with_properties = compute_status(
         store, requirements_for(PORTING, _manifest(tmp_path / "with", properties=True)),
-        PORTING, tree=tree,
+        PORTING, tree=tree, required_materials=(), context_verified=True,
     )
     without = compute_status(
         store, requirements_for(PORTING, _manifest(tmp_path / "without", properties=False)),
-        PORTING, tree=tree,
+        PORTING, tree=tree, required_materials=(), context_verified=True,
     )
 
     rows = [row["predicateType"] for row in with_properties["rows"]]

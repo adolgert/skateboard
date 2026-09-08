@@ -27,17 +27,20 @@ import base64
 import numpy as np
 
 from equivalent.capture import npy
-from equivalent.gateway.submit import attempt_id_for_strategy
-from equivalent.ledger.capture_sets import load_capture_set
-from equivalent.ledger.store import LedgerStore
-from equivalent.ledger.subjects import Subject
-from equivalent.strategy.schema import Strategy
 
-from . import harness_capture, tree_manifest
-from .errors import ComponentError
+from equivalent.ledger.vocabulary import (
+    CAPTURE_SET_KEY,
+    EXECUTABLE_IDENTITY_KEY,
+    FAIL,
+    PASS,
+)
+from . import backend, harness_capture
+from equivalent.ledger.capture_sets import capture_set_materials
+from equivalent.ledger.artifacts import binary_artifacts
 
-# The manifest role of the driver that replays one case.
-REPLAY_ROLE = "replay"
+from .context import CheckContext
+from .result import CheckResult
+from .names import REPLAY_ROLE
 
 
 def wire_inputs(cases: dict) -> dict:
@@ -87,49 +90,59 @@ def _first_difference(cases: dict, outputs: dict) -> dict | None:
     return None
 
 
-def check(store: LedgerStore, tree: Subject, repo_dir, ref: str, region_id: str, tree_sha: str,
-          baseline_strategy: Strategy, builder) -> dict:
+def check(ctx: CheckContext, config: dict) -> CheckResult:
     """Run every captured case through the replay driver and compare.
 
-    Returns {"verdict": "pass" | "fail", "detail": {...}}, where the detail
-    names, per dataset, how many cases were compared, the capture set they
-    came from, and -- when they disagree -- the first case and variable
-    that did, with how far apart they were. Raises ComponentError if the
-    tree has no passing capture claim or the builder could not be reached.
+    The detail names, per dataset, how many cases were compared, the
+    capture set they came from, and -- when they disagree -- the first
+    case and variable that did, with how far apart they were. Raises
+    ComponentError if the builder could not be reached.
     """
-    manifest = tree_manifest.manifest_of(repo_dir, ref)
-    sets = harness_capture.captured_sets(store, tree)
+    manifest = ctx.provenance.manifest()
+    sets = harness_capture.captured_sets(ctx)
     replay = manifest.build.targets[REPLAY_ROLE]
-    attempt_id = attempt_id_for_strategy(region_id, tree_sha, baseline_strategy.name)
+    attempt_id = ctx.provenance.attempt_id()
 
     per_dataset = {}
-    failed = []
+    disagreed = []
+    reasons = []
+    executable_identity = None
+    measured_identities = []
     for name in sorted(sets):
-        cases = load_capture_set(store, sets[name])
-        try:
-            resp = builder.run(
-                attempt_id, replay.executable, wire_inputs(cases),
-                notify=None, mandatory=False,
-            )
-        except Exception as exc:
-            raise ComponentError(f"builder /v1/run call failed: {exc}") from exc
+        cases = ctx.sets.load(sets[name])
+        resp = backend.replay(ctx.builder, attempt_id, replay.executable, wire_inputs(cases))
 
-        entry = {"cases": len(cases), "capture_set": sets[name]}
-        if not resp.get("ok"):
-            entry["log_tail"] = resp.get("log_tail", "")
-            failed.append(name)
+        entry = {"cases": len(cases), CAPTURE_SET_KEY: sets[name]}
+        executable_identity = executable_identity or resp.executable_identity
+        measured_identities.append(resp.executable_identity)
+        if not resp.ok:
+            entry["log_tail"] = resp.log_tail
+            disagreed.append(name)
+            reasons.append(f"the replay of dataset '{name}' would not run")
         else:
-            first = _first_difference(cases, resp.get("outputs", {}))
+            first = _first_difference(cases, resp.outputs)
             if first is not None:
                 entry["first_difference"] = first
-                failed.append(name)
+                disagreed.append(name)
+                reasons.append(
+                    f"dataset '{name}', case '{first['case']}', variable "
+                    f"'{first['variable']}': {first['reason']}"
+                )
         per_dataset[name] = entry
 
-    return {
-        "verdict": "fail" if failed else "pass",
-        "detail": {
-            "manifest_sha256": manifest.sha256,
-            "datasets": per_dataset,
-            "datasets_that_disagreed": failed,
-        },
+    detail = {
+        "manifest_sha256": manifest.sha256,
+        EXECUTABLE_IDENTITY_KEY: executable_identity,
+        "datasets": per_dataset,
+        "datasets_that_disagreed": disagreed,
     }
+    materials = capture_set_materials(detail)
+    artifacts = binary_artifacts(*measured_identities, executable=replay.executable)
+    if disagreed:
+        return CheckResult(
+            verdict=FAIL, detail=detail, reasons=tuple(reasons), materials=materials,
+            binary_artifacts=artifacts,
+        )
+    return CheckResult(
+        verdict=PASS, detail=detail, materials=materials, binary_artifacts=artifacts,
+    )

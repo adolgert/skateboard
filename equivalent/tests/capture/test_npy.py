@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from equivalent.capture import npy
-from equivalent.manifest.schema import DTYPES, MAX_RANK, Variable
+from equivalent.capture.variables import DTYPES, MAX_RANK, Variable
 
 # Deliberately unequal extents, so an array written in the wrong order
 # would come back with the wrong shape rather than silently transposed.

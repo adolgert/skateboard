@@ -25,7 +25,7 @@ answering every comparison with the name of what is missing.
 
 | file | what it is |
 | --- | --- |
-| `docker-compose.yml` | the four networks, the four services that stay up, and the two walkthrough runners that are started on demand |
+| `docker-compose.yml` | the four networks; gateway, builder, and oracle services kept up; and the agent and two walkthrough runners started on demand |
 | `gateway.<code>.yaml` | the gateway's configuration for a deployment built around that code, in the container's paths; `EQUIVALENT_CODE` picks it |
 | `gateway/Dockerfile` | the gateway image: the package, which holds the analyzer, and a copy of the strategy files |
 | `agent/Dockerfile` | the session image: compilers, a GPU, the session tool, and the harness's own NPY module and property library, so a hand build in a session compiles against what the builder will use |
@@ -37,6 +37,7 @@ answering every comparison with the name of what is missing.
 | `onboard_walkthrough.sh`, `onboard_walkthrough.py` | bring a code in from its bare baseline to onboarded; the region is `--region`, defaulting to `tsunami:onboard` |
 | `isolation_check.sh` | assert the isolation from inside the agent |
 | `isolation_check_gateway.sh` | assert the gateway's half of it, from here |
+| `qualify.sh` | build the builder image and record a real disposable CPU build, compiler audit, containment checks, and GPU readiness |
 | `down.sh` | stop; with `--reset`, discard state after asking |
 
 The session container also mounts `../docs/onboarding.md` read-only at
@@ -45,17 +46,20 @@ to know what to write.
 
 ## The four networks
 
-The agent is on `agent_net` and `egress_net`: it can call the gateway and it
-can reach the model provider, and that is all. The gateway is on `agent_net`,
+The agent is on `agent_net` and `egress_net`: it can call the gateway and has
+general outbound access for model providers and other endpoints. The gateway is on `agent_net`,
 `build_net`, and `oracle_net`, all three of which are internal, so it can call
-the builder and the oracle but has no route to the internet. The builder is
-alone on `build_net` and the oracle alone on `oracle_net`, so the agent shares
-no network with either of them — those are missing routes, not blocked ones.
+the builder and the oracle but has no route to the internet. The builder shares
+only `build_net` with the gateway, and the oracle shares only `oracle_net` with
+the gateway, so the agent shares no network with either service — those are
+missing routes, not blocked ones.
 The agent's working copy reaches the gateway as a read-only mount rather than
 over the network, so nothing the agent sends chooses which files are read.
 Every call also carries a bearer token.
 
 ## Getting started
+
+Run the commands in this README from `deploy/`:
 
 ```sh
 cp .env.example .env          # then set EQUIVALENT_TOKEN to something of your own
@@ -67,6 +71,12 @@ cp .env.example .env          # then set EQUIVALENT_TOKEN to something of your o
 
 Both walkthroughs write into `state/working`, so run them one after the
 other rather than at once.
+
+`onboard_walkthrough.sh` can reach `ONBOARDED` only after the code has an
+independently preserved original source snapshot and reviewed run contract
+configured as `original_reference`. The shipped `tsunami` configuration lacks
+that external reference, so its onboarding walkthrough currently stops at the
+mandatory `harness_original` readiness check.
 
 `up.sh` is safe to run again. It creates what is missing, seeds the baseline
 into `state/seed`, copies that into `state/working` only if the working copy is
@@ -82,7 +92,7 @@ The ledger is plain files under `state/ledger/<baseline commit>/<region id>`,
 with the region's colon written as a dash:
 
 ```sh
-ledger status deploy/state/ledger/<baseline>/ch04-step
+ledger status state/ledger/<baseline>/ch04-step
 ```
 
 That reports the tree of the last claim that was filed, because the ledger
@@ -91,14 +101,14 @@ gateway's git repository. To see the same tree the gateway's own status
 reports, name the configuration instead:
 
 ```sh
-ledger status --config deploy/state/gateway.host.yaml --region-id ch04:step
+ledger status --config state/gateway.host.yaml --region-id ch04:step
 ```
 
 The same file names the region an onboarding session is promoted from,
-once its eight checks have passed and you have read them:
+once its nine checks have passed and you have read them:
 
 ```sh
-ledger promote --config deploy/state/gateway.host.yaml --region-id tsunami:onboard
+ledger promote --config state/gateway.host.yaml --region-id tsunami:onboard
 ```
 
 That writes `programs/<code>/` — the manifest, the baseline, the visible
@@ -138,6 +148,67 @@ that the model provider is reachable, and that the working copy is writable.
 The second asserts that the gateway cannot reach the internet and sees the
 working copy read-only.
 
+Qualify the builder on every target machine, and again after changing its
+image or Docker configuration:
+
+```sh
+./qualify.sh
+```
+
+The command writes `state/builder-qualification.json`. It compiles and runs a
+small Fortran program in disposable jobs, then records the immutable image and
+executor identities, the binary digest, protected `strace` compiler evidence,
+required flags and source paths, read-only tree and trusted files, absent
+credentials and network, one exact scratch mount with sibling and cross-attempt
+data hidden, and cleanup of normal and timed-out descendants. On a GPU host it
+also builds an OpenACC kernel, requires the `nsys` report to contain a real
+launch, and runs the strategy's `memcheck`, `racecheck`, and `initcheck` modes.
+The profiler runs as the job's own uid (its session cannot be joined across
+uids), and its report is read as root only after the program and everything it
+left running are gone; a program that leaves a process behind has its profile
+refused. The command exits nonzero unless all of those checks pass. On a
+CPU-only development machine, `./qualify.sh --cpu-only` records the same CPU
+checks and may pass with `gpu_status: "unavailable"`; that record does not
+qualify a GPU deployment.
+
+The same qualification runs as a test, against an image built from the
+working tree, whenever a Docker daemon is usable:
+
+```sh
+.venv/bin/python -m pytest services/tests/test_qualification.py
+```
+
+The protected exec trace establishes that the configured compiler ran with the
+recorded flags and sources. It does not establish that every byte in the final
+executable derives exclusively from those compiler invocations; the JSON record
+states this limit explicitly.
+
+Review `state/builder-qualification.json` and copy
+`isolation.executor_identity` into the onboarding region's
+`executor_identity` field before running the session; promotion requires it.
+The pre-onboarding oracle is intentionally unready and has no identity to pin.
+After promotion and rebuilding the oracle with captures, copy its `/healthz`
+`oracle_identity` into each porting region beside `executor_identity`, then
+rerun `up.sh`.
+
+## Complete GPU application demonstration
+
+From the repository root, run:
+
+```sh
+.venv/bin/python deploy/gpu_pilot.py --state deploy/state/potential-gpu
+```
+
+This creates an isolated deployment for the [charged-cloud application](../programs/potential/README.md),
+qualifies the GPU, runs every onboarding gate, promotes the reviewed baseline,
+and exercises rejected attempts followed by Fortran, CUDA C++, and PTX ports.
+Acceptance rests on correctness and GPU evidence; the median speedup is
+recorded, and the demonstration's own manifest declares a floor for it. The PTX run also checks that changing its external GPU module
+invalidates acceptance. This scripts public gateway client calls; it does not
+run a language model. Each invocation requires a fresh state directory. Its
+containers and networks are removed afterward; images, work volume, source
+snapshots, and evidence remain for review.
+
 ## Stopping
 
 ```sh
@@ -155,18 +226,25 @@ the login and the baseline seed.
   session runs with all three. What keeps it honest is not that it is confined
   but that nothing it does there is evidence: only what the gateway checks,
   against a tree the gateway built itself, becomes a claim.
-- **The builder's per-attempt workspace does not survive a restart.** It keeps
-  compiled attempts on disk in the container, keyed by region and tree, and
-  that disk goes away with the container. After restarting the builder, re-run
-  `build_replay` for the tree you are working on; it rebuilds under the same
-  key and the later gates find their workspace again.
+- **The builder's per-attempt workspace is operational cache.** It lives in the
+  `equivalent_builder_work` volume, keyed by region and tree. Preserve it across
+  an ordinary service restart, but do not treat it as durable evidence; the
+  ledger holds claims and executable digests. After replacing or clearing the
+  volume, a dependent action transparently reconstructs the recorded build and
+  proceeds only when the executable bytes match. If they do not, re-run the
+  relevant build action.
 - **The builder runs a makefile that came in with the submission.** That is
-  what lets any code be built without teaching the builder about it, and it
-  is why the compiler it hands that makefile is a shim that writes down every
-  invocation. The `build/replay` claim carries that log, and a build that
+  what lets any code be built without teaching the builder about it. A
+  root-owned exec observer records the compiler invocations while the makefile
+  runs as an unprivileged user. The `build/replay` claim carries that record,
+  and a build that
   compiled without the strategy's flags, or compiled a file that is not the
   tree's own source, is a failed claim rather than a passed one. The builder
-  has no route off the host either way.
+  has no route off the host either way. The long-running builder is a trusted
+  supervisor with the Docker socket; each submitted command runs in a
+  disposable sibling container with no network, a read-only root filesystem,
+  dropped capabilities, an unprivileged submitted process, and only the
+  selected attempt paths mounted.
 - **The walkthroughs run in a container, not on this machine.** The gateway is
   on internal networks only, so nothing outside them can reach it — including
   this terminal. `walkthrough.sh` and `onboard_walkthrough.sh` run their

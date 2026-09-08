@@ -76,6 +76,7 @@ GATES = (
     "time_baseline",
     "program_regression",
     "time_port",
+    "performance_check",
 )
 
 

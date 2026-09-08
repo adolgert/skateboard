@@ -1,201 +1,361 @@
-"""Reading the compiler log, which is the whole proof that a build is honest.
+"""What a caller may ask the builder for, and what every answer holds.
 
-Trust role: the builder runs a Makefile that came in with the submission,
-so nothing about the compiler command line is fixed in advance. What
-makes that safe is this file. The shim the Makefile is handed as its
-compiler writes one JSON line per invocation; these functions turn that
-log into two statements a claim can carry: every compile received the
-strategy's flags, and every file compiled came from the submitted tree.
-If this reader were wrong -- a flag counted as present when it was not,
-a file from outside the tree passed over -- a port could be accepted for
-a binary built some other way entirely, from code nobody reviewed.
+Trust role: the gateway turns these answers into claims about a build
+and a run that a person is meant to be able to check later. A key that
+an error path forgot to write is therefore not a cosmetic problem: it
+reads downstream as "this was not measured" when the truth is "this was
+not reported". So the shape of every response lives here, once, with a
+default for every field and a failure constructor that fills the whole
+shape in -- a stage cannot answer with less than it promised.
 
-It is deliberately a pure function of the log text, so it can be read and
-tested without a compiler.
-
-The source-pattern rule below is a second copy of the one in the
-gateway's manifest reader. The builder image installs no Python package
-of this project, so the rule cannot be imported across the boundary; a
-test holds both copies to the same table of paths.
+The request models are the other half of the same idea. Nothing the
+builder runs is invented by the builder: the tree, the makefile, the
+targets, the compiler, the flags and the executables all arrive in one
+of these, having been read by the gateway from the code's hashed
+manifest and the hashed strategy file.
 """
 from __future__ import annotations
 
-import fnmatch
-import json
-import os
+from pathlib import PurePosixPath
+from typing import ClassVar, Literal
 
-# Where the builder keeps its own trusted Fortran, which a tree is meant
-# to compile against: it is what the capture format is written with, so
-# a compile naming a file from here is not reaching outside the tree.
-HARNESS = "/opt/harness"
-
-# Extensions a Fortran compiler treats as source. Compared lower-cased,
-# so ".F90" and ".f90" are one entry. An argument with any other
-# extension is a flag, an object file, or a library -- not something the
-# person reviewing this build needs to see listed as compiled code.
-SOURCE_EXTENSIONS = (".f90", ".f08", ".f03", ".f", ".for")
-
-# How each compiler spells "put the .mod files here". The Makefile takes
-# the spelling as MODFLAG so that one Makefile serves both; the builder
-# fills it in from the compiler the strategy names. A compiler not in
-# this table gets no MODFLAG and the tree's own default applies.
-MODULE_FLAG = {"nvfortran": "-module", "gfortran": "-J"}
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-def module_flag(compiler: str) -> str | None:
-    """How this compiler wants the module output directory named, or None."""
-    return MODULE_FLAG.get(os.path.basename(compiler))
+class TreeFile(BaseModel):
+    path: str    # relative to the tree root, directories included
+    b64: str     # the file's bytes; a tree holds namelists and data, not only text
 
 
-def _normalized(path: str) -> str:
-    path = path.replace("\\", "/")
-    while path.startswith("./"):
-        path = path[2:]
-    return path
+class RuntimeArtifact(BaseModel):
+    path: str
+    kind: Literal["shared_library", "gpu_module"]
+
+    @field_validator("path")
+    @classmethod
+    def path_inside_tree(cls, value: str) -> str:
+        path = PurePosixPath(value)
+        if (
+            not value or "\\" in value or path.is_absolute()
+            or path == PurePosixPath(".") or ".." in path.parts
+            or path.as_posix() != value
+        ):
+            raise ValueError("runtime artifact path must be normalized and relative to the tree")
+        return value
 
 
-def _matches(path: str, pattern: str) -> bool:
-    """Does one source pattern cover this path.
+class ReplayTarget(BaseModel):
+    target: str      # what `make` is asked for
+    executable: str  # what that target must leave in the tree, relative to its root
 
-    The same rule the code manifest's own reader applies, copied because
-    the builder image cannot import it: matching ignores case, a leading
-    "**/" means "at any depth, including none", and elsewhere "*"
-    already crosses "/".
+
+class BuildTarget(ReplayTarget):
+    role: str        # what the manifest calls this target: replay, timing, capture
+    runtime_artifacts: list[RuntimeArtifact] = []
+
+    @model_validator(mode="after")
+    def distinct_artifact_paths(self):
+        paths = [artifact.path for artifact in self.runtime_artifacts]
+        if len(paths) != len(set(paths)):
+            raise ValueError("runtime artifact paths must be unique within a target")
+        if self.executable in paths:
+            raise ValueError("a target executable cannot also be a runtime artifact")
+        return self
+
+
+class Toolchain(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    compiler: str
+    flags: list[str] = []
+
+    @field_validator("compiler")
+    @classmethod
+    def compiler_is_named(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("toolchain compiler must be a non-empty string")
+        return value
+
+
+# One case's arrays as they travel: {variable: base64 of that variable's
+# .npy file}. The file says what type and shape the array is, so nothing
+# on the wire repeats it.
+Arrays = dict[str, str]
+# What a replay, a sanitizer or a property run is given: {case: its inputs}.
+Cases = dict[str, Arrays]
+# And what a capture produced: each case's inputs beside the answers the
+# baseline wrote for them, keyed "inputs" and "outputs".
+CapturedCases = dict[str, dict[str, Arrays]]
+# The tolerance policy's band per output variable, as the policy file
+# spells it. What is inside one band is deliberately left alone: `ulp` is
+# a count of representable steps and `abs` and `rel` are real numbers,
+# and a band whose integer had been widened to a float on the way in
+# would be a different policy from the one the oracle checked.
+Bands = dict[str, dict]
+
+
+class BuildRequest(BaseModel):
+    attempt_id: str
+    # The WHOLE tracked tree, not a filtered source list: a code's build
+    # reads include files, namelists, and small data files that no
+    # extension test would recognize.
+    tree: list[TreeFile]
+    makefile: str
+    targets: list[BuildTarget]
+    # compiler/flags is the original single-Fortran wire. Mixed builds use
+    # toolchains exclusively, leaving one authority for each language's flags.
+    compiler: str | None = None
+    flags: list[str] = []
+    toolchains: dict[str, Toolchain] | None = None
+    link_flags: list[str] = []
+    # What the code calls its own source, used to say whether the build
+    # compiled anything the manifest never described.
+    source_patterns: list[str] = []
+
+    @model_validator(mode="after")
+    def one_toolchain_form(self):
+        supported = {"fortran", "c", "cxx", "cuda", "ptx"}
+        if self.toolchains is None:
+            if not self.compiler:
+                raise ValueError("a build must name compiler/flags or toolchains")
+            return self
+        if self.compiler is not None or self.flags:
+            raise ValueError("compiler/flags and toolchains cannot both describe one build")
+        if not self.toolchains:
+            raise ValueError("toolchains must name at least one language")
+        unknown = sorted(set(self.toolchains) - supported)
+        if unknown:
+            raise ValueError(f"unsupported build language(s): {', '.join(unknown)}")
+        return self
+
+
+class RunRequest(BaseModel):
+    attempt_id: str
+    executable: str  # the manifest's replay target
+    # The file says what type and shape each array is; nothing else has to.
+    cases: Cases
+    # The strategy's device proof: which offload runtime should be asked
+    # to announce its kernel launches, or none at all.
+    notify: str | None = None
+    mandatory: bool = False
+    # None retains the legacy rule: acc/omp notification implies profiling.
+    profile: bool | None = None
+
+
+class CaptureRequest(BaseModel):
+    attempt_id: str
+    executable: str  # the manifest's capture target
+    # The dataset's own arguments, from the manifest. The directory to
+    # write into is added after them by the builder, which is the one
+    # thing the capture contract fixes.
+    args: list[str] = []
+    run_name: str  # what to call this run's output directory
+
+
+class SanitizeRequest(BaseModel):
+    attempt_id: str
+    executable: str
+    # One entry per case to sanitize. How many cases that is comes from the
+    # gateway's hashed strategy file; the builder runs whatever it is sent.
+    cases: Cases
+    tools: list = ["memcheck", "racecheck"]
+
+
+class PropertiesRequest(BaseModel):
+    attempt_id: str
+    executable: str  # the manifest's replay target, which the properties call
+    module: str      # the manifest's properties module, relative to the tree root
+    # The visible cases, which become the corpus the code's own properties
+    # draw from.
+    cases: Cases
+    seed: int
+    max_examples: int
+
+
+class MutateRequest(BaseModel):
+    attempt_id: str
+    makefile: str
+    # The manifest's replay target: what `make` is asked for, and what it
+    # must leave behind for each mutant to be replayed.
+    replay_target: ReplayTarget
+    # The files the manifest says implement the region. Nothing here
+    # decides which those are; the gateway read them from the manifest.
+    files: list[str] = []
+    # The visible capture set: the inputs are replayed and the outputs are
+    # what each mutant is scored against.
+    cases: CapturedCases = {}
+    # What decides whether a changed answer was noticed.
+    bands: Bands = {}
+    compiler: str
+    flags: list[str] = []
+    link_flags: list[str] = []
+    source_patterns: list[str] = []
+    jobs: int | None = None
+    limit: int | None = None
+
+
+class TimeRequest(BaseModel):
+    attempt_id: str
+    executable: str  # the manifest's timing target
+    args: list[str] = []
+    # Values, not code: the manifest's own environment for a fair measurement.
+    env: dict[str, str] = {}
+    outputs: list[str] = []  # files the run must write, collected and returned
+    repeats: int = Field(default=5, ge=1)
+    budget_s: int = Field(default=300, ge=1)
+    # Optional exact expected bytes, base64 encoded by output path.  This is
+    # used when a trusted parent already holds a reference and wants every
+    # measured repetition checked before the builder calls the timing valid.
+    expected_outputs: dict[str, str] | None = None
+
+
+class Response(BaseModel):
+    """One stage's whole answer, successful or not.
+
+    Every field has a default, so `failure` can fill the shape in from
+    one sentence and a reader downstream never has to tell a key that is
+    missing from a key that is false.
     """
-    lowered = _normalized(path).lower()
-    pattern = pattern.lower()
-    if pattern.startswith("**/"):
-        rest = pattern[3:]
-        return fnmatch.fnmatchcase(lowered, rest) or fnmatch.fnmatchcase(lowered, f"*/{rest}")
-    return fnmatch.fnmatchcase(lowered, pattern)
+
+    # Which field a failure's sentence goes in, because a stage that
+    # collects a program's own output calls it that rather than a log.
+    message_field: ClassVar[str | None] = "log_tail"
+
+    ok: bool = False
+
+    def to_dict(self) -> dict:
+        return self.model_dump()
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        return cls.model_validate(data)
+
+    @classmethod
+    def failure(cls, message: str = "", **fields):
+        """A failed answer that still carries every key the shape declares."""
+        if message and cls.message_field:
+            fields.setdefault(cls.message_field, message)
+        return cls(ok=False, **fields)
 
 
-def is_tree_source(path: str, source_patterns) -> bool:
-    """Does this code's own source-pattern list cover this path.
-
-    The build stage asks it of every file a compile named; the mutation
-    stage asks it of every file the manifest says implements the region,
-    because a file the code does not call its own source is not one a
-    port would be judged on.
-    """
-    return any(_matches(path, pattern) for pattern in source_patterns)
-
-
-def _is_source(argument: str, cwd: str) -> bool:
-    """Is this argument a Fortran file that is really on disk.
-
-    Both halves matter. The extension alone would count "-o replay.f90",
-    which names an output; being on disk alone would count a text file
-    the build reads for some other reason.
-    """
-    if not any(argument.lower().endswith(ext) for ext in SOURCE_EXTENSIONS):
-        return False
-    return os.path.isfile(os.path.join(cwd, argument))
+class BuildResponse(Response):
+    stage: str = "build"
+    command: list[str] = []          # what `make` was actually asked for
+    targets: dict = {}               # role -> {executable, built, sha256, size}
+    compiles: list = []              # one record per compiler invocation
+    compiler_audit: dict = {}        # who recorded those invocations, and how
+    flags: list[str] = []
+    link_flags: list[str] = []
+    toolchains: dict = {}
+    languages_compiled: list[str] = []
+    # The two statements the compiler log exists to make.
+    flags_reached_every_compile: bool = False
+    compiled_only_tree_source: bool = False
+    minfo_excerpt: str = ""          # the compiler's own account of what it offloaded
+    missing_targets: list[str] | None = None
+    executor_identity: str | None = None
+    image_id: str | None = None
+    log_tail: str = ""
 
 
-def _under(path: str, directory: str) -> bool:
-    return path == directory or path.startswith(directory + os.sep)
+class RunResponse(Response):
+    stage: str = "run"
+    outputs: dict = {}               # case -> {variable: base64 npy the driver wrote}
+    kernels_launched: int = 0
+    # One entry per distinct launch source across every case, so the claim
+    # says what ran and not only how much of it ran.
+    launches: list = []
+    profiler: str | None = None
+    executable_identity: dict | None = None
+    case: str | None = None          # which case a failure was in
+    log_tail: str = ""
 
 
-def _display(path: str, tree_root: str) -> str:
-    """A path named the way the tree names it, so a claim reads in its terms."""
-    if _under(path, tree_root):
-        return os.path.relpath(path, tree_root)
-    return path
+class CaptureResponse(Response):
+    message_field: ClassVar[str | None] = "stdout_tail"
+
+    stage: str = "capture"
+    cases: dict = {}                 # case -> {"inputs": {...}, "outputs": {...}}
+    executable_identity: dict | None = None
+    stdout_tail: str = ""
 
 
-def compile_records(
-    log_text: str, tree_dir, flags, source_patterns, *, harness_dir=HARNESS,
-) -> list[dict]:
-    """One record per compiler invocation the shim logged.
-
-    Each record is::
-
-        {"argv": [...], "cwd": str, "inputs": [...], "output": str | None,
-         "has_flags": bool, "outside": [...]}
-
-    `inputs` are the Fortran sources that invocation compiled, named
-    relative to the tree root where they are inside it. `has_flags` says
-    every one of the strategy's flags appeared on that command line.
-    `outside` names the inputs that are not the tree's own source: a file
-    from another directory, or a file in the tree that the code's own
-    source patterns do not cover. Files under the harness directory are
-    the builder's own and are never listed.
-
-    A line the shim wrote that is not JSON raises ValueError: a log that
-    cannot be read is not the same thing as a build that compiled
-    nothing, and the caller must not treat it as one.
-    """
-    tree_root = os.path.realpath(str(tree_dir))
-    harness_root = os.path.realpath(str(harness_dir))
-    flags = list(flags)
-    patterns = list(source_patterns)
-
-    records = []
-    for number, line in enumerate(log_text.splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            entry = json.loads(line)
-        except ValueError as exc:
-            raise ValueError(f"compiler log line {number} is not JSON: {line[:200]}") from exc
-        argv = [str(a) for a in entry["argv"]]
-        cwd = entry["cwd"]
-
-        inputs = []
-        outside = []
-        for argument in argv:
-            if not _is_source(argument, cwd):
-                continue
-            real = os.path.realpath(os.path.join(cwd, argument))
-            shown = _display(real, tree_root)
-            inputs.append(shown)
-            if _under(real, harness_root):
-                continue
-            if not _under(real, tree_root) or not any(_matches(shown, p) for p in patterns):
-                outside.append(shown)
-
-        records.append({
-            "argv": argv,
-            "cwd": _display(os.path.realpath(cwd), tree_root),
-            "inputs": inputs,
-            "output": argv[argv.index("-o") + 1] if "-o" in argv[:-1] else None,
-            "has_flags": all(flag in argv for flag in flags),
-            "outside": outside,
-        })
-    return records
+class SanitizeResponse(Response):
+    stage: str = "sanitize"
+    per_tool: dict = {}              # tool -> {ok, errors, log_tail} or {ok: None, error}
+    executable_identity: dict | None = None
+    log_tail: str = ""
 
 
-def _compiles(records) -> list[dict]:
-    """The invocations that compiled Fortran, as against a link or a probe."""
-    return [record for record in records if record["inputs"]]
+class PropertiesResponse(Response):
+    stage: str = "properties"
+    # A property run is repeatable only if the claim says how it was drawn.
+    seed: int | None = None
+    max_examples: int | None = None
+    passed: int = 0
+    failed: int = 0
+    errors: int = 0
+    skipped: int = 0
+    deselected: int = 0
+    xfailed: int = 0
+    xpassed: int = 0
+    collected: int = 0
+    executed: int = 0
+    replays_observed: int | None = None
+    counts_source: str | None = None
+    executable_identity: dict | None = None
+    log_tail: str = ""
 
 
-def flags_reached_every_compile(records) -> bool:
-    """Did the strategy's flags reach every compile, and was there one at all.
-
-    A build whose log holds no compile is not a build that obeyed the
-    strategy: it is one that never called the compiler the builder handed
-    it, which is exactly what this check exists to catch.
-    """
-    compiles = _compiles(records)
-    return bool(compiles) and all(record["has_flags"] for record in compiles)
-
-
-def compiles_without_flags(records) -> list[list]:
-    """The command lines that compiled Fortran without the strategy's flags."""
-    return [record["argv"] for record in _compiles(records) if not record["has_flags"]]
+class MutateResponse(Response):
+    stage: str = "mutate"
+    generated: int = 0
+    scored: int = 0
+    results: list = []               # one row per mutant and its verdict
+    counts: dict = {}
+    # The directories of the verdicts a person has to read the source of.
+    kept_dirs: list = []
+    log_tail: str = ""
 
 
-def compiled_only_tree_source(records) -> bool:
-    return not any(record["outside"] for record in records)
+class TimeResponse(Response):
+    stage: str = "time"
+    runs_s: list = []
+    outputs: list = []               # the declared files, collected once per run
+    gpu_exclusive: bool | None = None
+    executable_identity: dict | None = None
+    stdout_tail: str = ""
+    log_tail: str = ""
 
 
-def files_outside_tree(records) -> list[str]:
-    """Every compiled file that was not the submitted tree's own source, once each."""
-    seen = []
-    for record in records:
-        for path in record["outside"]:
-            if path not in seen:
-                seen.append(path)
-    return seen
+class ArtifactsResponse(Response):
+    message_field: ClassVar[str | None] = None
+
+    attempt_id: str = ""
+    # relative path -> {sha256, size, role, verified}
+    executables: dict = {}
+    executor_identity: str | None = None
+    image_id: str | None = None
+
+
+class HealthResponse(Response):
+    message_field: ClassVar[str | None] = None
+
+    # Keyed exactly as a strategy's `required_tools` spells them, so the
+    # gateway can compare the two without translating.
+    tools: dict = {}
+    python_modules: dict = {}
+    isolation: dict = {}
+    executor_identity: str | None = None
+
+
+# Every endpoint's pair, for a caller that wants to name one by its path.
+ENDPOINTS = {
+    "build": (BuildRequest, BuildResponse),
+    "run": (RunRequest, RunResponse),
+    "capture": (CaptureRequest, CaptureResponse),
+    "sanitize": (SanitizeRequest, SanitizeResponse),
+    "properties": (PropertiesRequest, PropertiesResponse),
+    "mutate": (MutateRequest, MutateResponse),
+    "time": (TimeRequest, TimeResponse),
+}

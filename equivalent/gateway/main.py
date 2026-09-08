@@ -37,7 +37,7 @@ from fastapi import FastAPI
 
 from equivalent.gateway.app import create_app
 from equivalent.gateway.backend_client import connect_builder, connect_oracle
-from equivalent.gateway.config import load_gateway_config
+from equivalent.region.deployment import load_gateway_config
 from equivalent.strategy.schema import load_strategy
 
 CONFIG_VAR = "EQUIVALENT_CONFIG"
@@ -84,8 +84,8 @@ def check_required_tools(regions, builder) -> None:
             f"the builder did not answer /healthz, so its tools could not be checked "
             f"against the strategies: {exc}"
         ) from exc
-    present = report.get("tools", {})
-    importable = report.get("python_modules", {})
+    present = report.tools
+    importable = report.python_modules
 
     def has(tool: str) -> bool:
         if tool.startswith(MODULE_PREFIX):

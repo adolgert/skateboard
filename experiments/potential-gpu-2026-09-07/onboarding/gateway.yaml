@@ -1,0 +1,19 @@
+codes:
+  potential:
+    manifest: potential/manifest.yaml
+    original_reference: potential/original-reference.yaml
+paths:
+  ledger_root: /ledger
+  programs: /programs
+  repo: /repo
+  seed: /seed
+  strategies: /strategies
+  working_copy: /working
+regions:
+  potential:onboard:
+    baseline_strategy: cpu_reference
+    code: potential
+    executor_identity: f25e24cb0343a972911654af17291f1d029c81d0a099cbba659c5a012affef10
+    phase: onboarding
+    strategy: onboarding
+version: 1

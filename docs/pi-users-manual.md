@@ -51,6 +51,19 @@ copy of the code, reads the working copy when asked to submit, runs
 checks, and writes the ledger. The model cannot reach the builder, the
 reference data, or the ledger directly.
 
+**The reviewed runtime identities.** The builder `/healthz` response names
+the executor image, isolation code, compiler, tools, Python runtime, and
+platform with one SHA-256 identity. The oracle `/healthz` response names its
+service and comparator source, Python and NumPy versions, declared outputs,
+policy, and captures with another. After qualifying the deployment, pin the
+builder value in `executor_identity` before onboarding. After promotion and
+rebuilding the oracle with captures, pin its value in `oracle_identity` before
+porting. An unready oracle has no identity to pin. The gateway refuses a live service that disagrees with
+a configured pin. Configuration-aware offline status requires the executor
+pin and, for a porting region, the oracle pin; promotion requires the executor
+pin. Rebuilding or changing either reviewed runtime requires reviewing its new
+identity and rerunning checks.
+
 **The ledger.** One directory per region containing every claim ever
 recorded and a log of every request the gateway received. Nothing in it
 is ever changed or deleted. You can read it at any time with the
@@ -95,10 +108,10 @@ extension connects to the gateway, fetches the list of actions, and
 registers one tool for each, plus `submit`, `status`, and `claim`. One
 line confirms it:
 
-    equivalent: registered 13 tools for region ch04:step
+    equivalent: registered 14 tools for region ch04:step
 
 The count is the actions of that region's phase — ten for a region being
-ported, eight for a code being onboarded — plus `submit`, `status`, and
+ported, nine for a code being onboarded — plus `submit`, `status`, and
 `claim`.
 If a configuration error is reported instead, the session cannot reach
 the gateway; that is a deployment problem, not something to fix from
@@ -138,8 +151,11 @@ is built from. The anchor's file has to be one of them. A path that does
 not exist yet is allowed: a port that splits a routine into a new module
 lists that module here and then writes it.
 
-`pst_node` is the subroutine name and the inclusive line range of its
-body, from `subroutine step` through `end subroutine step`. A spec can
+`pst_node` is the procedure name and the inclusive baseline line range of its
+body, from `subroutine step` through `end subroutine step`. The lightweight
+analyzer currently accepts full named subroutines and functions. It resolves
+the named procedure in the submitted candidate, so edits that shift lines do
+not leave the check pointed at the old span. A spec can
 also list callees whose bodies the analyzer should scan, under
 `closure: {callees: [{name: ..., file: ..., lines: "lo-hi"}]}`. A callee
 that names no `file` is in the anchor's file; one that names another
@@ -148,19 +164,20 @@ is `ch04:step` written that way: it lists `src/mod_diff.f90` as well and
 scans `diff_centered` there, so a port may change both files.
 
 Then the model calls `submit`, and then `sese_check`. The analyzer
-scans the named lines for anything that would break single-entry,
+validates the range and scans the resolved procedure for anything that would break single-entry,
 single-exit control flow: `goto`, an early `return`, `entry`, `stop`. A
 pass widens the allow-list to include every file the spec lists, which
 is what makes editing possible. The answer looks like:
 
     sese_check: pass (c-0001)
 
-Nothing else can run until this exists.
+The candidate build cannot run until this exists. `time_baseline` is
+independent and can run before the candidate's checks.
 
-A note on trust: the model chose the line range. A range that covers
-nothing would pass trivially. The spec is in the submitted tree, so you
-can read it, and the ledger records the tree; but the analyzer's verdict
-is only as meaningful as the range it was given.
+A note on scope: an arbitrary loop or line selection needs a real Fortran
+parser and control-flow graph. This analyzer fails such a specification
+instead of presenting its regex scan as a proof. The resolved candidate ranges
+are recorded in the claim for review.
 
 ### 2. Port the kernel
 
@@ -180,8 +197,9 @@ the gateway's repository. It answers with two identifiers:
       ignored: Makefile (not_allowed), src/mod_diff.f90 (not_allowed), ...
 
 The *tree* names this exact version of the code. The *frozen* value
-names everything that was not allowed to change. Every later claim is
-attached to one of these. The `ignored` list is the baseline files that
+names everything that was not allowed to change. Candidate checks are
+attached to the tree; the frozen digest identifies the protected file set
+for review. The `ignored` list is the baseline files that
 were in the working copy but not on the allow-list; seeing the other
 source files there is normal, since the working copy holds the whole
 program. If a file the model meant to change is in that list, the change
@@ -203,13 +221,14 @@ row's requirements in the tool's description.
 | `build_replay` | the submitted tree builds through its own makefile, with the strategy's flags on every compile and nothing compiled from outside the tree | `sese/verified`, on the region |
 | `run_replay` | the replay driver ran the visible inputs and the offload runtime reported kernel launches | `build/replay` |
 | `sanitize` | `compute-sanitizer` found no memory error, no race, and no read of uninitialised memory | `gpu/executed` |
-| `regression_visible` | on the visible cases, every variable the case declares came back matching the recorded answer within the code's bands | `sanitize/memcheck` and `sanitize/racecheck` |
+| `regression_visible` | on the visible cases, every variable the case declares came back matching the recorded answer within the code's bands | `sanitize/memcheck`, `sanitize/racecheck`, and `sanitize/initcheck` |
 | `property_check` | the code's own invariants held on inputs drawn around the visible cases | `regression/visible` |
 | `regression_holdout` | the same comparison on cases the session never sees, answered pass or fail alone | `regression/visible` |
 | `program_regression` | the whole program, run at the size the manifest declares, wrote what the baseline program wrote, file by file | `regression/holdout`, and a `timing/baseline` claim on the baseline tree |
 | `time_baseline` | how long the unmodified program takes under the region's baseline strategy, and stores that run's own outputs as the reference the row above compares against | nothing |
 | `time_port` | how long the ported program takes, at the same size and with the same arguments | `program/regression` |
-| `accept` | nothing of its own: it is the name of the whole list, and there is no tool for it | every claim above except `sanitize/initcheck`, `timing/baseline`, and — for a code that declares no invariants — `regression/property` |
+| `performance_check` | records median baseline time / median port time from at least five samples each, for comparing ports later; not on the acceptance list | `timing/port` and `timing/baseline` |
+| `accept` | nothing of its own: it is the name of the whole list, and there is no tool for it | every claim above except `timing/baseline` and `performance/speedup`, and — for a code that declares no invariants — `regression/property` |
 
 `time_baseline` has no preconditions and is about the baseline tree
 rather than the submission, so it can be run at any point; everything
@@ -222,18 +241,19 @@ knows nothing else about the code: which makefile, which targets, and
 which programs those targets must leave behind all come from the code's
 manifest.
 
-The compiler the makefile is handed is a shim that writes down every
-invocation before running the real one, so the claim can say more than
-"it compiled". It records every compiler command line, and two checks
-come out of that log: the strategy's flags reached every compile, and
-every file compiled was the tree's own source. A build that succeeded
+The submitted `make` runs unprivileged while a protected, root-owned
+`strace/process+cwd` observer records invocations of the configured compiler, so the
+claim can say more than "it compiled". Two checks come out of that record: the
+strategy's flags reached every compile, and every file compiled was the tree's
+own source. A build that succeeded
 while ignoring the flags, or that reached outside the tree, is a `fail`
 naming the command line or the file. A compile error is a `fail`
 carrying the compiler's messages.
 
 **`run_replay`** — The replay program the manifest names is run on the
-visible cases with the offload runtime's kernel-launch notifications
-turned on, and the launches it reported are counted. A program that runs
+visible cases under a protected Nsight Systems profile, and GPU kernel
+activities reported by CUPTI are counted. The claim records the profiler and
+kernel names. A program that runs
 but launches no kernels fails, even if its output is right, because the
 point of the port is that the work moved to the GPU. This is also where
 what the driver wrote is checked against what the manifest declares the
@@ -247,8 +267,7 @@ racecheck, and initcheck. One call, three claims:
     sanitize/racecheck: pass (c-0005)
     sanitize/initcheck: pass (c-0006)
 
-Memcheck and racecheck are required for acceptance; initcheck is
-recorded for information.
+All three sanitizer claims are required for acceptance.
 
 **`regression_visible`** — The outputs `run_replay` recorded are sent to
 the oracle and compared against the recorded answers for the visible
@@ -271,8 +290,10 @@ perturbing the visible cases, so a drawn state is one the code is meant
 to be run on.
 
 The search is random, so a request that names no seed has one drawn for
-it, and the claim records the seed it used and how many examples it
-drew. A request that does name a seed repeats exactly that search — same
+it, and the claim records the seed and requested example ceiling. It also
+records pytest's submitted-process test counts and protected execution evidence
+that the bound replay executable was invoked; it does not present the ceiling
+as an observed example count. A request that does name a seed repeats exactly that search — same
 seed, same search, and the gateway answers with the claim already filed
 rather than running it twice; a different seed is a different search and
 gets a claim of its own. `max_examples` says how hard to look, and
@@ -282,13 +303,14 @@ Hypothesis writes the smallest input it could find that breaks it.
 
 This check exists only for a code that declares a properties module in
 its manifest. A code that declares none is not asked for it and is not
-held back by it; a code that does declares it must pass before the port
+held back by it; a code that declares one must pass before the port
 is accepted.
 
 **`regression_holdout`** — The same comparison on a second set of cases
-the session never sees. The answer is pass or fail only, so a port
-cannot be tuned to the held-out set. The full comparison stays in the
-ledger for a person.
+the session never sees. The answer exposes only pass or fail, while the full
+comparison stays in the ledger for a person. This limits direct leakage; it
+does not prevent tuning through repeated adaptive submissions, so review the
+request and claim history before treating the holdout as independent evidence.
 
 **`time_baseline`** — The unmodified program is timed the same way a
 port will be, built with the region's baseline strategy: a strategy file
@@ -327,21 +349,32 @@ on those.
 
 **`time_port`** — The code's own program is timed, five runs by default,
 with the arguments and environment the manifest declares and a budget it
-declares too. It requires `program/regression`, so a program that
+declares too. Every repetition's declared outputs are compared with the
+baseline program outputs. It requires `program/regression`, so a program that
 computes the wrong thing at the timing size cannot be timed at all. This
 is the last requirement for acceptance. The claim records the flags, the
 run times, what the program was given, which files it wrote and their
 digests, and whether the GPU was otherwise idle, which on a shared
 workstation it usually is not.
 
+**`performance_check`** — Records the port's median speedup over the CPU
+baseline so accepted ports can be compared later; acceptance does not depend
+on it. Only a manifest that declares a floor makes a slower port fail it. The
+comparison is tied to the exact two timing claims; rerunning either timing
+action retires the previous one. Measurements include isolated-job overhead,
+and the number is not a statistical confidence bound or proof of an exclusive GPU.
+
 A few rows accept settings, and the tools take them as optional
-arguments: `time_baseline` and `time_port` take `repeats`, how many
-timed runs to make, five when it is left out; `property_check` takes
-`seed`, which repeats one exact search and is drawn for the run when
-left out, and `max_examples`, how many examples to draw per property, a
-hundred when left out. In the onboarding session, `harness_property`
+arguments: `time_baseline` and `time_port` take `repeats`, an integer from 5
+through 100 and five when left out; `property_check` takes a signed 64-bit
+integer `seed`, which repeats one exact search and is drawn for the run when
+left out, and `max_examples`, an integer from 100 through 10000 and the
+Hypothesis ceiling on examples per property rather than a report of how many
+ran, a hundred when left out. In the onboarding session, `harness_property`
 takes the same two, and `harness_self_check` takes `limit`, which scores
-at most that many mutants rather than all of them. Every one of them is
+an integer from 1 through 10000 mutants rather than all of them. A limit is
+useful for diagnosis, but a campaign it truncates cannot pass the adequacy
+claim because every generated mutant must be classified. Every one of them is
 an integer and every one of them is optional: a call that names none is
 the ordinary call, and gets the defaults above. Nothing else takes any
 configuration, and a value of the wrong kind — or a setting the action
@@ -359,10 +392,11 @@ status is `ACCEPTED`. From a shell on the host:
       gpu/executed         pass   c-0003
       sanitize/memcheck    pass   c-0004
       sanitize/racecheck   pass   c-0005
-      regression/visible   pass   c-0006
-      regression/holdout   pass   c-0007
-      program/regression   pass   c-0008
-      timing/port          pass   c-0009
+      sanitize/initcheck   pass   c-0006
+      regression/visible   pass   c-0007
+      regression/holdout   pass   c-0008
+      program/regression   pass   c-0009
+      timing/port          pass   c-0010
     ACCEPTED on aaaaaaaaaaaa
 
 `/status` inside the session prints the same rows in a narrower layout.
@@ -377,13 +411,10 @@ from outside the session.
 Porting is rarely one pass. The loop is: the model edits, submits, and
 re-runs the checks the edit invalidated.
 
-Every check except `sese_check` is attached to the tree, so any
-submitted change to the code means those checks run again on the new
-tree. `sese_check` is attached to the frozen value instead — the set of files
-that were not allowed to change — so it survives edits to the region's
-own file. An edit to the spec does not invalidate it either; the
-allow-list comes from the recorded claim, not from the spec as it is
-now, so a changed spec has no effect until `sese_check` is run again.
+Every check, including `sese_check`, is attached to the submitted tree, so any
+code change requires a new SESE claim before that candidate can build. The
+gateway records the allow-list in the claim. Changing the spec does not widen
+an already filed claim; submit the changed spec and run `sese_check` again.
 
 If the model asks for a check that already ran on the same tree with the
 same settings, the gateway answers with the recorded claim instead of
@@ -407,7 +438,7 @@ it is the claim's detail as the check recorded it:
 
 The id in parentheses names the record in the ledger. A `fail` is a real
 verdict — the check ran and the code did not meet it — and **the detail
-is the reason**: the compiler log, the sanitizer's findings, the cases
+is the reason**: the compiler audit, the sanitizer's findings, the cases
 that missed tolerance, the input a property failed on. It is what the
 session reads to know what to fix, so the keys that explain a failure
 are printed first and a fail is cut off only at 24000 characters; a pass
@@ -417,9 +448,10 @@ how to read the whole of it. The fix is to edit, submit, and run the
 check again. Failed claims stay in the ledger; they are history, not
 something to erase.
 
-A few predicates are verdict-only by policy — `regression/holdout` is
-the one that matters, so a port cannot be tuned to the held-out cases —
-and their claims come back as the verdict line alone.
+A few predicates are verdict-only by policy — `regression/holdout` is the one
+that matters — and their claims come back as the verdict line alone. This
+withholds the failing values but still leaks one bit per adaptive request, which
+is why the complete submission history remains part of human review.
 
 **The `claim` tool** reads any claim of the region back by id:
 
@@ -449,7 +481,8 @@ The first is a claim to read with `claim`; the second is a check that
 has not run.
 
 **An error** means the check itself could not run — the builder is
-unreachable, or its compiled workspace is gone after a restart. No claim
+unreachable, or a missing cached artifact could not be reconstructed with the
+recorded executable bytes. No claim
 is recorded. Errors are for the person to fix; the model cannot edit its
 way around one.
 
@@ -506,6 +539,13 @@ once more, as `programs/<code>/manifest.yaml`. A code that has not been
 onboarded yet has only the three fields naming it and its source tree,
 and a region of it cannot be ported until the rest exists.
 
+Before the session starts, the deployment owner also preserves the original
+source and a reviewed build/run/output contract outside the working copy and
+names that contract as the code's `original_reference`. The agent cannot edit
+this reference. Without it, `harness_original` cannot pass and the region
+cannot reach `ONBOARDED`; [the coworker handoff](coworker-handoff.md#2-preserve-the-original-before-the-agent-edits-it)
+defines the contract and provenance record.
+
 `docs/onboarding.md` is where those contracts are written down: what the
 makefile, the replay driver, the capture program, the timing run, the
 tolerance file, and the properties module each have to do, and what
@@ -514,7 +554,7 @@ every manifest field means. It is mounted into the session container at
 be pointed at. The rest of this section is only the shape of the
 session.
 
-The session is finished when eight checks have passed on one tree, at
+The session is finished when nine checks have passed on one tree, at
 which point `status` ends with `ONBOARDED` rather than `ACCEPTED`:
 
 | check | what it establishes |
@@ -525,8 +565,9 @@ which point `status` ends with `ONBOARDED` rather than `ACCEPTED`:
 | `harness_replay` | the replay driver reproduces the captured outputs bitwise from the captured inputs |
 | `harness_determinism` | capturing and replaying again agrees bitwise with what was stored |
 | `harness_timing` | the timing target runs twice inside its budget and writes the same outputs both times |
-| `harness_self_check` | single-token faults injected into the files the manifest says implement the region are built and replayed like the baseline: at least one is caught, and none changes an answer that the tolerance bands then let through |
-| `harness_property` | the code's own module of invariants passes against the baseline build — or, for a code that declares none, the claim records that it declares none |
+| `harness_original` | the onboarded timing program and the independently preserved pre-onboarding snapshot each reproduce their own outputs on two runs, and agree on every output and run in the reviewed external contract |
+| `harness_self_check` | every generated single-token fault is classified after being built and replayed like the baseline, at least one is caught, none fails at runtime or is skipped, and none changes an answer while remaining inside the tolerance bands; unchanged outputs remain review obligations |
+| `harness_property` | the code's own module of invariants runs the bound replay executable and has at least one passing test with none failed, errored, skipped, deselected, xfailed, or xpassed — or, for a code that declares none, the claim records that it declares none |
 
 The datasets a capture writes are kept in the region's ledger, under a
 name that is a hash of their own bytes, and every claim that was reached
@@ -562,9 +603,12 @@ oracle image is built again around the new captures.
 `deploy/onboard_walkthrough.sh` drives the whole of this against a
 running stack without a model in the loop: it lays the code's bare
 baseline into the working copy, writes the manifest, submits, runs the
-eight checks in order, and stops at the `ledger promote` command. It is
+nine checks in order, and stops at the `ledger promote` command. It is
 the onboarding half of `walkthrough.sh`, and it is the quickest way to
-see whether a deployment can bring a code in at all.
+see whether a deployment can bring a code in at all. It reaches
+`harness_original` only when the deployment owner has supplied the external
+reference described above. The shipped `tsunami` configuration does not have
+one, so that walkthrough currently stops at this mandatory readiness check.
 
 ## Things worth knowing
 
@@ -591,9 +635,11 @@ see whether a deployment can bring a code in at all.
   was, not something the gateway verified — so any evaluation that joins
   the request log to session transcripts by that column is joining on
   the agent's own word for it and must treat it that way.
-- The builder keeps compiled work between checks. After a builder
-  restart, run `build_replay` again; the code is safe in the gateway's
-  repository.
+- The builder keeps compiled work in the named `equivalent_builder_work`
+  volume, which survives ordinary service restarts. If the volume is cleared,
+  a dependent check transparently rebuilds and continues only when the
+  executable bytes match the recorded build; otherwise run `build_replay`
+  again. The code and claims remain in the gateway repository and ledger.
 - Timing on a workstation that is also driving a display will report
   the GPU as not exclusively yours. The numbers are still recorded;
   read them knowing that.
